@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+
+# Environments
+.venv/
+.env
+.env.local
+
+# Secrets / credentials
+*.pem
+*.key
+.azure/
+azureml-credentials.json
+
+# Data & artifacts (never commit training data or weights)
+data/raw/
+data/interim/
+data/processed/
+outputs/
+checkpoints/
+runs/
+wandb/
+mlruns/
+*.safetensors
+*.gguf
+*.bin
+*.ckpt
+
+# HF / model caches
+.cache/
+hf_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,78 @@
+[project]
+name = "ffsft"
+version = "0.1.0"
+description = "Fabric + Azure AI Foundry + Hugging Face: swappable small-LLM (sLLM) fine-tuning asset, Korean-first"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# Core stays light so that `uv sync` works on a laptop with no GPU.
+# Heavy training/eval deps live in optional extras.
+dependencies = [
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "rich>=13.7",
+    "azure-identity>=1.17",
+]
+
+[project.optional-dependencies]
+# Data prep + pulling datasets from Hugging Face / OneLake
+data = [
+    "datasets>=4.8",
+    "huggingface-hub>=0.35",
+    "pyarrow>=16.0",
+    "pandas>=2.2",
+    "azure-storage-file-datalake>=12.15",
+]
+
+# Local / VM GPU training with Hugging Face stack.
+# transformers>=5.8 is a hard floor: Qwen3.5/3.6/3.8 checkpoints declare
+# `model_type: qwen3_5` and were saved with transformers 5.8.0.dev0. Older
+# releases fail to load them with a KeyError on the model type.
+train = [
+    "torch>=2.9",
+    "transformers>=5.8",
+    "trl>=1.10",
+    "peft>=0.20",
+    "accelerate>=1.14",
+    "bitsandbytes>=0.50",
+    "sentencepiece>=0.2",
+    "datasets>=4.8",
+]
+
+# Azure ML / Foundry job submission, deployment, evaluation
+azure = [
+    "azure-ai-ml>=1.19",
+    "azure-ai-projects>=1.0.0b1",
+    "azure-ai-evaluation>=1.0.0b1",
+    "azure-core>=1.30",
+    "openai>=1.40",
+]
+
+dev = [
+    "pytest>=8.2",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+ffsft = "ffsft.cli:app"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

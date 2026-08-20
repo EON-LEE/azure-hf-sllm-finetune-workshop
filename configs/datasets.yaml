@@ -1,0 +1,173 @@
+# Korean fine-tuning dataset registry.
+#
+# Every dataset_id was verified against the Hugging Face API on 2026-08-20 with
+# `scripts/verify_hf_ids.py`. The `license` field is the license tag reported by
+# the Hub, not a guess.
+#
+# `commercial_use: false` datasets are EXCLUDED from every mix by default. They
+# only load when the caller passes --allow-noncommercial, which is logged loudly.
+
+defaults:
+  # The mix used when no --mix is given.
+  mix: ko_commercial_safe
+  text_language: ko
+  min_chars: 10
+  max_chars: 8000
+  dedup: true
+  val_ratio: 0.02
+  seed: 42
+
+mixes:
+  ko_commercial_safe:
+    description: >-
+      Korean instruction data that is safe for an enterprise/commercial demo.
+      MIT / Apache-2.0 / CC-BY-SA only, no OpenAI-distilled data of unclear ToS.
+    datasets:
+      - markrai_kopen_hq_hermes
+      - maywell_kovast
+      - carrotai_ko_instruction
+      - lemon_mint_smol_koreantalk
+      - heegyu_open_korean_instructions
+      - nlpai_kullm_v2
+
+  ko_broad:
+    description: Larger mix, adds style/writing and textbook-style data.
+    datasets:
+      - markrai_kopen_hq_hermes
+      - markrai_kocommercial
+      - maywell_kovast
+      - carrotai_ko_instruction
+      - lemon_mint_smol_koreantalk
+      - coastral_writing_style
+      - heegyu_open_korean_instructions
+      - nlpai_kullm_v2
+      - maywell_korean_textbooks
+      - beomi_koalpaca_realqa
+
+  ko_smoke:
+    description: Tiny mix for pipeline smoke tests. Fast and cheap.
+    datasets:
+      - carrotai_ko_instruction
+
+datasets:
+  # ---------------------------------------------------------------- MIT ----
+  - key: markrai_kopen_hq_hermes
+    dataset_id: MarkrAI/KOpen-HQ-Hermes-2.5-60K
+    license: mit
+    commercial_use: true
+    kind: sft
+    description: High-quality Korean instruction set derived from Hermes 2.5.
+
+  - key: markrai_kocommercial
+    dataset_id: MarkrAI/KoCommercial-Dataset
+    license: mit
+    commercial_use: true
+    kind: sft
+    description: Curated specifically for commercially usable Korean training.
+
+  - key: maywell_kovast
+    dataset_id: maywell/koVast
+    license: mit
+    commercial_use: true
+    kind: sft
+    description: Large general-purpose Korean instruction corpus.
+
+  - key: heegyu_open_korean_instructions
+    dataset_id: heegyu/open-korean-instructions
+    license: mit
+    commercial_use: true
+    kind: sft
+    description: Aggregated open Korean instruction datasets.
+
+  # ----------------------------------------------------------- Apache-2.0 ----
+  - key: carrotai_ko_instruction
+    dataset_id: CarrotAI/ko-instruction-dataset
+    license: apache-2.0
+    commercial_use: true
+    kind: sft
+    description: General Korean instruction-following pairs.
+
+  - key: lemon_mint_smol_koreantalk
+    dataset_id: lemon-mint/smol-koreantalk
+    license: apache-2.0
+    commercial_use: true
+    kind: sft
+    description: Conversational Korean, good for natural dialogue tone.
+
+  - key: coastral_writing_style
+    dataset_id: coastral/korean-writing-style-instruct
+    license: apache-2.0
+    commercial_use: true
+    kind: sft
+    description: Korean writing-style and tone control instructions.
+
+  - key: nlpai_kullm_v2
+    dataset_id: nlpai-lab/kullm-v2
+    license: apache-2.0
+    commercial_use: true
+    kind: sft
+    description: KULLM v2 Korean instruction dataset (Korea University NLP&AI).
+
+  - key: maywell_korean_textbooks
+    dataset_id: maywell/korean_textbooks
+    license: apache-2.0
+    commercial_use: true
+    kind: sft
+    rows: 239102
+    description: Textbook-style Korean synthetic corpus.
+
+  # ---------------------------------------------------------- CC-BY-SA ----
+  - key: devngho_korean_instruction_mix
+    dataset_id: devngho/korean-instruction-mix
+    license: cc-by-sa-4.0
+    commercial_use: true
+    kind: sft
+    description: >-
+      2025 curated blend of koVast, KOpen-HQ-Hermes, qarv-instruct-ko,
+      KoAlpaca-RealQA and others. Share-alike obligations apply downstream.
+
+  - key: beomi_koalpaca_realqa
+    dataset_id: beomi/KoAlpaca-RealQA
+    license: cc-by-sa-4.0
+    commercial_use: true
+    kind: sft
+    description: Korean instructions built from real user questions.
+
+  - key: changpt_ko_lima_vicuna
+    dataset_id: changpt/ko-lima-vicuna
+    license: cc-by-2.0
+    commercial_use: true
+    kind: sft
+    description: Korean LIMA-style small, high-quality set.
+
+  # --------------------------------------------------- preference / DPO ----
+  - key: kuotient_orca_math_ko_dpo
+    dataset_id: kuotient/orca-math-korean-dpo-pairs
+    license: cc-by-sa-4.0
+    commercial_use: true
+    kind: dpo
+    description: Korean math preference pairs for a DPO stage after SFT.
+
+  - key: chugyouk_math_pref_ko_dpo
+    dataset_id: ChuGyouk/argilla-distilabel-math-preference-dpo-korean
+    license: apache-2.0
+    commercial_use: true
+    kind: dpo
+    description: Korean translation of the Argilla distilabel math preference set.
+
+  # ------------------------------------------- EXCLUDED BY DEFAULT (NC) ----
+  - key: kyujinpy_kor_openorca_platypus
+    dataset_id: kyujinpy/KOR-OpenOrca-Platypus
+    license: cc-by-nc-4.0
+    commercial_use: false
+    kind: sft
+    description: Popular Korean set, but non-commercial. Off by default.
+
+  - key: beomi_koalpaca_v11a
+    dataset_id: beomi/KoAlpaca-v1.1a
+    license: unknown
+    commercial_use: false
+    kind: sft
+    description: >-
+      Widely used but distilled from text-davinci-003 under old OpenAI terms and
+      carries no explicit license tag. Off by default on legal grounds.

@@ -1,0 +1,421 @@
+# Model registry — every entry here is a swappable fine-tuning target.
+#
+# All hf_id values and licenses were verified against the Hugging Face API on
+# 2026-08-20 with `scripts/verify_hf_ids.py`. Re-run that script before a demo.
+#
+# Add a model by appending an entry. No code changes are required.
+#   ffsft models list
+#   ffsft train --model <key> --backend <local|aml|foundry_serverless|aoai>
+
+models:
+  # ==========================================================================
+  # Qwen 3.8 — newest Qwen dense release (2026-08-05). DEFAULT TARGET.
+  # ==========================================================================
+  - key: qwen3.8-27b
+    display_name: Qwen3.8-27B
+    provider: hf
+    hf_id: Qwen/Qwen3.8-27B
+    supports: [qlora, lora, full]
+    params_b: 27.8
+    context_length: 262144
+    license: apache-2.0
+    commercial_use: true
+    korean_tier: strong
+    korean_notes: >-
+      248,320-token vocabulary (vs 152K on Qwen3) gives markedly better Hangul
+      tokenization efficiency. Korean is covered by Qwen's multilingual training
+      but is not a tier-1 optimized language, so Korean SFT still pays off.
+    vram_gb:
+      qlora: 26
+      lora: 76
+      full: 460
+    recommended_sku: Standard_NC24ads_A100_v4
+    chat_template_kwargs:
+      enable_thinking: false
+    notes: >-
+      IMPORTANT: this is a MULTIMODAL checkpoint (Qwen3_5ForConditionalGeneration,
+      vision + video tokens) despite the plain name. For Korean text-only SFT set
+      language_model_only=true so the vision tower is not loaded or trained.
+      Hybrid architecture: 64 layers mixing full attention (every 4th layer,
+      full_attention_interval=4) with linear/SSM-style layers, plus a
+      multi-token-prediction head. Requires transformers>=5.8.
+      BF16 weights alone are ~55.6 GB, so QLoRA is the default recipe;
+      bf16 LoRA needs 2x 80GB cards to be comfortable.
+    source_url: https://huggingface.co/Qwen/Qwen3.8-27B
+
+  - key: qwen3.8-27b-fp8
+    display_name: Qwen3.8-27B-FP8
+    provider: hf
+    hf_id: Qwen/Qwen3.8-27B-FP8
+    supports: [qlora]
+    params_b: 27.8
+    context_length: 262144
+    license: apache-2.0
+    commercial_use: true
+    korean_tier: strong
+    korean_notes: Same tokenizer and training as Qwen3.8-27B.
+    vram_gb:
+      qlora: 20
+    recommended_sku: Standard_NC24ads_A100_v4
+    chat_template_kwargs:
+      enable_thinking: false
+    notes: >-
+      FP8-quantized weights. Intended for serving/deployment, not training.
+      Listed so the deploy step can target it; prefer the BF16 repo for SFT.
+    source_url: https://huggingface.co/Qwen/Qwen3.8-27B-FP8
+
+  # ==========================================================================
+  # Qwen 3.6 / 3.5 — previous releases, incl. the genuinely small tier
+  # ==========================================================================
+  - key: qwen3.6-27b
+    display_name: Qwen3.6-27B
+    provider: hf
+    hf_id: Qwen/Qwen3.6-27B
+    supports: [qlora, lora, full]
+    params_b: 27.8
+    context_length: 262144
+    license: apache-2.0
+    commercial_use: true
+    korean_tier: strong
+    korean_notes: Same 248K vocabulary family as Qwen3.8.
+    vram_gb:
+      qlora: 26
+      lora: 76
+      full: 460
+    recommended_sku: Standard_NC24ads_A100_v4
+    chat_template_kwargs:
+      enable_thinking: false
+    notes: Most-downloaded 27B Qwen; useful as a stability fallback for Qwen3.8.
+    source_url: https://huggingface.co/Qwen/Qwen3.6-27B
+
+  - key: qwen3.5-9b
+    display_name: Qwen3.5-9B
+    provider: hf
+    hf_id: Qwen/Qwen3.5-9B
+    supports: [qlora, lora, full]
+    params_b: 9.7
+    context_length: 262144
+    license: apache-2.0
+    commercial_use: true
+    korean_tier: strong
+    korean_notes: Best quality-per-VRAM in the genuinely small Qwen tier.
+    vram_gb:
+      qlora: 12
+      lora: 28
+      full: 160
+    recommended_sku: Standard_NC24ads_A100_v4
+    chat_template_kwargs:
+      enable_thinking: false
+    notes: Highest-download Qwen3.5 checkpoint. Good mid-size comparison point.
+    source_url: https://huggingface.co/Qwen/Qwen3.5-9B
+
+  - key: qwen3.5-4b
+    display_name: Qwen3.5-4B
+    provider: hf
+    hf_id: Qwen/Qwen3.5-4B
+    supports: [qlora, lora, full]
+    params_b: 4.7
+    context_length: 262144
+    license: apache-2.0
+    commercial_use: true
+    korean_tier: strong
+    korean_notes: Sweet spot for single-GPU Korean SFT experiments.
+    vram_gb:
+      qlora: 8
+      lora: 16
+      full: 80
+    recommended_sku: Standard_NC24ads_A100_v4
+    chat_template_kwargs:
+      enable_thinking: false
+    notes: Tied input/output embeddings. Good default for fast iteration.
+    source_url: https://huggingface.co/Qwen/Qwen3.5-4B
+
+  - key: qwen3.5-2b
+    display_name: Qwen3.5-2B
+    provider: hf
+    hf_id: Qwen/Qwen3.5-2B
+    supports: [qlora, lora, full]
+    params_b: 2.3
+    context_length: 262144
+    license: apache-2.0
+    commercial_use: true
+    korean_tier: moderate
+    korean_notes: Small enough for T4-class prototyping.
+    vram_gb:
+      qlora: 5
+      lora: 10
+      full: 40
+    recommended_sku: Standard_NC4as_T4_v3
+    chat_template_kwargs:
+      enable_thinking: false
+    source_url: https://huggingface.co/Qwen/Qwen3.5-2B
+
+  - key: qwen3.5-0.8b
+    display_name: Qwen3.5-0.8B
+    provider: hf
+    hf_id: Qwen/Qwen3.5-0.8B
+    supports: [qlora, lora, full]
+    params_b: 0.9
+    context_length: 262144
+    license: apache-2.0
+    commercial_use: true
+    korean_tier: moderate
+    korean_notes: Use for pipeline smoke tests, not for quality claims.
+    vram_gb:
+      qlora: 3
+      lora: 5
+      full: 16
+    recommended_sku: Standard_NC4as_T4_v3
+    chat_template_kwargs:
+      enable_thinking: false
+    notes: Default smoke-test model — exercises the full pipeline cheaply.
+    source_url: https://huggingface.co/Qwen/Qwen3.5-0.8B
+
+  # ==========================================================================
+  # Microsoft open-weight models
+  # ==========================================================================
+  - key: phi4-mini
+    display_name: Phi-4-mini-instruct
+    provider: hf
+    hf_id: microsoft/Phi-4-mini-instruct
+    foundry_model: Phi-4-mini-instruct
+    supports: [qlora, lora, full, serverless_sft]
+    params_b: 3.8
+    context_length: 131072
+    license: mit
+    commercial_use: true
+    korean_tier: moderate
+    korean_notes: >-
+      200K vocabulary is a big improvement over Phi-3 for Hangul, and Microsoft
+      claims 22-language support, but no per-language Korean numbers are
+      published and community comparisons put Qwen ahead on Korean/CJK.
+    vram_gb:
+      qlora: 7
+      lora: 14
+      full: 64
+    recommended_sku: Standard_NC24ads_A100_v4
+    notes: >-
+      The only model here that is fine-tunable BOTH via our own HF training loop
+      and via Foundry serverless SFT, so it is the natural A/B test between the
+      two backends.
+    source_url: https://huggingface.co/microsoft/Phi-4-mini-instruct
+
+  # ==========================================================================
+  # Korean-native models — comparison baselines
+  # ==========================================================================
+  - key: midm-2.0-mini
+    display_name: "Mi:dm 2.0 Mini Instruct (KT)"
+    provider: hf
+    hf_id: K-intelligence/Midm-2.0-Mini-Instruct
+    supports: [qlora, lora, full]
+    params_b: 2.3
+    license: mit
+    commercial_use: true
+    korean_tier: native
+    korean_notes: Korean-first model from KT. MIT license makes it the safest Korean-native baseline.
+    vram_gb:
+      qlora: 5
+      lora: 10
+      full: 40
+    recommended_sku: Standard_NC4as_T4_v3
+    notes: Best license/quality tradeoff among Korean-native small models.
+    source_url: https://huggingface.co/K-intelligence/Midm-2.0-Mini-Instruct
+
+  - key: midm-2.0-base
+    display_name: "Mi:dm 2.0 Base Instruct (KT)"
+    provider: hf
+    hf_id: K-intelligence/Midm-2.0-Base-Instruct
+    supports: [qlora, lora, full]
+    params_b: 11.5
+    license: mit
+    commercial_use: true
+    korean_tier: native
+    korean_notes: Larger Korean-native option, still MIT.
+    vram_gb:
+      qlora: 14
+      lora: 34
+      full: 190
+    recommended_sku: Standard_NC24ads_A100_v4
+    source_url: https://huggingface.co/K-intelligence/Midm-2.0-Base-Instruct
+
+  - key: kanana2-3b
+    display_name: Kanana 2 3B Instruct (Kakao)
+    provider: hf
+    hf_id: kakaocorp/kanana-2-3b-instruct
+    supports: [qlora, lora, full]
+    params_b: 3.5
+    license: other
+    commercial_use: null
+    korean_tier: native
+    korean_notes: Newest Korean-native small model (2026-07). Strong Korean baseline.
+    vram_gb:
+      qlora: 7
+      lora: 13
+      full: 60
+    recommended_sku: Standard_NC24ads_A100_v4
+    notes: >-
+      License is 'other' — read the Kakao model licence before any commercial or
+      customer-facing use. Registered here as a benchmark comparison target.
+    source_url: https://huggingface.co/kakaocorp/kanana-2-3b-instruct
+
+  - key: kanana2-1.3b
+    display_name: Kanana 2 1.3B Instruct (Kakao)
+    provider: hf
+    hf_id: kakaocorp/kanana-2-1.3b-instruct
+    supports: [qlora, lora, full]
+    params_b: 1.3
+    license: other
+    commercial_use: null
+    korean_tier: native
+    korean_notes: Ultra-light Korean-native model.
+    vram_gb:
+      qlora: 4
+      lora: 7
+      full: 24
+    recommended_sku: Standard_NC4as_T4_v3
+    notes: License is 'other' — verify terms before commercial use.
+    source_url: https://huggingface.co/kakaocorp/kanana-2-1.3b-instruct
+
+  - key: hyperclovax-seed-1.5b
+    display_name: HyperCLOVA X SEED Text Instruct 1.5B (Naver)
+    provider: hf
+    hf_id: naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B
+    supports: [qlora, lora, full]
+    params_b: 1.6
+    license: other
+    commercial_use: null
+    korean_tier: native
+    korean_notes: Naver Korean-native small model.
+    vram_gb:
+      qlora: 4
+      lora: 8
+      full: 28
+    recommended_sku: Standard_NC4as_T4_v3
+    notes: License is 'other' — verify HyperCLOVA X SEED terms before commercial use.
+    source_url: https://huggingface.co/naver-hyperclovax/HyperCLOVAX-SEED-Text-Instruct-1.5B
+
+  - key: exaone-4.0-1.2b
+    display_name: EXAONE 4.0 1.2B (LG AI Research)
+    provider: hf
+    hf_id: LGAI-EXAONE/EXAONE-4.0-1.2B
+    supports: [qlora, lora, full]
+    params_b: 1.3
+    license: other
+    commercial_use: false
+    korean_tier: native
+    korean_notes: Strong Korean quality for its size.
+    vram_gb:
+      qlora: 4
+      lora: 7
+      full: 24
+    recommended_sku: Standard_NC4as_T4_v3
+    notes: >-
+      EXAONE licence restricts commercial use. Research/benchmark comparison only
+      unless a separate agreement with LG AI Research is in place.
+    source_url: https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-1.2B
+
+  # ==========================================================================
+  # Foundry serverless fine-tuning targets (no HF weights, black-box training)
+  # ==========================================================================
+  - key: foundry-qwen-32b
+    display_name: Qwen-32B (Foundry serverless SFT)
+    provider: foundry_serverless
+    foundry_model: Qwen-32B
+    supports: [serverless_sft]
+    params_b: 32.0
+    license: apache-2.0
+    commercial_use: true
+    korean_tier: strong
+    korean_notes: Only Qwen model Microsoft exposes for serverless fine-tuning.
+    notes: >-
+      Public Preview. Global deployment type only, new Foundry resources only
+      (not classic hub projects). No LoRA/quantization control, no auto-deploy.
+    source_url: https://learn.microsoft.com/azure/foundry/openai/how-to/fine-tuning
+
+  - key: foundry-llama-3.3-70b
+    display_name: Llama-3.3-70B-Instruct (Foundry serverless SFT)
+    provider: foundry_serverless
+    foundry_model: Llama-3.3-70B-Instruct
+    supports: [serverless_sft]
+    params_b: 70.0
+    license: llama-3.3
+    commercial_use: true
+    korean_tier: moderate
+    notes: Public Preview, Global only.
+    source_url: https://learn.microsoft.com/azure/foundry/openai/how-to/fine-tuning
+
+  - key: foundry-gpt-oss-20b
+    display_name: gpt-oss-20b (Foundry serverless SFT)
+    provider: foundry_serverless
+    foundry_model: gpt-oss-20b
+    supports: [serverless_sft]
+    params_b: 20.0
+    license: apache-2.0
+    commercial_use: true
+    korean_tier: unknown
+    notes: Public Preview, Global only.
+    source_url: https://learn.microsoft.com/azure/foundry/openai/how-to/fine-tuning
+
+  # ==========================================================================
+  # Azure OpenAI fine-tuning targets — commercial comparison arm
+  # ==========================================================================
+  - key: aoai-gpt-4.1-mini
+    display_name: gpt-4.1-mini (Azure OpenAI)
+    provider: azure_openai
+    foundry_model: gpt-4.1-mini
+    supports: [serverless_sft, serverless_dpo]
+    context_length: 1047576
+    license: proprietary
+    commercial_use: true
+    korean_tier: strong
+    notes: >-
+      GA. SFT and DPO. JSONL chat format, per-message weight field supported.
+      Useful as the "what does a hosted commercial model cost/score" arm of the
+      comparison, not as an open-weight target.
+    source_url: https://learn.microsoft.com/azure/foundry/openai/how-to/fine-tuning
+
+  - key: aoai-o4-mini
+    display_name: o4-mini (Azure OpenAI, RFT)
+    provider: azure_openai
+    foundry_model: o4-mini
+    supports: [serverless_rft]
+    license: proprietary
+    commercial_use: true
+    korean_tier: strong
+    notes: Reinforcement fine-tuning only. Jobs auto-pause at $5,000 training cost.
+    source_url: https://learn.microsoft.com/azure/foundry/openai/how-to/reinforcement-fine-tuning
+
+  # ==========================================================================
+  # Microsoft MAI — documented deliberately as NOT fine-tunable.
+  # Keeps the "we evaluated MAI" answer in code rather than only in a doc.
+  # ==========================================================================
+  - key: mai-thinking-1
+    display_name: MAI-Thinking-1 (Microsoft)
+    provider: inference_only
+    foundry_model: MAI-Thinking-1
+    supports: []
+    license: proprietary
+    commercial_use: true
+    korean_tier: unknown
+    korean_notes: No public Korean benchmark numbers published by Microsoft.
+    notes: >-
+      API-only, weights not released. Customer customization ("Frontier Tuning")
+      is selective preview and is not Hugging Face based, so this model cannot be
+      a target of this asset. Usable as an evaluation judge or as a synthetic
+      Korean data generator instead.
+    source_url: https://learn.microsoft.com/azure/foundry/
+
+  - key: mai-ds-r1
+    display_name: MAI-DS-R1 (Microsoft)
+    provider: hf
+    hf_id: microsoft/MAI-DS-R1
+    supports: [qlora]
+    params_b: 671.0
+    license: mit
+    commercial_use: true
+    korean_tier: moderate
+    notes: >-
+      The ONLY open-weight MAI model (MIT). A 671B DeepSeek-R1 post-train, so it
+      is far outside the sLLM scope of this asset and is listed for completeness
+      only. Fine-tuning it needs a multi-node H100/H200 cluster.
+    source_url: https://huggingface.co/microsoft/MAI-DS-R1

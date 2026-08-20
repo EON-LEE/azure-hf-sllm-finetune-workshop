@@ -1,0 +1,107 @@
+# Korean evaluation benchmark registry.
+#
+# Verified against the Hugging Face API on 2026-08-20.
+#
+# HARD RULE: everything in this file is `eval_only: true`. Most Korean benchmarks
+# are CC-BY-ND (no derivatives) or CC-BY-NC (non-commercial), so mixing them into
+# training data is both a leakage problem and a license violation. The loader
+# refuses to place any of these into a training mix.
+
+defaults:
+  suite: ko_core
+
+suites:
+  ko_core:
+    description: >-
+      Four-axis default suite: Korean knowledge, Korean culture/language,
+      instruction following, and open-ended generation quality.
+    benchmarks: [kmmlu, hae_rae_1_1, ifeval_ko, logickor]
+
+  ko_full:
+    description: Adds harder knowledge splits and Korean math.
+    benchmarks: [kmmlu, kmmlu_hard, hae_rae_1_1, kobest, ifeval_ko, logickor, hrm8k]
+
+  ko_fast:
+    description: Quick regression check during training iterations.
+    benchmarks: [ifeval_ko, kobest]
+
+benchmarks:
+  - key: kmmlu
+    dataset_id: HAERAE-HUB/KMMLU
+    license: cc-by-nd-4.0
+    eval_only: true
+    metric: accuracy
+    harness_task: kmmlu
+    description: Korea-specific knowledge across 45 subjects. The primary Korean MMLU.
+
+  - key: kmmlu_hard
+    dataset_id: HAERAE-HUB/KMMLU-HARD
+    license: cc-by-nd-4.0
+    eval_only: true
+    metric: accuracy
+    description: Hardest KMMLU subset. Small models score near chance; expect low numbers.
+
+  - key: kmmlu_pro
+    dataset_id: LGAI-EXAONE/KMMLU-Pro
+    license: cc-by-nc-nd-4.0
+    eval_only: true
+    metric: accuracy
+    description: Expert-level Korean professional exam questions (2,822 items).
+
+  - key: hae_rae_1_1
+    dataset_id: HAERAE-HUB/HAE_RAE_BENCH_1.1
+    license: cc-by-nc-nd-4.0
+    eval_only: true
+    metric: accuracy
+    harness_task: hae_rae_bench
+    description: Korean culture, vocabulary, history and reading comprehension (4,900 items).
+
+  - key: kobest
+    dataset_id: skt/kobest_v1
+    license: cc-by-sa-4.0
+    eval_only: true
+    metric: accuracy
+    harness_task: kobest
+    description: Five Korean NLU tasks (BoolQ, COPA, WiC, HellaSwag, SentiNeg). Low bar, fast.
+
+  - key: ifeval_ko
+    dataset_id: allganize/IFEval-Ko
+    license: apache-2.0
+    eval_only: true
+    metric: strict_instruction_accuracy
+    harness_task: ifeval_ko
+    description: >-
+      Korean instruction-following with programmatically checkable constraints.
+      The single most useful signal that SFT actually improved obedience.
+
+  - key: logickor
+    dataset_id: maywell/LogicKor
+    license: cc-by-sa-4.0
+    eval_only: true
+    metric: judge_score_1_10
+    judge_required: true
+    description: >-
+      42 multi-turn Korean prompts scored 1-10 by a judge LLM across reasoning,
+      math, writing, coding, comprehension and grammar. Needs a judge model
+      (use an Azure OpenAI or MAI deployment via Foundry).
+
+  - key: hrm8k
+    dataset_id: HAERAE-HUB/HRM8K
+    license: mit
+    eval_only: true
+    metric: accuracy
+    description: Korean math reasoning benchmark (8,011 items).
+
+  - key: kudge
+    dataset_id: HAERAE-HUB/KUDGE
+    license: unknown
+    eval_only: true
+    metric: agreement
+    description: Measures how trustworthy a Korean LLM-as-judge setup is.
+
+  - key: kornat
+    dataset_id: jiyounglee0523/KorNAT
+    license: cc-by-nc-2.0
+    eval_only: true
+    metric: alignment_score
+    description: Korean national alignment (social values / common knowledge). Non-commercial.
