@@ -76,6 +76,25 @@ class AdapterMode(StrEnum):
     RUNTIME_ADAPTER = "runtime_adapter"
 
 
+#: A managed online endpoint reserves a second full set of instances so it can
+#: bring up a new version before retiring the old one. Azure therefore charges
+#: the deployment against double the instance cores, which is how a 36-core SKU
+#: with 36 cores granted failed with "quota requested is 72".
+ONLINE_ENDPOINT_CORE_MULTIPLIER = 2
+
+
+def required_dedicated_cores(sku: str, *, instances: int = 1) -> int:
+    """Dedicated cores a managed online deployment of `sku` will ask Azure for.
+
+    Raises KeyError for an unknown SKU rather than assuming a core count --
+    guessing here reproduces exactly the failed rollout this guards against.
+    """
+    from ffsft.azure_ml import GPU_SKUS
+
+    cores = GPU_SKUS[sku]["cores"]
+    return cores * instances * ONLINE_ENDPOINT_CORE_MULTIPLIER
+
+
 class ServingSpec(BaseModel):
     """A single swappable way to host a model."""
 
@@ -131,22 +150,48 @@ class ServingSpec(BaseModel):
         """Only an OpenAI-compatible interactive endpoint can be load-tested."""
         return self.is_interactive and self.openai_compatible
 
-    def blocked_reason(self, dedicated_cores_available: int) -> str | None:
+    def blocked_reason(
+        self, dedicated_cores_available: int, *, instances: int = 1, sku: str | None = None
+    ) -> str | None:
         """Explain why this pattern cannot deploy right now, or None if it can.
 
         `dedicated_cores_available` is the *measured* limit for `quota_family`,
         read from the Microsoft.Quota API -- not a guess. Patterns that run on
         LowPriority ignore it entirely.
+
+        This used to return None for any non-zero quota, and that let a
+        deployment through that Azure then rejected with
+
+            (OutOfQuota) The amount of CPU quota requested is 72 and your
+            maximum amount of quota is [N/A]
+
+        on a 36-core SKU with exactly 36 cores granted. A managed online
+        endpoint reserves a second full set of instances for rolling updates,
+        so the real requirement is double. See required_dedicated_cores.
         """
         if self.allows_low_priority:
             return None
-        if dedicated_cores_available > 0:
+
+        target_sku = sku or self.default_sku
+        try:
+            needed = required_dedicated_cores(target_sku or "", instances=instances)
+        except KeyError:
+            # An unrecognised SKU cannot be checked; fall back to the old
+            # any-quota-at-all test rather than blocking a valid deployment.
+            if dedicated_cores_available > 0:
+                return None
+            needed = 0
+
+        if needed and dedicated_cores_available >= needed:
             return None
+
         return (
-            f"{self.display_name} runs on a managed online endpoint, which "
-            f"requires dedicated quota. '{self.quota_family}' currently has a "
+            f"{self.display_name} on {target_sku} x{instances} needs "
+            f"{needed} dedicated cores ({ONLINE_ENDPOINT_CORE_MULTIPLIER}x the "
+            f"instance cores, because a managed online endpoint reserves "
+            f"headroom to roll out a new version). '{self.quota_family}' has a "
             f"limit of {dedicated_cores_available} cores in this region. "
-            f"Request an increase, or use a pattern with "
+            f"Request an increase, pick a smaller SKU, or use a pattern with "
             f"allows_low_priority: true (e.g. aml_batch_vllm)."
         )
 

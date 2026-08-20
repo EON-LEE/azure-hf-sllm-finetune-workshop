@@ -140,7 +140,12 @@ def test_dedicated_pattern_unblocked_once_quota_granted():
         allows_low_priority=False,
         quota_family="StandardNVADSA10v5Family",
     )
-    assert spec.blocked_reason(36) is None
+    # make_spec defaults to a 24-core A100 SKU, and a managed online endpoint
+    # reserves double for rolling updates, so 48 is the threshold -- not 24.
+    # This assertion used to read `blocked_reason(36) is None`, which is how a
+    # deployment reached Azure and came back with "quota requested is 72".
+    assert spec.blocked_reason(36) is not None
+    assert spec.blocked_reason(48) is None
 
 
 # -- filtering ----------------------------------------------------------

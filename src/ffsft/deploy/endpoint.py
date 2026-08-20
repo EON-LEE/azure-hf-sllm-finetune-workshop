@@ -64,14 +64,19 @@ def read_dedicated_quota(subscription_id: str, location: str, family: str) -> in
 
 
 def check_pattern(
-    pattern_key: str, subscription_id: str, location: str
+    pattern_key: str,
+    subscription_id: str,
+    location: str,
+    *,
+    sku: str | None = None,
+    instances: int = 1,
 ) -> tuple[ServingSpec, str | None]:
     """Return the spec plus a human-readable blocker, or None if it can deploy."""
     spec = get_serving_registry().get(pattern_key)
     if spec.allows_low_priority or not spec.quota_family:
         return spec, None
     available = read_dedicated_quota(subscription_id, location, spec.quota_family)
-    return spec, spec.blocked_reason(available)
+    return spec, spec.blocked_reason(available, instances=instances, sku=sku)
 
 
 def deploy_online(
@@ -114,7 +119,13 @@ def deploy_online(
     from ffsft.azure_ml import AzureTarget, get_ml_client
 
     target = AzureTarget.from_env()
-    spec, blocker = check_pattern(pattern_key, target.subscription_id, target.location)
+    spec, blocker = check_pattern(
+        pattern_key,
+        target.subscription_id,
+        target.location,
+        sku=sku,
+        instances=instance_count,
+    )
     if blocker and not force:
         raise RuntimeError(blocker)
     if blocker:
@@ -127,6 +138,25 @@ def deploy_online(
     client.online_endpoints.begin_create_or_update(
         ManagedOnlineEndpoint(name=endpoint_name, auth_mode="key")
     ).result()
+
+    # Azure refuses to update a deployment whose first provisioning failed:
+    #   "Specified deployment [blue] failed during initial provisioning and is
+    #    in an unrecoverable state. Delete and re-create."
+    # Retrying after a quota rejection therefore fails for a *second*, unrelated
+    # reason unless the corpse is cleared first.
+    try:
+        existing = client.online_deployments.get(name="blue", endpoint_name=endpoint_name)
+        state = (getattr(existing, "provisioning_state", "") or "").lower()
+        if state in {"failed", "canceled"}:
+            log.warning(
+                "deployment 'blue' is in state '%s' and cannot be updated; deleting it",
+                state,
+            )
+            client.online_deployments.begin_delete(
+                name="blue", endpoint_name=endpoint_name
+            ).result()
+    except Exception as exc:  # noqa: BLE001 - absence is the normal first-run case
+        log.debug("no existing deployment to clean up: %s", exc)
 
     env = Environment(
         name="ffsft-serve",
