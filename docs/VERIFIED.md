@@ -294,6 +294,51 @@ and is in an unrecoverable state. Delete and re-create.
 파라미터를 고쳐서 재시도하면 **원래 문제와 무관한 이 에러**로 또 실패한다.
 `deploy_online()`이 재배포 전에 실패한 배포를 먼저 지우도록 수정했다.
 
+### 5.2 이미지 ENV 기본값이 모델 교체를 깨뜨렸다 — 실측 ⚠️
+
+`Qwen/Qwen3-0.6B`(dense, 텍스트 전용) 스모크 배포가 **45분 동안 `Creating`에
+머물다 실패**했다. 원인은 배포가 아니라 **이미지**였다.
+
+`ffsft-serve:2`는 ENV 기본값으로 `MAMBA_CACHE_MODE=align`,
+`LANGUAGE_MODEL_ONLY=1`, `REASONING_PARSER=qwen3`을 갖고 있었다. Qwen3.8-27B에
+필요한 값이라 넣은 것인데, `deploy_online()`이 이 값들을 **덮어쓰지 않아서**
+Mamba 상태도 비전 타워도 없는 0.6B 모델이 그 플래그로 기동됐다.
+
+> **교훈: 모델이 바뀌는 에셋에서 아키텍처 플래그를 이미지에 굽지 마라.**
+> 배포가 키를 생략하면 이미지 기본값을 **조용히 상속**한다.
+
+수정 방향(극성을 뒤집음):
+1. 이미지 기본값을 **전부 중립**으로 (`ffsft-serve:3`)
+2. `ModelSpec`에 `multimodal` / `mamba_cache_mode` / `reasoning_parser` 추가
+3. `serving_env()`가 **중립값일 때도 세 키를 항상 명시적으로 전송** —
+   이미지 기본값이 다시는 조용히 적용될 수 없게
+
+### 5.3 45분이 걸린 이유 — 프로브 예산
+
+관측된 타임라인이 정확히 설명된다:
+
+```
+노드 할당 + 이미지 pull (~20GB)        ~20 분
+readiness initialDelay  PT10M          10 분
+failureThreshold 30 x period PT30S     15 분
+                                    = 약 45 분
+```
+
+즉 **틀린 배포가 실패를 보고하는 데 45분**이 걸렸고, Azure는 **터미널 상태가
+되기 전까지 컨테이너 로그를 주지 않는다.** 느린 실패가 실패 원인까지 가린다.
+
+`startup_grace_for(params_b)`로 모델 크기에 비례하게 바꿨다.
+0.6B → 135초, 27B → 795초. 상한 1800초.
+
+> 참고: 워크스페이스는 `managedNetwork.isolationMode: Disabled`,
+> `publicNetworkAccess: Enabled` 라서 **HF Hub 다운로드는 막히지 않았다.**
+> (네트워크 격리 가설은 실측으로 배제됨.)
+
+### 5.4 엔드포인트 삭제는 느리다
+
+프로비저닝 중인 엔드포인트를 삭제하면 **20분 이상** `Deleting`에 머문다.
+테어다운을 실험 종료 직전에 몰아서 하지 말고 여유를 두는 편이 낫다.
+
 ---
 
 ## 6. 테어다운 — 실측 완료 ✅
