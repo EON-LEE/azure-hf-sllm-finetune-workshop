@@ -28,9 +28,16 @@ resolve_model() {
     # reason a managed online endpoint comes up unhealthy. Find the shallowest
     # config.json so a checkpoint that itself contains sub-models is not
     # mistaken for the top-level one.
+    # `|| true` is load-bearing, not defensive noise. MODEL_PATH is allowed to be
+    # a bare Hugging Face repo id, in which case `find` exits 1 because there is
+    # no such directory; under `set -euo pipefail` that failing assignment would
+    # terminate the script before vLLM ever starts. It survives today only
+    # because this sits in a function body called from a command substitution,
+    # which is one of the contexts where bash stops honouring `set -e` -- an
+    # accident of placement that inlining this function would silently undo.
     local found
     found="$(find "${root}" -maxdepth 4 -name config.json -printf '%d %h\n' 2>/dev/null \
-             | sort -n | head -1 | cut -d' ' -f2-)"
+             | sort -n | head -1 | cut -d' ' -f2- || true)"
     if [[ -n "${found}" ]]; then
         echo "${found}"
         return
