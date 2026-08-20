@@ -213,18 +213,62 @@ configs/            # 교체 지점: 모델·데이터셋·벤치마크 레지�
   datasets.yaml
   benchmarks.yaml
 src/ffsft/
-  models/           # ModelSpec + 레지스트리 (구현 완료)
-  data/             # 데이터 로딩 · 라이선스 게이팅
+  models/           # ModelSpec + 레지스트리
+  data/             # 데이터 로딩 · 라이선스 게이팅 · fabric_prep
   fabric/           # OneLake / Lakehouse 연동
-  train/            # 백엔드: local | aml | foundry_serverless | aoai
-  eval/             # 한국어 벤치마크
-  deploy/           # vLLM Managed Online Endpoint
+  train/            # qlora.py (QLoRA) · aml.py (Azure ML 잡 제출)
+  eval/             # run.py (벤치마크) · judge.py (LLM-as-judge)
+  deploy/           # spec / endpoint / lifecycle (올리기·내리기)
+  loadtest/         # 스트리밍 부하 테스트 (TTFT · TPOT · knee)
   cli.py            # ffsft CLI
-notebooks/fabric/   # Fabric Spark 데이터 준비 노트북
+docker/
+  Dockerfile.train  # ACPT 기반 학습 이미지
+  Dockerfile.serve  # vLLM 기반 서빙 이미지
+  verify_serve.py   # 빌드 타임 게이트 (아키텍처·플래그 검증)
+notebooks/fabric/   # Fabric Spark 데이터 준비 노트북 (subtree 루트)
 scripts/            # verify_hf_ids.py 등 유틸
-docs/PLAN.md        # 전체 설계 문서 (리서치 근거 포함)
-tests/
+docs/
+  PLAN.md           # 전체 설계 문서 (리서치 근거 포함)
+  SERVING.md        # 서빙 패턴 · 쿼터 규칙 · 실측 제약
+  VERIFIED.md       # 실제로 실행해서 확인된 것만 기록
+tests/              # 167+ 테스트 (Azure 호출 없음, 무과금)
 ```
+
+---
+
+## 엔드포인트 올리기 / 내리기
+
+Managed Online Endpoint 는 **scale-to-zero 가 없어서 idle 상태에서도 24시간 과금**됩니다.
+실험이 끝나면 반드시 내려야 하고, 나중에 같은 명령으로 다시 올릴 수 있습니다.
+
+```bash
+ffsft lifecycle status              # 지금 과금 중인 리소스 + 시간당/월 비용
+ffsft lifecycle up   --endpoint ffsft-smoke --hf-model Qwen/Qwen3-0.6B
+ffsft lifecycle down --endpoint ffsft-smoke --yes
+ffsft lifecycle down --all --yes    # 과금되는 것 전부 정리
+```
+
+`down` 은 **엔드포인트만 삭제**하고 **컴퓨트 클러스터는 0 노드로 스케일 다운**합니다.
+클러스터 정의는 유지 비용이 없고 재생성에 수 분이 걸리므로 남겨 두는 편이 낫습니다.
+
+## 서브트리 워크플로
+
+Fabric 노트북은 Fabric 워크스페이스에 따로 연결해야 하므로
+`notebooks/fabric` 을 별도 리포로 분리해 `git subtree` 로 동기화합니다.
+
+```bash
+# 최초 1회
+git remote add fabric https://github.com/EON-LEE/ffsft-fabric.git
+
+# 이 리포 → 위성 리포 (Fabric 워크스페이스가 당겨감)
+git subtree push --prefix=notebooks/fabric fabric main
+
+# 위성 리포 → 이 리포 (Fabric 에서 편집한 내용 회수)
+git subtree pull --prefix=notebooks/fabric fabric main --squash
+```
+
+`notebooks/fabric` 안의 코드는 **로직을 직접 담지 않고** `src/ffsft/data/fabric_prep.py`
+를 호출하는 얇은 래퍼입니다. 그래야 순수 함수 부분을 Spark 없이 테스트할 수 있습니다.
 
 ## 현재 상태
 
@@ -233,11 +277,14 @@ tests/
 - [x] 모델 추상화 레이어 + 레지스트리 + CLI
 - [x] 3종 설정 레지스트리 (모델·데이터셋·벤치마크)
 - [x] 설계 문서 `docs/PLAN.md`
-- [ ] Fabric Spark 데이터 준비 노트북
-- [ ] `src/ffsft/data` 로더 (라이선스 게이팅 포함)
-- [ ] `src/ffsft/train` 백엔드 4종
+- [x] Fabric Spark 데이터 준비 노트북 + `fabric_prep` 순수 함수 (TDD)
+- [x] 학습 경로: ACPT 커스텀 이미지 빌드 · A100 프리플라이트 통과
+- [x] 서빙 경로: vLLM 이미지 빌드 · 아키텍처 등록 검증
+- [x] 평가: 벤치마크 러너 + LLM-as-judge (TDD)
+- [x] 부하 테스트: TTFT / TPOT / knee 측정기
+- [x] 라이프사이클: `up` / `down` / `status` — **실제 테어다운 검증 완료**
 - [ ] Qwen3.8-27B QLoRA 호환성 실검증 ← **최우선 리스크**
-- [ ] 한국어 벤치마크 평가 · 배포
+- [ ] 27B 실학습 · 튜닝 전후 벤치마크 비교
 
 ## 사전 요구사항
 
