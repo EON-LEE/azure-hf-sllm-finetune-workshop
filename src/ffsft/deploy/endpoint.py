@@ -258,6 +258,20 @@ def deploy_online(
     if blocker:
         log.warning("deploying despite: %s", blocker)
 
+    # Quota is not the only thing that makes a rollout impossible before it
+    # starts. If Azure ML cannot reach the workspace's storage account, the
+    # deployment retries until Azure's own timeout: over an hour in `Creating`,
+    # no container logs, and the GPU billing throughout. Two endpoints were lost
+    # to that before anyone read this setting. Checking it costs two ARM reads.
+    from .preflight import read_storage_reachability, storage_blocker
+
+    reachability = read_storage_reachability(target)
+    storage_issue = storage_blocker(reachability) if reachability else None
+    if storage_issue and not force:
+        raise RuntimeError(storage_issue)
+    if storage_issue:
+        log.warning("deploying despite: %s", storage_issue)
+
     instance_type = sku or spec.default_sku
     client = get_ml_client(target)
 
