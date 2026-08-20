@@ -682,3 +682,33 @@ TOTAL $/month: 41.66
 **23.33 GB → 19.51 GB.** 레이어가 공유되어 절감폭은 작다.
 남은 19.5 GB 는 `serve:3`(9.15 GB) + `train:4`(10.36 GB) 로 **둘 다 필요한 최소치**다.
 (ACR Basic 포함 용량은 10 GB 라 초과분은 과금된다.)
+
+---
+
+## 12. 두 번째 배포도 동일하게 사망 — 근본 원인 최종 확정 ✅
+
+`ffsft-smoke2` 배포 명령이 **1시간 54분** 만에 최종 실패로 돌아왔다.
+
+```
+=== deploying ffsft-smoke2 : Qwen/Qwen3-0.6B on NV18ads_A10_v5, image :3 ===
+시작  Fri Aug 21 01:48:15 KST 2026
+종료  Fri Aug 21 03:42:33 KST 2026
+Code: InternalServerError
+Message: Internal error. Please see troubleshooting guide ... #error-internalservererror
+```
+
+§0 이 예측한 signature 와 정확히 일치한다:
+
+| 예측 | 실제 |
+|---|---|
+| 한 시간 넘게 `Creating` | **1시간 54분** |
+| 컨테이너 로그 없음 | 종료 시점까지 계속 withheld |
+| App Insights `traces` 비어 있음 | 비어 있었음 |
+| 최종 `InternalServerError` | **정확히 그것** |
+
+이로써 **0.6B 모델 / 중립 플래그 / 수정된 엔트리포인트** 조합으로도 실패한다는 게
+확정됐다. 모델도, 이미지 ENV 도, 엔트리포인트도 원인이 아니다.
+**스토리지 계정에 네트워크 경로가 없다**는 단 하나의 사실이 전부 설명한다.
+
+그리고 이 실패에 **$2.160/시 × 1.9시간 ≈ $4.1** 이 청구됐다.
+프리플라이트(§0.3)는 이걸 **2초**에 거부한다. 이 한 번의 실패만으로도 값을 한다.
