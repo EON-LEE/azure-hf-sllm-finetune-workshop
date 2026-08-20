@@ -1,0 +1,71 @@
+# Inference image: vLLM's OpenAI-compatible server.
+#
+# Deliberately NOT built on the ACPT training base. The two images optimise for
+# opposite things and sharing one would compromise both:
+#
+#   * The trainer needs bitsandbytes NF4, PEFT, TRL and a torch that Microsoft
+#     validated for distributed training. It is ~20 GB and takes 25 minutes to
+#     build.
+#   * The server needs vLLM, which pins its own torch build and its own CUDA
+#     kernels. Installing vLLM on top of ACPT would replace that validated
+#     torch -- exactly what docker/verify_stack.py exists to prevent.
+#
+# vLLM publishes an official image containing a matched torch/vLLM/CUDA triple,
+# so we start there and add only what Azure ML needs.
+#
+# The tag is v0.27.1 and not "latest" for a hard reason, verified 2026-08-21:
+# Qwen3.8-27B declares `architectures: ["Qwen3_5ForConditionalGeneration"]` and
+# that class was first registered in vLLM **v0.27.0** (2026-08-10, PR #50210).
+# Anything older cannot load this model at all. v0.27.1 (2026-08-11) is the
+# newest stable patch on that line.
+#
+# There is also a special `vllm/vllm-openai:qwen38` tag pushed for the Qwen3.8
+# launch. It adds NVIDIA/AMD co-developed Gated-DeltaNet and MoE kernels aimed
+# at the 2.4T MoE flagship. Our target is the 27B *dense* model, which the
+# stable line already serves, so we take the reproducible versioned tag over a
+# moving one. Switch with --build-arg VLLM_TAG=qwen38 to A/B the kernels.
+ARG VLLM_TAG=v0.27.1
+FROM vllm/vllm-openai:${VLLM_TAG}
+
+# Azure ML managed online endpoints probe /health and route scoring traffic to a
+# container port; they do not run the image's ENTRYPOINT with our flags. So we
+# replace the entrypoint with a launcher that reads its configuration from the
+# deployment's environment_variables (see ffsft.deploy.endpoint.deploy_online).
+#
+# MAMBA_CACHE_MODE is not tunable trivia. Qwen3_5ForCausalLMBase raises
+# NotImplementedError when the mode is "all", because 48 of its 64 layers are
+# linear-attention (Gated DeltaNet) and only "align" is implemented. Getting
+# this wrong is an immediate crash on model load.
+#
+# LANGUAGE_MODEL_ONLY defaults on: Qwen3.8-27B is multimodal (its config carries
+# vision_config, image_token_id and video_token_id), and loading the vision
+# tower costs VRAM that a text-only Korean SFT deployment never uses.
+ENV MODEL_PATH=/var/azureml-app/azureml-models \
+    SERVED_MODEL_NAME=ffsft \
+    MAX_MODEL_LEN=8192 \
+    GPU_MEMORY_UTILIZATION=0.90 \
+    TENSOR_PARALLEL_SIZE=1 \
+    VLLM_PORT=8000 \
+    MAMBA_CACHE_MODE=align \
+    LANGUAGE_MODEL_ONLY=1 \
+    REASONING_PARSER=qwen3 \
+    QUANTIZATION="" \
+    ENABLE_LORA=0 \
+    LORA_MODULES="" \
+    MAX_LORA_RANK=16 \
+    EXTRA_ARGS="" \
+    HF_HOME=/tmp/hf \
+    HF_HUB_ENABLE_HF_TRANSFER=1
+
+COPY docker/serve_entrypoint.sh /usr/local/bin/serve_entrypoint.sh
+RUN chmod +x /usr/local/bin/serve_entrypoint.sh
+
+EXPOSE 8000
+
+# Fail the build rather than a 20-minute deployment if the image cannot import
+# its own engine or does not know this architecture. Same rationale as
+# docker/verify_stack.py on the training side.
+COPY docker/verify_serve.py /tmp/verify_serve.py
+RUN python3 /tmp/verify_serve.py
+
+ENTRYPOINT ["/usr/local/bin/serve_entrypoint.sh"]

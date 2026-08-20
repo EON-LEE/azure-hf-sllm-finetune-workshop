@@ -1,0 +1,141 @@
+# Serving pattern registry.
+#
+# Serving is as swappable as the model is. Deployment code never hardcodes an
+# engine, a SKU or a hosting surface -- it asks this registry for a
+# `ServingSpec` and reads capabilities off it.
+#
+# The `quota_family` / `allows_low_priority` fields are not decoration. They are
+# the difference between a pattern that works on this subscription today and one
+# that returns a quota error after a 20-minute deployment. Measured on
+# 2026-08-21 for koreacentral (see docs/SERVING.md section 2):
+#
+#   standardNCADSA100v4Family    dedicated = 0    <- A100
+#   StandardNVADSA10v5Family     dedicated = 0    <- A10   (increase requested)
+#   standardNCADSH100v5Family    dedicated = 0    <- H100
+#   Standard NCASv3_T4 Family    dedicated = 0    <- T4
+#
+# AML *managed online endpoints* bill against that dedicated pool and cannot use
+# LowPriority. AML *batch endpoints* run on an ordinary AmlCompute cluster, which
+# can, which is why `aml_batch` is the only GPU pattern that works right now.
+
+defaults:
+  pattern: aml_batch
+
+patterns:
+  - key: aml_online_vllm
+    display_name: AML Managed Online Endpoint + vLLM
+    surface: aml_online_endpoint
+    engine: vllm
+    openai_compatible: true
+    streaming: true
+    allows_low_priority: false
+    quota_family: StandardNVADSA10v5Family
+    default_sku: Standard_NV36ads_A10_v5
+    scale_to_zero: false
+    description: >-
+      The default production answer. Azure ML owns the load balancer, TLS,
+      key/AAD auth, blue-green traffic split, autoscale and per-deployment
+      metrics; we own the container. vLLM gives continuous batching and paged
+      attention, so throughput under concurrency is an order of magnitude better
+      than a naive HF `generate` loop.
+    caveats: >-
+      Needs dedicated GPU quota (LowPriority is rejected). Instances bill 24/7 --
+      there is no scale-to-zero on managed online endpoints.
+
+  - key: aml_batch_vllm
+    display_name: AML Batch Endpoint + vLLM offline engine
+    surface: aml_batch_endpoint
+    engine: vllm_offline
+    openai_compatible: false
+    streaming: false
+    allows_low_priority: true
+    quota_family: TotalLowPriorityCores
+    default_sku: Standard_NC24ads_A100_v4
+    scale_to_zero: true
+    description: >-
+      Scores a whole dataset asynchronously on an AmlCompute cluster. Because it
+      is a cluster and not a managed endpoint it inherits min_instances=0 and
+      LowPriority pricing, so it costs nothing idle and ~80% less running.
+      This is the pattern that works on this subscription with no quota request,
+      and it is the right one for evaluation, backfills and bulk generation.
+    caveats: >-
+      Not interactive: no per-request latency, no streaming. LowPriority nodes
+      can be preempted, so the job must be restartable.
+
+  - key: aml_batch
+    display_name: AML Batch Endpoint + HF transformers
+    surface: aml_batch_endpoint
+    engine: transformers
+    openai_compatible: false
+    streaming: false
+    allows_low_priority: true
+    quota_family: TotalLowPriorityCores
+    default_sku: Standard_NC24ads_A100_v4
+    scale_to_zero: true
+    description: >-
+      Same hosting as above but scoring with plain transformers. Slower than
+      vLLM, but it can serve a 4-bit QLoRA adapter directly without merging and
+      without a vLLM-compatible quantization format, so it is the shortest path
+      from a finished training run to real generations.
+    caveats: No continuous batching; throughput is roughly 5-10x below vLLM.
+
+  - key: aks_vllm
+    display_name: AKS / Container Apps + vLLM
+    surface: kubernetes
+    engine: vllm
+    openai_compatible: true
+    streaming: true
+    allows_low_priority: true
+    quota_family: StandardNVADSA10v5Family
+    default_sku: Standard_NV36ads_A10_v5
+    scale_to_zero: true
+    description: >-
+      Escape hatch when the managed endpoint's constraints bite: AKS node pools
+      can be Spot, can scale to zero with KEDA, and let several models share one
+      GPU. Azure ML can attach an AKS cluster so the deployment API stays the
+      same.
+    caveats: >-
+      You now own the cluster: upgrades, node images, GPU operator, ingress and
+      certificates. Only worth it at steady, predictable load.
+
+  - key: local_vllm
+    display_name: Local vLLM (OpenAI-compatible)
+    surface: local
+    engine: vllm
+    openai_compatible: true
+    streaming: true
+    allows_low_priority: true
+    quota_family: null
+    default_sku: null
+    scale_to_zero: true
+    description: >-
+      `vllm serve` on any GPU box, including an AML compute instance. Same
+      OpenAI-compatible wire protocol as the managed endpoint, so the load-test
+      client and the eval harness are written once and point at either.
+    caveats: No auth, no autoscale. Development and load-test baselining only.
+
+# How the trained LoRA adapter reaches the serving engine.
+adapter_modes:
+  - key: merged
+    display_name: Merged into base weights
+    description: >-
+      `merge_and_unload()` folds the LoRA deltas into the base weights and the
+      result is saved as an ordinary HF checkpoint. One self-contained model,
+      zero inference overhead, works with every engine and every quantization
+      format.
+    tradeoff: >-
+      One full-size copy of the weights per fine-tune (~54 GB for a 27B in bf16)
+      and a redeploy for every adapter change.
+
+  - key: runtime_adapter
+    display_name: Runtime LoRA loading (vLLM --enable-lora)
+    description: >-
+      Keep one quantized base resident and load adapters as small side files
+      (tens of MB). vLLM routes each request to the adapter named in the `model`
+      field, so dozens of fine-tunes share a single GPU and a new adapter is a
+      file upload rather than a deployment.
+    tradeoff: >-
+      Small per-token overhead, a cap on concurrently-loaded adapters, and vLLM
+      requires the adapter's target modules to exist in its own layer mapping --
+      which is exactly the hybrid-attention risk this asset already tracks for
+      Qwen3.8. Verify before relying on it.
