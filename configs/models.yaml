@@ -49,6 +49,10 @@ models:
       - gate_proj
       - up_proj
       - down_proj
+    # Serving flags, measured from the real config.json (see docs/VERIFIED.md).
+    multimodal: true          # vision_config / image_token_id / video_token_id
+    mamba_cache_mode: align   # 48 of 64 layers are Gated DeltaNet
+    reasoning_parser: qwen3
     notes: >-
       All figures below were measured, not estimated — see
       scripts/probe_architecture.py (meta-device instantiation, no GPU needed).
@@ -101,6 +105,10 @@ models:
     recommended_sku: Standard_NC24ads_A100_v4
     chat_template_kwargs:
       enable_thinking: false
+    # Same architecture as the BF16 repo, just quantized weights.
+    multimodal: true
+    mamba_cache_mode: align
+    reasoning_parser: qwen3
     notes: >-
       FP8-quantized weights. Intended for serving/deployment, not training.
       Listed so the deploy step can target it; prefer the BF16 repo for SFT.

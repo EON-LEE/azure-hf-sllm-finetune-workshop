@@ -23,16 +23,23 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from typing import TYPE_CHECKING
 
 from .registry import get_serving_registry
 from .spec import ServingSpec, Surface
 
+if TYPE_CHECKING:
+    from ..models.spec import ModelSpec
+
 log = logging.getLogger("ffsft.deploy.endpoint")
 
 #: Image built by docker/Dockerfile.serve. Bump with the tag, like the trainer's.
-#: :2 makes the Qwen3.5/3.8-only flags (--mamba-cache-mode, --language-model-only)
-#: opt-out, so the image can serve any model in configs/models.yaml.
-SERVE_IMAGE = "acrffsftkc.azurecr.io/ffsft-serve:2"
+#: :3 makes the vLLM launch neutral by default -- architecture flags now come
+#: from the ModelSpec via serving_env() instead of being baked into the image.
+SERVE_IMAGE = "acrffsftkc.azurecr.io/ffsft-serve:3"
+
+#: Where Azure ML mounts a registered model inside the inference container.
+MODEL_MOUNT = "/var/azureml-app/azureml-models"
 
 
 def read_dedicated_quota(subscription_id: str, location: str, family: str) -> int:
@@ -79,6 +86,49 @@ def check_pattern(
     return spec, spec.blocked_reason(available, instances=instances, sku=sku)
 
 
+def serving_env(
+    spec: ModelSpec | None,
+    *,
+    hf_model: str | None = None,
+    served_model_name: str = "ffsft",
+    max_model_len: int = 8192,
+    gpu_memory_utilization: float = 0.9,
+    quantization: str | None = None,
+    extra_args: str | None = None,
+) -> dict[str, str]:
+    """Build the container environment for one model.
+
+    Every architecture-dependent key is emitted unconditionally, including when
+    its value is neutral. That is deliberate: the image carries ENV defaults,
+    and a deployment that simply omits a key silently inherits whatever the
+    image was built with. A smoke deployment of the dense, text-only
+    Qwen3-0.6B was launched with `--language-model-only` and
+    `--mamba-cache-mode align` exactly that way, because those are what
+    Qwen3.8-27B needs and the image had them baked in.
+
+    Passing `spec=None` means "model not in the registry" and yields a plain
+    vLLM launch rather than Qwen3.8-shaped guesswork.
+    """
+    env = {
+        # MODEL_PATH doubles as a repo id when nothing is mounted: the
+        # entrypoint looks for config.json under the mount and falls back to
+        # treating the value as a Hub reference, so one variable covers both
+        # deployment styles.
+        "MODEL_PATH": hf_model or MODEL_MOUNT,
+        "SERVED_MODEL_NAME": served_model_name,
+        "MAX_MODEL_LEN": str(max_model_len),
+        "GPU_MEMORY_UTILIZATION": str(gpu_memory_utilization),
+        "MAMBA_CACHE_MODE": (spec.mamba_cache_mode or "") if spec else "",
+        "LANGUAGE_MODEL_ONLY": "1" if (spec and spec.multimodal) else "0",
+        "REASONING_PARSER": (spec.reasoning_parser or "") if spec else "",
+    }
+    if quantization:
+        env["QUANTIZATION"] = quantization
+    if extra_args:
+        env["EXTRA_ARGS"] = extra_args
+    return env
+
+
 def deploy_online(
     endpoint_name: str,
     model_uri: str | None,
@@ -91,6 +141,7 @@ def deploy_online(
     gpu_memory_utilization: float = 0.90,
     request_timeout_ms: int = 180_000,
     hf_model: str | None = None,
+    model_spec: ModelSpec | None = None,
     quantization: str | None = None,
     extra_args: str = "",
     force: bool = False,
@@ -173,19 +224,16 @@ def deploy_online(
     if not model_uri and not hf_model:
         raise ValueError("pass either model_uri (registered model) or hf_model (Hub id)")
 
-    # MODEL_PATH doubles as a repo id when nothing is mounted: the entrypoint
-    # looks for config.json under the mount and falls back to treating the value
-    # as a Hub reference, so one variable covers both deployment styles.
-    env_vars = {
-        "MODEL_PATH": hf_model or "/var/azureml-app/azureml-models",
-        "SERVED_MODEL_NAME": served_model_name,
-        "MAX_MODEL_LEN": str(max_model_len),
-        "GPU_MEMORY_UTILIZATION": str(gpu_memory_utilization),
-    }
-    if quantization:
-        env_vars["QUANTIZATION"] = quantization
-    if extra_args:
-        env_vars["EXTRA_ARGS"] = extra_args
+    env_vars = serving_env(
+        model_spec,
+        hf_model=hf_model,
+        served_model_name=served_model_name,
+        max_model_len=max_model_len,
+        gpu_memory_utilization=gpu_memory_utilization,
+        quantization=quantization,
+        extra_args=extra_args or None,
+    )
+    log.info("serving env: %s", {k: v for k, v in env_vars.items() if k != "EXTRA_ARGS"})
 
     deployment = ManagedOnlineDeployment(
         name="blue",

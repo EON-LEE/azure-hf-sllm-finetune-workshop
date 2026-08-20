@@ -124,6 +124,28 @@ class ModelSpec(BaseModel):
     #: explicitly for hybrid models. Verified with scripts/probe_architecture.py.
     lora_target_modules: list[str] = Field(default_factory=list)
 
+    # ---- Serving-time architecture facts -------------------------------
+    # These drive the vLLM launch flags. They default to the neutral value so
+    # an unlisted or plainly-architected model gets an ordinary vLLM launch;
+    # a model opts *in* to special handling. The opposite polarity was tried
+    # first (flags baked into the image as ENV defaults) and it meant every
+    # model except Qwen3.8 was launched with flags it could not honour.
+
+    #: True when the checkpoint carries a vision tower (`vision_config` in its
+    #: config.json). Serving a text-only workload then passes
+    #: `--language-model-only` so the deployment does not pay VRAM for it.
+    multimodal: bool = False
+
+    #: vLLM `--mamba-cache-mode` for hybrid linear-attention stacks. Qwen3.8-27B
+    #: needs "align" — 48 of its 64 layers are Gated DeltaNet and the default
+    #: mode raises NotImplementedError. None means "don't pass the flag".
+    mamba_cache_mode: str | None = None
+
+    #: vLLM `--reasoning-parser`. Qwen3 emits a <think> block; without the
+    #: parser the reasoning leaks into `content` and every downstream consumer
+    #: reads it as the answer.
+    reasoning_parser: str | None = None
+
     notes: str = ""
     source_url: str | None = None
 

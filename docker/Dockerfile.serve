@@ -32,23 +32,25 @@ FROM vllm/vllm-openai:${VLLM_TAG}
 # replace the entrypoint with a launcher that reads its configuration from the
 # deployment's environment_variables (see ffsft.deploy.endpoint.deploy_online).
 #
-# MAMBA_CACHE_MODE is not tunable trivia. Qwen3_5ForCausalLMBase raises
-# NotImplementedError when the mode is "all", because 48 of its 64 layers are
-# linear-attention (Gated DeltaNet) and only "align" is implemented. Getting
-# this wrong is an immediate crash on model load.
+# The three architecture flags below default to NEUTRAL on purpose. They used to
+# default to Qwen3.8-27B's values, which meant any deployment that did not
+# explicitly override them inherited flags for an architecture it did not have:
+# a smoke deployment of the dense, text-only Qwen3-0.6B was launched with
+# --language-model-only and --mamba-cache-mode align and never became healthy.
 #
-# LANGUAGE_MODEL_ONLY defaults on: Qwen3.8-27B is multimodal (its config carries
-# vision_config, image_token_id and video_token_id), and loading the vision
-# tower costs VRAM that a text-only Korean SFT deployment never uses.
+# The model is the thing that varies, so the model decides. ffsft.models.spec
+# carries multimodal / mamba_cache_mode / reasoning_parser, and serving_env()
+# emits all three keys on every deployment -- including when neutral -- so an
+# image default can never silently apply again.
 ENV MODEL_PATH=/var/azureml-app/azureml-models \
     SERVED_MODEL_NAME=ffsft \
     MAX_MODEL_LEN=8192 \
     GPU_MEMORY_UTILIZATION=0.90 \
     TENSOR_PARALLEL_SIZE=1 \
     VLLM_PORT=8000 \
-    MAMBA_CACHE_MODE=align \
-    LANGUAGE_MODEL_ONLY=1 \
-    REASONING_PARSER=qwen3 \
+    MAMBA_CACHE_MODE="" \
+    LANGUAGE_MODEL_ONLY=0 \
+    REASONING_PARSER="" \
     QUANTIZATION="" \
     ENABLE_LORA=0 \
     LORA_MODULES="" \
