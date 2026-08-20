@@ -219,13 +219,129 @@ RBAC(`Storage Blob Data Contributor`)과
 `gpu-a100-lp`는 `min_instances=0`이라 **유휴 시 과금이 없고**, 잡이 도는 동안만
 과금된다. 현재 실행 중인 VM은 없다.
 
+| 서빙 리소스 | 이름 | 상태 |
+|---|---|---|
+| 컨테이너 이미지 | `acrffsftkc.azurecr.io/ffsft-serve:2` | ✅ ACR 빌드 성공 |
+| AML Environment | `ffsft-serve:1` → 위 이미지 | ✅ 등록됨 |
+| Online Endpoint | `ffsft-smoke` | ⚙️ 스모크 테스트용, 테스트 후 삭제 |
+
 ---
 
-## 4. 아직 검증 못 한 것
+## 4. vLLM 서빙 이미지 — 실측 완료 ✅
+
+`docker/Dockerfile.serve`는 빌드 중에 `docker/verify_serve.py`를 실행해서
+**이미지가 잘못 만들어지면 빌드 자체가 실패**하게 만들었다. ACR 빌드 4회 만에 통과.
+
+```
+vllm 0.27.1   torch 2.13.0+cu130   python 3.12
+arch Qwen3_5ForConditionalGeneration: registered   ← 모델 지원 확인
+flags 12 required: all present   (--language-model-only 포함)
+```
+
+### 4.1 빌드하면서 실제로 밟은 지뢰 4개
+
+| 회차 | 증상 | 원인 |
+|---|---|---|
+| 1 | `python: not found` | vLLM 이미지는 `python3`만 있다 |
+| 2 | `cannot import name 'FlexibleArgumentParser' from 'vllm.utils'` | 0.27에서 위치가 바뀜 |
+| 3 | `RuntimeError: Failed to infer device type` | `make_arg_parser()`가 `VllmConfig`를 만들고, 이게 **GPU를 요구**한다. ACR 빌드 에이전트는 CPU 전용 |
+| 4 | — | 통과 |
+
+3번 때문에 플래그 검증을 **파서 생성이 아니라 vLLM 소스 2,360개 파일 텍스트 스캔**으로
+바꿨다. 빌드 타임에는 GPU가 없다는 게 핵심 제약이다.
+
+### 4.2 모델 교체 가능성 — 실제로 깨졌다가 고친 부분
+
+Qwen3.8 전용 플래그(`--mamba-cache-mode align`, `--language-model-only`,
+`--reasoning-parser qwen3`)를 **무조건** 붙이고 있었다. 이러면 `Qwen3-0.6B` 같은
+dense 모델에서 서버가 안 뜬다. 해당 env 를 비우면 빠지는 **opt-out** 방식으로
+바꾸고 `ffsft-serve:2`로 재빌드했다.
+
+> Qwen3.8은 48개 GDN 레이어 때문에 `--mamba-cache-mode align`이 **필수**다.
+> `all`로 두면 `NotImplementedError`가 난다.
+
+---
+
+## 5. Online Endpoint 쿼터 — 실측 완료 ✅
+
+이번 세그먼트에서 가장 비싼 발견이다.
+
+```
+(OutOfQuota) The amount of CPU quota requested is 72
+             and your maximum amount of quota is [N/A]
+```
+
+`Standard_NV36ads_A10_v5`(36 코어)를 1 인스턴스 배포했는데 **72 코어**를 요구했다.
+Managed Online Endpoint 는 **롤링 업데이트용으로 인스턴스 세트를 하나 더 예약**하기
+때문에 실제 필요량은 항상 **SKU 코어 × 인스턴스 수 × 2** 다.
+
+| SKU | 코어 | 1 인스턴스 배포 시 필요 | A10 쿼터 36 에서 |
+|---|---|---|---|
+| `Standard_NV36ads_A10_v5` | 36 | **72** | ❌ 불가 |
+| `Standard_NV18ads_A10_v5` | 18 | **36** | ✅ 가능 |
+
+그래서 `src/ffsft/deploy/spec.py`에 `ONLINE_ENDPOINT_CORE_MULTIPLIER = 2`와
+`required_dedicated_cores()`를 넣고, `blocked_reason()`이 **배포 전에** 막도록 했다.
+20분짜리 롤아웃이 실패한 뒤에 알게 되는 것과 즉시 거부되는 것의 차이다.
+
+### 5.1 실패한 배포는 복구 불가
+
+```
+Specified deployment [blue] failed during initial provisioning
+and is in an unrecoverable state. Delete and re-create.
+```
+
+파라미터를 고쳐서 재시도하면 **원래 문제와 무관한 이 에러**로 또 실패한다.
+`deploy_online()`이 재배포 전에 실패한 배포를 먼저 지우도록 수정했다.
+
+---
+
+## 6. 테어다운 — 실측 완료 ✅
+
+`ffsft lifecycle down --endpoint ffsft-smoke --yes` 를 **실제 구독에 대해 실행**했다.
+
+```
+ffsft-smoke / blue  Standard_NV36ads_A10_v5 x1
+  → $4.320/hr  ~$3,154/month
+deleted: onlineEndpoint ffsft-smoke
+BILLING NOW: nothing
+```
+
+과금 분류 기준이 실측으로 확인됐다:
+
+| 리소스 | 유휴 시 |
+|---|---|
+| Managed Online Endpoint | **24시간 과금** (scale-to-zero 없음) |
+| AmlCompute `min_instances=0` | **무과금** |
+| Batch Endpoint | **무과금** (잡 돌 때만) |
+
+그래서 `teardown()`은 **엔드포인트는 삭제**하고 **클러스터는 0으로 스케일 다운**만
+한다. 클러스터 정의는 공짜고 재생성에 수 분이 걸린다.
+
+koreacentral PAYG 실측 단가($/hr): `NC16as_T4_v3` 1.481 · `NV18ads_A10_v5` 2.160 ·
+`NV36ads_A10_v5` 4.320 · `NC24ads_A100_v4` 4.959 · `NC40ads_H100_v5` 9.423
+
+---
+
+## 7. 한국어 데이터 전처리 — NFC 정규화 필수
+
+macOS와 일부 크롤러는 한글을 **NFD(자모 분해)** 로 내보낸다. `가` 가
+`U+1100 U+1161` 로 저장되는데, **화면에는 똑같이 보이고 해시는 다르다.**
+정규화 없이 dedup 하면 섞인 코퍼스에서 **중복 제거가 조용히 무력화**된다.
+`normalize_text()`가 해싱 전에 NFC를 적용한다.
+
+---
+
+## 8. 아직 검증 못 한 것
 
 - [ ] **Qwen3.8-27B QLoRA 실제 학습** — bitsandbytes NF4가 hybrid
       linear-attention/Conv1d 레이어에서 실제로 도는지. 최대 리스크.
+- [ ] Qwen3.8은 `Qwen3_5ForConditionalGeneration`(멀티모달)인데
+      `qlora.py`가 쓰는 `AutoModelForCausalLM`으로 로드되는지
 - [ ] 22.5–26.5 GB 실측 추정이 실제 피크와 맞는지
+- [ ] vLLM LoRA가 GDN projection(`in_proj_qkvz`, `in_proj_ba`)에도 실제로 붙는지
 - [ ] Fabric → OneLake → AML 데이터 경로
 - [ ] `benchmarks.yaml`의 한국어 harness task 이름
 - [ ] `trl` 1.10 / `peft` 0.20 이 `transformers` 5.15와 호환되는지
+- [ ] 27B를 A10 24GB로 서빙하려면 **Int4 체크포인트**가 필요 (bf16 머지본 불가)
+
