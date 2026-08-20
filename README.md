@@ -242,11 +242,17 @@ Managed Online Endpoint 는 **scale-to-zero 가 없어서 idle 상태에서도 2
 실험이 끝나면 반드시 내려야 하고, 나중에 같은 명령으로 다시 올릴 수 있습니다.
 
 ```bash
-ffsft lifecycle status              # 지금 과금 중인 리소스 + 시간당/월 비용
-ffsft lifecycle up   --endpoint ffsft-smoke --hf-model Qwen/Qwen3-0.6B
-ffsft lifecycle down --endpoint ffsft-smoke --yes
-ffsft lifecycle down --all --yes    # 과금되는 것 전부 정리
+ffsft-lifecycle status              # 지금 과금 중인 리소스 + 시간당/월 비용
+ffsft-lifecycle up   --endpoint ffsft-smoke --model qwen3.8-27b
+ffsft-lifecycle up   --endpoint ffsft-smoke --hf-model Qwen/Qwen3-0.6B
+ffsft-lifecycle down --endpoint ffsft-smoke --yes
+ffsft-lifecycle down --all --yes    # 과금되는 것 전부 정리
 ```
+
+`--model` 은 `configs/models.yaml` 의 키다. 이걸 주면 해당 모델의
+**아키텍처 플래그**(`--mamba-cache-mode` / `--language-model-only` /
+`--reasoning-parser`)가 자동으로 결정된다. 이미지에 굽지 않는 이유는
+`docs/VERIFIED.md` 5.2 참고 — 이미지 기본값 때문에 실제로 배포가 깨졌다.
 
 `down` 은 **엔드포인트만 삭제**하고 **컴퓨트 클러스터는 0 노드로 스케일 다운**합니다.
 클러스터 정의는 유지 비용이 없고 재생성에 수 분이 걸리므로 남겨 두는 편이 낫습니다.

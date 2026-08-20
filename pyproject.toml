@@ -82,6 +82,7 @@ dev = [
 
 [project.scripts]
 ffsft = "ffsft.cli:app"
+ffsft-lifecycle = "ffsft.deploy.lifecycle:main"
 ffsft-loadtest = "ffsft.serve.loadtest:main"
 ffsft-eval = "ffsft.eval.run:main"
 ffsft-merge = "ffsft.deploy.merge:main"

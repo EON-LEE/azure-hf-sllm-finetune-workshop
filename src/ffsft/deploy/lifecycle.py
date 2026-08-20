@@ -327,6 +327,17 @@ def cmd_down(args) -> int:
 def cmd_up(args) -> int:
     from .endpoint import deploy_online
 
+    # Resolving the registry key here is what makes the model swappable end to
+    # end: the spec carries the architecture flags vLLM needs, so `--model
+    # qwen3.8-27b` and `--model kanana2-3b` produce different launch arguments
+    # without anyone editing the image or the deploy code.
+    spec = None
+    if args.model:
+        from ..models.registry import get_model
+
+        spec = get_model(args.model)
+        print(f"model spec: {spec.key} ({spec.hf_id}) params={spec.params_b}B")
+
     scoring_uri = deploy_online(
         args.endpoint,
         args.model_uri,
@@ -334,7 +345,8 @@ def cmd_up(args) -> int:
         instance_count=args.instances,
         sku=args.sku,
         max_model_len=args.max_model_len,
-        hf_model=args.hf_model,
+        hf_model=args.hf_model or (spec.hf_id if spec and not args.model_uri else None),
+        model_spec=spec,
         quantization=args.quantization,
     )
     print(f"\nendpoint '{args.endpoint}' is up")
@@ -356,6 +368,7 @@ def main() -> int:
 
     p_up = sub.add_parser("up", help="create an online endpoint")
     p_up.add_argument("--endpoint", required=True)
+    p_up.add_argument("--model", default=None, help="registry key, e.g. qwen3.8-27b")
     p_up.add_argument("--model-uri", default=None, help="registered azureml: model")
     p_up.add_argument("--hf-model", default=None, help="Hugging Face repo id instead")
     p_up.add_argument("--pattern", default="aml_online_vllm")
