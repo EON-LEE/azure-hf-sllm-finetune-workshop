@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 from typing import TYPE_CHECKING
 
 from .registry import get_serving_registry
@@ -106,6 +107,60 @@ def startup_grace_for(params_b: float | None) -> int:
     return int(min(1800, max(120, 120 + params_b * 25)))
 
 
+#: A parameter count written as a size suffix: `-8B`, `-0.6b`, `-70B`.
+#: The trailing guard is what stops `-4bit`, `-8bit` and `-7Base` from reading
+#: as sizes, and requiring the `B` is what stops the `3.1` in `Llama-3.1-8B`
+#: from being mistaken for one.
+_SIZE_SUFFIX = re.compile(r"(\d+(?:\.\d+)?)[Bb](?![A-Za-z0-9])")
+
+#: Mixture-of-experts shorthand: `8x7B` is eight 7B experts on disk, not 7B.
+_MOE_SUFFIX = re.compile(r"(\d+)\s*[xX]\s*(\d+(?:\.\d+)?)[Bb](?![A-Za-z0-9])")
+
+
+def params_from_hf_id(hf_id: str | None) -> float | None:
+    """Recover a parameter count from a Hugging Face repo id, or None.
+
+    Exists so that a model swapped in by repo id -- the whole point of this
+    repo -- still gets a probe sized for it, without a registry entry and
+    without a network call. Hub naming is consistent enough to rely on: the
+    size is a B-suffixed number, and everything else in the id is a version, a
+    quantisation, or a variant tag.
+
+    The largest candidate wins rather than the last one. `Qwen3-30B-A3B` names
+    both its total and its active parameters; startup pays for the download, so
+    the total is the honest input. Picking the last match would read 3B there
+    and under-size the grace period by a factor of ten.
+
+    Returning None is a real answer, not a failure: it is what keeps the probe
+    on its conservative default instead of acting on a guess.
+    """
+    if not hf_id:
+        return None
+    candidates = [float(a) * float(b) for a, b in _MOE_SUFFIX.findall(hf_id)]
+    candidates += [float(m) for m in _SIZE_SUFFIX.findall(hf_id)]
+    return max(candidates) if candidates else None
+
+
+def resolve_params_b(
+    *,
+    explicit: float | None,
+    spec: ModelSpec | None,
+    hf_model: str | None,
+) -> float | None:
+    """Pick the most trustworthy parameter count available.
+
+    Ordered by how much the number was actually looked at: an operator flag
+    beats a curated registry entry, which beats a string parsed out of a repo
+    id. A registry entry that simply has no size recorded falls through rather
+    than blocking the inference behind it.
+    """
+    if explicit is not None:
+        return explicit
+    if spec is not None and getattr(spec, "params_b", None) is not None:
+        return spec.params_b
+    return params_from_hf_id(hf_model)
+
+
 def serving_env(
     spec: ModelSpec | None,
     *,
@@ -162,6 +217,7 @@ def deploy_online(
     request_timeout_ms: int = 180_000,
     hf_model: str | None = None,
     model_spec: ModelSpec | None = None,
+    params_b: float | None = None,
     quantization: str | None = None,
     extra_args: str = "",
     force: bool = False,
@@ -255,8 +311,14 @@ def deploy_online(
     )
     log.info("serving env: %s", {k: v for k, v in env_vars.items() if k != "EXTRA_ARGS"})
 
-    grace = startup_grace_for(model_spec.params_b if model_spec else None)
-    log.info("startup grace: %ds (probe gives up ~%ds after that)", grace, 10 * 30)
+    sized_from = resolve_params_b(explicit=params_b, spec=model_spec, hf_model=hf_model)
+    grace = startup_grace_for(sized_from)
+    log.info(
+        "startup grace: %ds from params_b=%s (probe gives up ~%ds after that)",
+        grace,
+        sized_from,
+        10 * 30,
+    )
 
     deployment = ManagedOnlineDeployment(
         name="blue",

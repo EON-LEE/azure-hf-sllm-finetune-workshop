@@ -347,6 +347,7 @@ def cmd_up(args) -> int:
         max_model_len=args.max_model_len,
         hf_model=args.hf_model or (spec.hf_id if spec and not args.model_uri else None),
         model_spec=spec,
+        params_b=args.params_b,
         quantization=args.quantization,
     )
     print(f"\nendpoint '{args.endpoint}' is up")
@@ -371,6 +372,13 @@ def main() -> int:
     p_up.add_argument("--model", default=None, help="registry key, e.g. qwen3.8-27b")
     p_up.add_argument("--model-uri", default=None, help="registered azureml: model")
     p_up.add_argument("--hf-model", default=None, help="Hugging Face repo id instead")
+    p_up.add_argument(
+        "--params-b",
+        type=float,
+        default=None,
+        help="parameter count in billions; sizes the startup probe when the "
+        "repo id does not say and the model is not in the registry",
+    )
     p_up.add_argument("--pattern", default="aml_online_vllm")
     p_up.add_argument("--sku", default=None)
     p_up.add_argument("--instances", type=int, default=1)
