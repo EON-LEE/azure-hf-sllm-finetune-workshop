@@ -86,6 +86,26 @@ def check_pattern(
     return spec, spec.blocked_reason(available, instances=instances, sku=sku)
 
 
+def startup_grace_for(params_b: float | None) -> int:
+    """Seconds to wait before the readiness probe starts judging the container.
+
+    Startup is dominated by pulling weights from the Hub and loading them onto
+    the GPU, both of which scale with parameter count. Roughly 2 GB of bf16
+    weights per billion parameters, and a Hub download that sustains on the
+    order of 100 MB/s into an Azure ML node, works out near 25 s per billion.
+    The fixed 120 s covers image start and CUDA graph capture.
+
+    The reason this is a function rather than the old hardcoded 600: a fixed
+    27B-sized grace period means a 0.6B smoke deployment that can never become
+    healthy still takes ~45 minutes to be declared failed, and Azure withholds
+    the container logs until it is. The upper bound exists for the same reason
+    -- a grace period long enough to never fail is not a grace period.
+    """
+    if params_b is None:
+        return 600
+    return int(min(1800, max(120, 120 + params_b * 25)))
+
+
 def serving_env(
     spec: ModelSpec | None,
     *,
@@ -235,6 +255,9 @@ def deploy_online(
     )
     log.info("serving env: %s", {k: v for k, v in env_vars.items() if k != "EXTRA_ARGS"})
 
+    grace = startup_grace_for(model_spec.params_b if model_spec else None)
+    log.info("startup grace: %ds (probe gives up ~%ds after that)", grace, 10 * 30)
+
     deployment = ManagedOnlineDeployment(
         name="blue",
         endpoint_name=endpoint_name,
@@ -247,10 +270,12 @@ def deploy_online(
             request_timeout_ms=request_timeout_ms,
             max_concurrent_requests_per_instance=64,
         ),
-        # A 27B model takes minutes to load. Without a generous startup budget
-        # the probe kills the container before vLLM finishes warming up.
-        liveness_probe=ProbeSettings(initial_delay=600, period=30, failure_threshold=10),
-        readiness_probe=ProbeSettings(initial_delay=600, period=30, failure_threshold=30),
+        # Sized from the model rather than fixed: a large model needs minutes to
+        # load, but using that budget for a small one means a container that can
+        # never start still takes ~45 minutes to be reported as failed, with the
+        # logs withheld until then.
+        liveness_probe=ProbeSettings(initial_delay=grace, period=30, failure_threshold=10),
+        readiness_probe=ProbeSettings(initial_delay=grace, period=30, failure_threshold=10),
     )
 
     log.info("creating deployment on %s x%d (this takes 15-30 min)", instance_type, instance_count)
