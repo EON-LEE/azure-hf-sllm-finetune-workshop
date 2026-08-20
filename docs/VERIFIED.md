@@ -712,3 +712,36 @@ Message: Internal error. Please see troubleshooting guide ... #error-internalser
 
 그리고 이 실패에 **$2.160/시 × 1.9시간 ≈ $4.1** 이 청구됐다.
 프리플라이트(§0.3)는 이걸 **2초**에 거부한다. 이 한 번의 실패만으로도 값을 한다.
+
+---
+
+## 13. 테어다운 완료 — `BILLING NOW: nothing` ✅
+
+```
+18:07:57  DELETE 요청 (ARM 직접 호출)
+18:42:33  create 오퍼레이션이 InternalServerError 로 최종 종료  ← §12
+18:48:20  endpoints=0  ALL ENDPOINTS DELETED
+```
+
+**총 40분 24초.** 그런데 주목할 점은 **삭제가 생성 뒤에 줄 서 있었다**는 것이다.
+create 가 18:42:33 에 풀리고 나서 **6분 만에** 삭제가 끝났다.
+즉 앞의 34분은 삭제가 느린 게 아니라 **아직 돌고 있는 create 를 기다린 시간**이다.
+
+> 실무 함의: 실패한 배포를 `down` 하면 오래 걸린다고 놀랄 필요 없다.
+> **원래 배포 오퍼레이션이 끝나야 삭제가 시작된다.** 그동안 GPU 는 계속 과금된다.
+> 이것이 프리플라이트가 사후 정리보다 훨씬 값싼 또 하나의 이유다.
+
+최종 상태:
+
+```
+KIND                 NAME              SKU                          $/hr  NOTE
+  compute-cluster    gpu-a100-lp       Standard_NC24ads_A100_v4        -  min_instances=0: idle costs nothing
+BILLING NOW: nothing. No always-on compute in this workspace.
+```
+
+- 온라인 엔드포인트: **0개**
+- A100 클러스터: 정의는 유지, **0 노드 → 무료** (재실험 시 `up` 으로 즉시 복구)
+- 삭제된 VM 잔해: **전부 제거** (§11)
+- ACR: 사용 중인 2개 태그만 유지 (§11.5)
+
+**지금 이 구독에서 이 프로젝트로 과금되는 리소스는 없다.**
