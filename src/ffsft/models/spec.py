@@ -98,6 +98,14 @@ class ModelSpec(BaseModel):
     #: e.g. {"enable_thinking": false} for Qwen3 hybrid-reasoning models.
     chat_template_kwargs: dict[str, object] = Field(default_factory=dict)
 
+    #: Modules PEFT wraps with LoRA adapters. Empty means "fall back to PEFT's
+    #: per-architecture default", which is only safe for plain transformer stacks.
+    #: It is actively wrong for hybrid attention models: on Qwen3.5/3.6/3.8 the
+    #: default {q,k,v,o}_proj set exists only on the 1-in-4 full-attention layers,
+    #: so 48 of 64 layers would silently receive no adapter. Always set this
+    #: explicitly for hybrid models. Verified with scripts/probe_architecture.py.
+    lora_target_modules: list[str] = Field(default_factory=list)
+
     notes: str = ""
     source_url: str | None = None
 

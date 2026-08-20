@@ -109,9 +109,9 @@ FFSFT_MODEL_REGISTRY=/path/to/my_models.yaml uv run ffsft models list
 
 | 계열 | 키 | 크기 | 비고 |
 |---|---|---|---|
-| **Qwen (기본)** | `qwen3.8-27b` ⭐ | 27.8B | Apache-2.0, 기본 타깃 |
-| | `qwen3.8-27b-fp8` | 27.8B | FP8 양자화 |
-| | `qwen3.6-27b` | 27.8B | 폴백 후보 |
+| **Qwen (기본)** | `qwen3.8-27b` ⭐ | 26.9B | Apache-2.0, 기본 타깃 |
+| | `qwen3.8-27b-fp8` | 26.9B | FP8 양자화 |
+| | `qwen3.6-27b` | 26.9B | 폴백 후보 |
 | | `qwen3.5-9b` / `-4b` / `-2b` / `-0.8b` | 0.9~9.7B | 가장 최신 **소형** 티어 |
 | **한국어 네이티브** | `midm-2.0-mini` | 2.3B | KT, **MIT** (가장 안전) |
 | | `midm-2.0-base` | 11.5B | KT, MIT |
@@ -192,7 +192,7 @@ uv run python scripts/verify_hf_ids.py --spec Qwen/Qwen3.8-27B   # 실제 아키
 
 또한 vocab 이 **248,320** 토큰(Qwen3 는 152K)이라 한글 토크나이징 효율이 크게 개선됩니다.
 
-### VRAM 추정치 (27.8B 기준)
+### VRAM 추정치 (26.9B 기준)
 
 | 방식 | 추정 peak VRAM | 권장 SKU |
 |---|---|---|

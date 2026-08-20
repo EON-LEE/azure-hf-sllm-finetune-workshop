@@ -27,25 +27,60 @@ def test_default_model_is_qwen38_27b():
     assert spec.hf_id == "Qwen/Qwen3.8-27B"
     assert spec.license == "apache-2.0"
     assert spec.commercial_use is True
-    assert spec.params_b == pytest.approx(27.8)
+    # Measured by meta-device instantiation, not taken from the model card.
+    # scripts/probe_architecture.py qwen3.8-27b
+    assert spec.params_b == pytest.approx(26.9, abs=0.1)
 
 
-def test_qwen38_defaults_to_qlora_because_bf16_lora_has_no_headroom():
+def test_qwen38_qlora_needs_more_than_a_24gb_card():
+    """Sizing is measured, and it does not fit the 24 GB card we first assumed.
+
+    Weights are 12.9 GB of NF4 Linear plus 5.1 GB that stays bf16 -- the
+    embedding table and lm_head are 1.27 B params each and are NOT quantized
+    (tie_word_embeddings is False, and transformers keeps the output head in
+    full width). Add adapters/optimizer and activations and peak is 22.5-26.5 GB,
+    so 24 GB is a coin flip and 40 GB is the smallest honest target.
+    """
     spec = get_registry().get("qwen3.8-27b")
-    # 27.8B params in bf16 is ~55.6 GB of weights alone. QLoRA leaves real
-    # headroom on one 80 GB A100; bf16 LoRA is estimated at ~76 GB, which is
-    # "fits on paper, OOMs in practice" territory once sequences get long.
-    single_gpu_gb = 80
+    consumer_card_gb = 24
+    big_card_gb = 80
     assert spec.supports_method(TuningMethod.QLORA)
     assert spec.recommended_method is TuningMethod.QLORA
     assert spec.vram_gb.qlora is not None
-    assert spec.vram_gb.lora is not None
-    assert spec.vram_gb.qlora < single_gpu_gb * 0.7
-    assert spec.vram_gb.lora > single_gpu_gb * 0.9
-    assert spec.vram_gb.full > single_gpu_gb
+    assert spec.vram_gb.qlora > consumer_card_gb
+    assert spec.vram_gb.qlora < big_card_gb
+    assert spec.vram_gb.lora > spec.vram_gb.qlora
+    assert spec.vram_gb.full > big_card_gb
 
 
-def test_qwen38_disables_thinking_in_chat_template():
+def test_hybrid_models_declare_explicit_lora_targets():
+    """PEFT's default q/k/v/o_proj set silently under-adapts hybrid models.
+
+    Qwen3.5/3.6/3.8 are 1-in-4 full attention; the other 48 of 64 layers expose
+    in_proj_* / out_proj instead. Relying on the default would adapt 13% of the
+    Linear modules and leave three quarters of the network frozen, which trains
+    without error and quietly produces a bad model. Every hybrid entry must
+    therefore spell its targets out.
+    """
+    spec = get_registry().get("qwen3.8-27b")
+    targets = set(spec.lora_target_modules)
+    assert targets, "qwen3.8-27b must not fall back to PEFT defaults"
+
+    linear_attn_projections = {"in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"}
+    full_attention_projections = {"q_proj", "k_proj", "v_proj", "o_proj"}
+    mlp_projections = {"gate_proj", "up_proj", "down_proj"}
+
+    assert linear_attn_projections <= targets
+    assert full_attention_projections <= targets
+    assert mlp_projections <= targets
+    # lm_head is a Linear too, but adapting the output head is not what we want.
+    assert "lm_head" not in targets
+
+
+def test_qwen38_pins_thinking_off_because_xhigh_is_the_template_default():
+    # The chat template resolves reasoning_effort to 'xhigh' unless
+    # enable_thinking is explicitly false, which burns huge token budgets
+    # during both SFT and eval.
     spec = get_registry().get("qwen3.8-27b")
     assert spec.chat_template_kwargs.get("enable_thinking") is False
 

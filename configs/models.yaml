@@ -16,31 +16,73 @@ models:
     provider: hf
     hf_id: Qwen/Qwen3.8-27B
     supports: [qlora, lora, full]
-    params_b: 27.8
+    params_b: 26.9
     context_length: 262144
     license: apache-2.0
     commercial_use: true
     korean_tier: strong
     korean_notes: >-
       248,320-token vocabulary (vs 152K on Qwen3) gives markedly better Hangul
-      tokenization efficiency. Korean is covered by Qwen's multilingual training
-      but is not a tier-1 optimized language, so Korean SFT still pays off.
+      tokenization efficiency — measured 13 tokens for a 20-character Korean
+      sentence. Korean is covered by Qwen's multilingual training but is not a
+      tier-1 optimized language, so Korean SFT still pays off.
     vram_gb:
-      qlora: 26
+      qlora: 28
       lora: 76
       full: 460
     recommended_sku: Standard_NC24ads_A100_v4
     chat_template_kwargs:
       enable_thinking: false
+    lora_target_modules:
+      # full_attention layers (16 of 64)
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      # linear_attention layers (48 of 64) — MISSED by PEFT's default targets
+      - in_proj_qkv
+      - in_proj_z
+      - in_proj_b
+      - in_proj_a
+      - out_proj
+      # MLP, present on all 64 layers
+      - gate_proj
+      - up_proj
+      - down_proj
     notes: >-
-      IMPORTANT: this is a MULTIMODAL checkpoint (Qwen3_5ForConditionalGeneration,
-      vision + video tokens) despite the plain name. For Korean text-only SFT set
-      language_model_only=true so the vision tower is not loaded or trained.
-      Hybrid architecture: 64 layers mixing full attention (every 4th layer,
-      full_attention_interval=4) with linear/SSM-style layers, plus a
-      multi-token-prediction head. Requires transformers>=5.8.
-      BF16 weights alone are ~55.6 GB, so QLoRA is the default recipe;
-      bf16 LoRA needs 2x 80GB cards to be comfortable.
+      All figures below were measured, not estimated — see
+      scripts/probe_architecture.py (meta-device instantiation, no GPU needed).
+      MULTIMODAL checkpoint (Qwen3_5ForConditionalGeneration, vision + video
+      tokens) despite the plain name. AutoModelForCausalLM resolves to
+      Qwen3_5ForCausalLM and drops the vision tower cleanly, which is what
+      text-only Korean SFT wants.
+      Architecture: 26.90B params over 64 layers, layer_types = 48
+      linear_attention + 16 full_attention (full_attention_interval=4), plus 48
+      nn.Conv1d short-convolutions and a multi-token-prediction head.
+      CRITICAL: the linear_attention layers expose in_proj_qkv / in_proj_z /
+      in_proj_b / in_proj_a / out_proj, NOT q_proj/k_proj/v_proj/o_proj. PEFT's
+      conventional target set matches only 64 of 497 Linear modules (13%) and
+      adapts just the 16 full-attention layers. lora_target_modules above covers
+      496 of 497 (100%). Do not rely on the default.
+      QLoRA memory (measured): 24.35B quantizable Linear -> ~12.9 GB in NF4;
+      lm_head (1.27B) and the untied input embedding (1.27B) stay bf16 at
+      ~2.5 GB each; total weights ~18 GB, +1 GB adapters/grads/optimizer,
+      +4-8 GB activations with gradient checkpointing => 23-27 GB peak.
+      A 24 GB card is therefore NOT reliably enough; A100 40/80GB is the real
+      entry point. bitsandbytes does not quantize nn.Conv1d, so those stay bf16
+      (negligible, 2M params). Requires transformers>=5.8 (verified on 5.15.1,
+      where model_type 'qwen3_5' is natively registered — no trust_remote_code).
+      Reasoning control differs from older Qwen: the chat template resolves
+      reasoning_effort (xhigh default, then medium/low) but ONLY when
+      enable_thinking is not false. xhigh burns enormous token budgets, so
+      training and eval pin enable_thinking=false. Note that this does not remove
+      the thinking block — the template still emits an empty "<think>\n\n</think>"
+      prefix, so SFT targets must be built with the same template or the model
+      will drift at inference. reasoning_effort does not exist on Qwen3.6/3.5.
+      AZURE: Standard_NV36ads_A10_v5 was the original pick and is WRONG — Azure
+      ML rejects the entire NVadsA10v5 family for both AmlCompute clusters and
+      compute instances, even though the region vmSizes API lists it. Verified
+      2026-08-20. Use NC-series (A100/H100) for Azure ML.
     source_url: https://huggingface.co/Qwen/Qwen3.8-27B
 
   - key: qwen3.8-27b-fp8
@@ -48,7 +90,7 @@ models:
     provider: hf
     hf_id: Qwen/Qwen3.8-27B-FP8
     supports: [qlora]
-    params_b: 27.8
+    params_b: 26.9
     context_length: 262144
     license: apache-2.0
     commercial_use: true
