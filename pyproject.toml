@@ -104,3 +104,8 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fabric notebooks bootstrap sys.path before importing ffsft, and the Spark
+# runtime injects `display` as a builtin, so neither rule can be satisfied here.
+"notebooks/fabric/*.py" = ["E402", "F821"]
