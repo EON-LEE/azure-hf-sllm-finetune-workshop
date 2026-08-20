@@ -10,6 +10,93 @@
 
 ---
 
+## 0. ⛔ 가장 중요한 결론 — 이 워크스페이스에서는 Managed Online Endpoint가 뜰 수 없다
+
+**두 번의 배포(`ffsft-smoke`, `ffsft-smoke2`)가 모두 실패했고, 원인은 같다.**
+모델도, 이미지도, 프로브도 아니었다. **워크스페이스 기본 스토리지 계정이
+어디에서도 접근 불가능**하기 때문이다.
+
+ARM에서 직접 읽은 값:
+
+```
+storageAccount: mlwffsftstorage8cb451dd1
+  publicNetworkAccess         Disabled     ← 공용 경로 없음
+  networkAcls.defaultAction   Allow        ← 무의미 (PNA가 우선)
+  networkAcls.ipRules         []
+  networkAcls.virtualNetworkRules []
+  privateEndpointConnections  []           ← 프라이빗 경로도 없음
+  allowSharedKeyAccess        false
+workspace mlw-ffsft
+  managedNetwork.isolationMode  Disabled   ← 컴퓨트가 VNet 안에 있지도 않음
+resourceGroup rg-ffsft-kc
+  privateEndpoints            []
+```
+
+공용 경로도 없고 프라이빗 경로도 없다. Managed Online Endpoint 배포는 이 계정을
+통해 아티팩트를 스테이징하므로, 롤아웃은 **Azure 자체 타임아웃까지 재시도**한다.
+관측된 증상이 정확히 그것이다:
+
+| 관측 | 설명 |
+|---|---|
+| `Creating` 상태로 68분+ | 재시도 루프 |
+| 컨테이너 로그 없음 | Azure는 **터미널 상태 전까지 로그를 주지 않는다** |
+| App Insights `traces` 비어 있음 | 컨테이너가 **아예 시작조차 못 했다** |
+| 엔드포인트는 `Succeeded` | 컨트롤 플레인만 성공 |
+| 첫 배포는 `InternalServerError` | Azure의 범용 실패 코드 |
+
+**즉 느린 실패가 자기 실패 원인을 가린다.** 그래서 같은 원인에 두 번 당했다.
+
+### 0.1 인플레이스 수정은 불가능하다 — 정책이 되돌린다
+
+```
+$ az storage account update --public-network-access Enabled ...
+rc= 0                       ← 성공을 반환하고
+after: { "pna": "Disabled" }  ← 값은 그대로다
+```
+
+이건 Azure Policy의 `modify` 이펙트가 되돌리는 전형적인 신호다.
+**옵션 1(공용 접근 재활성화)은 이 구독에서 불가능하다.**
+
+### 0.2 이미 §2.2와 같은 원인이었다
+
+§2.2의 "코드 스냅샷 업로드가 막힌다"(학습 잡 제출 불가)와 **같은 스토리지
+계정, 같은 설정**이다. 증상이 전혀 달라 보여서 같은 문제로 인식하지 못했다.
+
+### 0.3 그래서 코드로 막았다
+
+`src/ffsft/deploy/preflight.py` 의 `storage_blocker()` 가 `deploy_online()`
+맨 앞에서 ARM 2회 읽기로 이걸 판정한다. **90분 침묵 + $2.16/hr 대신 2초 만에**
+아래를 출력하고 중단한다(`force=True`로 무시 가능):
+
+```
+workspace storage account 'mlwffsftstorage8cb451dd1' is unreachable:
+publicNetworkAccess=Disabled
+  there is no private endpoint and no public path, so nothing can reach it.
+...
+Fix it one of two ways, then retry:
+  1. re-enable public access on the storage account, or
+  2. create a private endpoint for it and set the workspace's managedNetwork
+     isolation mode to AllowInternetOutbound.
+```
+
+판정에서 `networkAcls`는 **일부러 보지 않는다.** 이 계정은
+`defaultAction: Allow` 인데도 모든 연결을 거부한다 — ACL을 읽는 순간 잘못된
+결론으로 새기 딱 좋다.
+
+### 0.4 남은 선택지
+
+옵션 1이 정책으로 막혔으므로 실제 경로는 하나뿐이다:
+
+- **옵션 2**: 스토리지 계정에 **프라이빗 엔드포인트 생성** +
+  워크스페이스 `managedNetwork.isolationMode` 를 `AllowInternetOutbound` 로 변경.
+  → **새 Azure 리소스 생성이 필요하므로 사용자 확인 후 진행.**
+
+> 주의(테스트로 고정됨): 프라이빗 엔드포인트만 만들고 워크스페이스를 격리
+> 모드로 바꾸지 않으면 **여전히 안 된다.** 배포를 실행하는 컴퓨트가 그 네트워크
+> 위에 있지 않기 때문이다. 겉보기엔 고쳐진 것처럼 보이는 게 함정이다.
+
+---
+
 ## 1. Qwen3.8-27B 아키텍처 — 실측 완료 ✅
 
 `scripts/probe_architecture.py qwen3.8-27b --check` 로 재현 가능.
@@ -313,6 +400,13 @@ Mamba 상태도 비전 타워도 없는 0.6B 모델이 그 플래그로 기동�
 3. `serving_env()`가 **중립값일 때도 세 키를 항상 명시적으로 전송** —
    이미지 기본값이 다시는 조용히 적용될 수 없게
 
+> **정정 (나중에 밝혀진 것):** 이 버그는 **진짜 버그가 맞지만, 배포 실패의
+> 원인은 아니었다.** 세 플래그를 모두 중립으로 고쳐서 다시 배포한
+> `ffsft-smoke2` 도 **똑같이** 68분간 `Creating` 에 머물다 실패했다.
+> 진짜 원인은 §0 의 스토리지 도달 불가다. 당시에는 `InternalServerError` 라는
+> 범용 코드밖에 없어서 이 가설이 "강하게 시사되지만 증명되지 않음" 상태였는데,
+> 재배포가 그 가설을 **반증**했다. 수정 자체는 모델 교체 가능성을 위해 유지한다.
+
 ### 5.3 45분이 걸린 이유 — 프로브 예산
 
 관측된 타임라인이 정확히 설명된다:
@@ -330,9 +424,17 @@ failureThreshold 30 x period PT30S     15 분
 `startup_grace_for(params_b)`로 모델 크기에 비례하게 바꿨다.
 0.6B → 135초, 27B → 795초. 상한 1800초.
 
+> **정정:** 두 번째 배포는 프로브 예산(10분 + 10×30초 = 15분)에 이미지 pull을
+> 더해도 **35분**이어야 하는데 **68분**을 넘겼다. 즉 프로브 산수만으로는
+> 설명되지 않는다 — 컨테이너가 아예 시작되지 않으면 프로브 예산은 시작조차
+> 하지 않기 때문이다(§0). App Insights `traces` 가 완전히 비어 있던 것이
+> 그 증거다.
+
 > 참고: 워크스페이스는 `managedNetwork.isolationMode: Disabled`,
 > `publicNetworkAccess: Enabled` 라서 **HF Hub 다운로드는 막히지 않았다.**
-> (네트워크 격리 가설은 실측으로 배제됨.)
+> (네트워크 격리 가설은 실측으로 배제됨. 단, 이건 *워크스페이스* 의
+> `publicNetworkAccess` 이고 §0 은 *스토리지 계정* 의 값이다 — 다른 리소스의
+> 같은 이름 속성이라 헷갈리기 쉽다.)
 
 ### 5.3.1 그 수정이 실제 배포에서는 적용되지 않았다 — 실측 ⚠️
 
@@ -428,6 +530,8 @@ macOS와 일부 크롤러는 한글을 **NFD(자모 분해)** 로 내보낸다. 
 - [ ] `benchmarks.yaml`의 한국어 harness task 이름
 - [ ] `trl` 1.10 / `peft` 0.20 이 `transformers` 5.15와 호환되는지
 - [ ] 27B를 A10 24GB로 서빙하려면 **Int4 체크포인트**가 필요 (bf16 머지본 불가)
+- [ ] **라이브 엔드포인트 대상 로드테스트** — 클라이언트 정확도는 §9에서
+      검증했지만, 실제 vLLM 엔드포인트에는 아직 못 붙였다(§0 때문에 차단)
 
 ### 8.1 해결된 항목 — `AutoModelForCausalLM` vs 멀티모달 체크포인트 ✅
 
@@ -459,3 +563,49 @@ MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES = OrderedDict([
 이 매핑은 `transformers>=5.8` 에서 들어왔고, `docker/Dockerfile.train` 이
 이미 그 하한을 강제하고 있다.
 
+
+---
+
+## 9. 로드테스트 클라이언트 — 정확도 실측 완료 ✅
+
+라이브 엔드포인트가 없어도(§0) **측정 도구 자체가 옳은지**는 검증할 수 있다.
+`scripts/mock_vllm_server.py` 가 TTFT/ITL을 제어할 수 있는 SSE 서버를 띄우고,
+`ffsft-loadtest` 를 **알려진 정답 스트림**에 붙여서 측정치를 대조했다.
+
+| 항목 | 주입한 값 | 측정된 값 | 오차 |
+|---|---|---|---|
+| TTFT p50 | 0.200 s | 0.202 s | ~1% |
+| TPOT p50 | 0.010 s | 0.0103 s | ~3% |
+
+동시성에 따른 처리량도 선형으로 증가했다:
+
+```
+concurrency 1 →  61 tok/s
+concurrency 4 → 244 tok/s
+concurrency 8 → 483 tok/s
+```
+
+knee(무릎점) 탐지도 동작했다. 즉 **로드테스트가 보고하는 숫자는 믿어도 된다** —
+남은 건 실제 엔드포인트에 붙이는 것뿐이다.
+
+리포트 JSON 키 이름 주의: `ttft_p50`, `tpot_p50`, `output_tok_per_s`
+(백분위 키에는 `_s` 접미사가 **없다**).
+
+이 대조는 `tests/test_loadtest_e2e.py` 로 승격되어 실제 소켓 위에서 매번 돈다.
+
+---
+
+## 10. 이번 세션에서 코드로 고정한 것들
+
+실측으로 알아낸 사실은 문서만으로는 다시 잃어버린다. 그래서 전부 테스트로 고정했다.
+
+| 테스트 파일 | 고정한 사실 | 개수 |
+|---|---|---|
+| `tests/test_serving_env.py` | 아키텍처 플래그 3종은 중립일 때도 항상 전송 | 17 |
+| `tests/test_startup_grace.py` | 프로브 예산은 모델 크기에 비례 | 10 |
+| `tests/test_model_size_inference.py` | 레지스트리에 없어도 repo id에서 크기 복원 | 18 |
+| `tests/test_serve_entrypoint.py` | HF repo id로도 엔트리포인트가 죽지 않음 | 8 |
+| `tests/test_preflight_storage.py` | 스토리지 도달 불가면 즉시 거부 | 12 |
+| `tests/test_loadtest_e2e.py` | 로드테스트 측정 수식이 정답과 일치 | 5 |
+
+전체 **237 테스트 통과**, `ruff` 클린.
