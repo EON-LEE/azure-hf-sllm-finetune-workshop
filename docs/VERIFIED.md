@@ -334,10 +334,51 @@ failureThreshold 30 x period PT30S     15 분
 > `publicNetworkAccess: Enabled` 라서 **HF Hub 다운로드는 막히지 않았다.**
 > (네트워크 격리 가설은 실측으로 배제됨.)
 
+### 5.3.1 그 수정이 실제 배포에서는 적용되지 않았다 — 실측 ⚠️
+
+`ffsft-smoke2` 배포를 ARM으로 확인하니 `initialDelay`가 **`PT2M15S`가 아니라
+`PT10M`** 이었다. 원인: 스모크 배포는 `--hf-model Qwen/Qwen3-0.6B` 로 나갔고
+**레지스트리 키(`--model`)가 없었다.** 그래서 `model_spec`이 `None`,
+`params_b`도 `None`, 결국 보수적 기본값 600초로 되돌아갔다.
+
+즉 5.3에서 없앤 문제가 **"교체 가능한 모델은 레지스트리에 없을 수도 있다"** 는
+바로 그 경로로 다시 새어 들어왔다. 모델 교체 가능성이 이 리포의 전제이므로
+이건 예외가 아니라 정상 경로다.
+
+수정: `params_from_hf_id()` 가 Hub repo id에서 크기를 복원한다.
+
+| repo id | 파싱 결과 | 이유 |
+|---|---|---|
+| `Qwen/Qwen3-0.6B` | 0.6 | |
+| `meta-llama/Llama-3.1-8B-Instruct` | 8.0 | `3.1`은 버전, `B` 접미사만 크기 |
+| `Qwen/Qwen3-30B-A3B` | **30.0** | 마지막이 아니라 **최댓값**. 기동 비용은 다운로드(총 파라미터)가 결정 |
+| `mistralai/Mixtral-8x7B-...` | 56.0 | MoE 축약은 곱해서 편다 |
+| `google-bert/bert-base-uncased` | `None` | 추측하지 않는다 → 보수적 기본값 유지 |
+| `model-7Base`, `...-4bit` | `None` | `B` 뒤 문자/숫자 금지 가드 |
+
+`resolve_params_b()` 우선순위는 **그 숫자를 실제로 얼마나 확인했는가** 순서다:
+명시적 `--params-b` > 레지스트리 spec > repo id 파싱 > `None`.
+
 ### 5.4 엔드포인트 삭제는 느리다
 
 프로비저닝 중인 엔드포인트를 삭제하면 **20분 이상** `Deleting`에 머문다.
 테어다운을 실험 종료 직전에 몰아서 하지 말고 여유를 두는 편이 낫다.
+
+### 5.5 `serving_env()` 수정은 실제 배포에서 확인됐다 ✅
+
+`ffsft-smoke2` 배포의 ARM 응답:
+
+```
+environment: environments/ffsft-serve/versions/2 → acrffsftkc.azurecr.io/ffsft-serve:3
+environmentVariables:
+  MODEL_PATH: Qwen/Qwen3-0.6B
+  LANGUAGE_MODEL_ONLY: "0"      ← 이미지 기본값(1)을 덮어씀
+  MAMBA_CACHE_MODE: ""          ← 이미지 기본값(align)을 덮어씀
+  REASONING_PARSER: ""          ← 이미지 기본값(qwen3)을 덮어씀
+```
+
+세 키가 **중립값이어도 항상 명시적으로 나간다**는 것이 회귀 방지 장치다.
+빠뜨리면 이미지 기본값이 조용히 상속된다(5.2).
 
 ---
 
@@ -381,12 +422,40 @@ macOS와 일부 크롤러는 한글을 **NFD(자모 분해)** 로 내보낸다. 
 
 - [ ] **Qwen3.8-27B QLoRA 실제 학습** — bitsandbytes NF4가 hybrid
       linear-attention/Conv1d 레이어에서 실제로 도는지. 최대 리스크.
-- [ ] Qwen3.8은 `Qwen3_5ForConditionalGeneration`(멀티모달)인데
-      `qlora.py`가 쓰는 `AutoModelForCausalLM`으로 로드되는지
 - [ ] 22.5–26.5 GB 실측 추정이 실제 피크와 맞는지
 - [ ] vLLM LoRA가 GDN projection(`in_proj_qkvz`, `in_proj_ba`)에도 실제로 붙는지
 - [ ] Fabric → OneLake → AML 데이터 경로
 - [ ] `benchmarks.yaml`의 한국어 harness task 이름
 - [ ] `trl` 1.10 / `peft` 0.20 이 `transformers` 5.15와 호환되는지
 - [ ] 27B를 A10 24GB로 서빙하려면 **Int4 체크포인트**가 필요 (bf16 머지본 불가)
+
+### 8.1 해결된 항목 — `AutoModelForCausalLM` vs 멀티모달 체크포인트 ✅
+
+Qwen3.8은 `Qwen3_5ForConditionalGeneration`(멀티모달)인데 `qlora.py`는
+`AutoModelForCausalLM`을 쓴다. 이게 되는지가 학습 쪽 최대 미해결 질문이었다.
+
+transformers 업스트림 소스에서 직접 확인했다
+(`src/transformers/models/auto/modeling_auto.py`):
+
+```python
+MODEL_FOR_CAUSAL_LM_MAPPING_NAMES = OrderedDict([
+    ...
+    ("qwen3_5", "Qwen3_5ForCausalLM"),   # VLM compatibility
+    ("qwen3_5_text", "Qwen3_5ForCausalLM"),
+])
+MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES = OrderedDict([
+    ("qwen3_5", "Qwen3_5ForConditionalGeneration"),
+])
+```
+
+`# VLM compatibility` 주석이 붙은 항목이 명시적으로 존재한다. 즉
+**`AutoModelForCausalLM.from_pretrained("Qwen/Qwen3.8-27B")` 는 vision tower를
+버리고 언어 타워만 `Qwen3_5ForCausalLM` 으로 로드한다.** `qlora.py`를
+`AutoModelForImageTextToText`로 바꿀 필요가 없다.
+
+서빙 쪽과도 일관된다: `LANGUAGE_MODEL_ONLY=1` 로 vLLM도 같은 텍스트 전용
+서브셋을 띄운다. **텍스트로 학습하고 텍스트로 서빙**한다.
+
+이 매핑은 `transformers>=5.8` 에서 들어왔고, `docker/Dockerfile.train` 이
+이미 그 하한을 강제하고 있다.
 
