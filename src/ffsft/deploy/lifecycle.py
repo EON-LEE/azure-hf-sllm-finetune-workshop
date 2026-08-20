@@ -50,6 +50,45 @@ SKU_HOURLY_PAYG = {
 
 HOURS_PER_MONTH = 730
 
+#: Premium SSD managed disks bill per *tier*, not per byte -- a 200 GB disk and
+#: a 256 GB disk both cost P15. Prices are USD/month for koreacentral, taken
+#: from the Azure Retail Prices API (`type: Consumption`; the Reservation rows
+#: for the same SKU are ~20x higher and must not be used here).
+PREMIUM_DISK_TIERS_USD = [
+    (4, 0.81),  # P1
+    (8, 1.62),  # P2
+    (16, 3.24),  # P3
+    (32, 5.2795),  # P4
+    (64, 10.207),  # P6
+    (128, 19.71),  # P10
+    (256, 38.012142),  # P15
+    (512, 73.22),  # P20
+    (1024, 135.17),  # P30
+]
+
+#: USD/hour, Azure Retail Prices API, koreacentral.
+PUBLIC_IP_HOURLY_USD = {"Standard": 0.005, "Basic": 0.0036, "Global": 0.01}
+
+
+def disk_monthly_usd(size_gb: int, sku: str) -> float:
+    """Monthly cost of a managed disk, or 0.0 when we genuinely do not know.
+
+    Only Premium_LRS is priced. That is not laziness: it is what AML computes
+    and GPU VMs provision by default, and it is what actually leaked here.
+    Returning 0.0 for anything else is deliberate -- a made-up number in a cost
+    report is worse than an admitted gap, because it gets believed.
+    """
+    if not str(sku).lower().startswith("premium"):
+        return 0.0
+    for tier_gb, price in PREMIUM_DISK_TIERS_USD:
+        if size_gb <= tier_gb:
+            return price
+    return 0.0
+
+
+def public_ip_monthly_usd(sku: str) -> float:
+    return PUBLIC_IP_HOURLY_USD.get(sku, 0.0) * HOURS_PER_MONTH
+
 
 def hourly_rate(sku: str) -> float:
     """Best-effort PAYG rate. Unknown SKUs return 0.0 and are reported as such."""
@@ -68,11 +107,17 @@ class BillingItem:
     #: True when the resource bills while completely idle. These are what
     #: `down` exists for; everything else is noise in the report.
     bills_when_idle: bool = False
+    #: Set for resources Azure meters per month rather than per compute-hour
+    #: (managed disks, public IPs). When present it wins, because deriving a
+    #: monthly figure back out of a fake hourly rate only loses precision.
+    monthly_usd: float = 0.0
 
     @property
     def hourly(self) -> float:
         if not self.bills_when_idle:
             return 0.0
+        if self.monthly_usd:
+            return self.monthly_usd / HOURS_PER_MONTH
         return hourly_rate(self.sku) * max(self.instances, 0)
 
     @property
@@ -95,6 +140,110 @@ class Inventory:
     @property
     def monthly(self) -> float:
         return self.hourly * HOURS_PER_MONTH
+
+
+def _orphaned_nic_names(nics: list) -> set[str]:
+    """NIC names with no VM attached, lowercased for id matching."""
+    orphans = set()
+    for n in nics or []:
+        try:
+            if not (n.get("properties") or {}).get("virtualMachine"):
+                orphans.add(str(n.get("name", "")).lower())
+        except AttributeError:
+            continue
+    return orphans
+
+
+def orphan_items(disks: list, public_ips: list, nics: list) -> list[BillingItem]:
+    """Find resources a deleted VM left behind that Azure still charges for.
+
+    Deleting a VM does **not** delete its OS disk or its public IP. Both keep
+    billing indefinitely, and neither is visible to the AML workspace client
+    that `collect_inventory` uses, so nothing in this repo was looking for them.
+    A real leak of $41.66/month went unnoticed this way.
+
+    The public-IP rule is transitive on purpose. The leaked IP had a valid
+    `ipConfiguration`, so it looked attached; it pointed at a NIC whose VM had
+    already been deleted. Checking only for a missing `ipConfiguration` reports
+    that IP as healthy, which is exactly the failure this function exists to
+    prevent.
+    """
+    items: list[BillingItem] = []
+    dead_nics = _orphaned_nic_names(nics)
+    live_nics = {
+        str(n.get("name", "")).lower()
+        for n in nics or []
+        if isinstance(n, dict) and str(n.get("name", "")).lower() not in dead_nics
+    }
+
+    for d in disks or []:
+        if not isinstance(d, dict):
+            continue
+        props = d.get("properties") or {}
+        # `managedBy` is the authority: if a VM still claims the disk, deleting
+        # it would break that VM, whatever `diskState` happens to say.
+        if d.get("managedBy"):
+            continue
+        if str(props.get("diskState", "")).lower() != "unattached":
+            continue
+        gb = int(props.get("diskSizeGB") or 0)
+        sku = str((d.get("sku") or {}).get("name", ""))
+        price = disk_monthly_usd(gb, sku)
+        detail = f"{gb} GB {sku}, unattached"
+        if not price:
+            detail += " (price unknown for this SKU)"
+        items.append(
+            BillingItem(
+                kind="orphaned-disk",
+                name=str(d.get("name", "")),
+                detail=detail,
+                sku=sku,
+                bills_when_idle=True,
+                monthly_usd=price,
+            )
+        )
+
+    for ip in public_ips or []:
+        if not isinstance(ip, dict):
+            continue
+        props = ip.get("properties") or {}
+        config_id = (props.get("ipConfiguration") or {}).get("id", "")
+        if config_id:
+            nic_name = _nic_name_from_config_id(config_id)
+            if nic_name in live_nics:
+                continue
+        sku = str((ip.get("sku") or {}).get("name", ""))
+        price = public_ip_monthly_usd(sku)
+        detail = f"{sku} public IP, " + (
+            "attached to a NIC with no VM" if config_id else "not attached to anything"
+        )
+        if not price:
+            detail += " (price unknown for this SKU)"
+        items.append(
+            BillingItem(
+                kind="orphaned-public-ip",
+                name=str(ip.get("name", "")),
+                detail=detail,
+                sku=sku,
+                bills_when_idle=True,
+                monthly_usd=price,
+            )
+        )
+
+    return items
+
+
+def _nic_name_from_config_id(config_id: str) -> str:
+    """Pull the NIC name out of an ipConfiguration resource id, case-folded.
+
+    ARM returns resource ids with inconsistent casing across APIs, so matching
+    on the raw string silently fails and reports live IPs as orphans.
+    """
+    parts = str(config_id).lower().split("/")
+    try:
+        return parts[parts.index("networkinterfaces") + 1]
+    except (ValueError, IndexError):
+        return ""
 
 
 def collect_inventory(client) -> Inventory:
@@ -203,6 +352,47 @@ def collect_inventory(client) -> Inventory:
     return inv
 
 
+def read_orphans(target, *, credential=None) -> list[BillingItem]:
+    """Scan the resource group for paid-for debris left by deleted VMs.
+
+    This deliberately bypasses the AML client. Disks, NICs and public IPs are
+    resource-group resources, not workspace resources, which is the structural
+    reason `collect_inventory` could never have found them.
+
+    Returns [] on any failure. A cost report that raises is a cost report nobody
+    runs, and the whole point is that this gets run casually and often.
+    """
+    try:
+        import requests
+        from azure.identity import DefaultAzureCredential
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
+        log.debug("orphan scan skipped, azure libraries missing: %s", exc)
+        return []
+
+    try:
+        cred = credential or DefaultAzureCredential()
+        token = cred.get_token("https://management.azure.com/.default").token
+        headers = {"Authorization": f"Bearer {token}"}
+        base = (
+            f"https://management.azure.com/subscriptions/{target.subscription_id}"
+            f"/resourceGroups/{target.resource_group}/providers"
+        )
+
+        def fetch(path: str, api: str) -> list:
+            resp = requests.get(f"{base}/{path}?api-version={api}", headers=headers, timeout=30)
+            resp.raise_for_status()
+            return resp.json().get("value", [])
+
+        return orphan_items(
+            fetch("Microsoft.Compute/disks", "2023-04-02"),
+            fetch("Microsoft.Network/publicIPAddresses", "2023-09-01"),
+            fetch("Microsoft.Network/networkInterfaces", "2023-09-01"),
+        )
+    except Exception as exc:  # noqa: BLE001 - never break the report
+        log.debug("orphan scan failed: %s", exc)
+        return []
+
+
 def format_inventory(inv: Inventory) -> str:
     lines = [
         "",
@@ -216,6 +406,7 @@ def format_inventory(inv: Inventory) -> str:
             f"{marker}{item.kind:<18} {item.name:<34} {item.sku:<26} {rate:>8}  {item.detail}"
         )
     lines.append("-" * 132)
+    orphans = [i for i in inv.items if i.kind.startswith("orphaned-")]
     if inv.billing:
         lines.append(
             f"BILLING NOW: {len(inv.billing)} resource(s)  "
@@ -224,6 +415,22 @@ def format_inventory(inv: Inventory) -> str:
         lines.append("Run `ffsft lifecycle down --all --yes` to stop the meter.")
     else:
         lines.append("BILLING NOW: nothing. No always-on compute in this workspace.")
+
+    if orphans:
+        # Not folded into `down`: these are leftovers from resources that no
+        # longer exist, deleting a disk is irreversible, and there is no `up`
+        # that would recreate them. Show the command; let a human run it.
+        lines += [
+            "",
+            f"LEFTOVERS: {len(orphans)} resource(s) from deleted VMs, "
+            f"~${sum(i.monthly for i in orphans):,.2f}/month for nothing.",
+            "`down` will not touch these -- deleting a disk cannot be undone. To remove:",
+        ]
+        for item in orphans:
+            verb = "disk" if item.kind == "orphaned-disk" else "network public-ip"
+            extra = " --yes" if item.kind == "orphaned-disk" else ""
+            lines.append(f"  az {verb} delete -g <rg> -n {item.name}{extra}")
+        lines.append("  (delete the NIC first if a public IP refuses to go)")
     return "\n".join(lines)
 
 
@@ -272,8 +479,10 @@ def teardown(client, inv: Inventory, *, dry_run: bool = True) -> list[str]:
 def cmd_status(args) -> int:
     from ffsft.azure_ml import AzureTarget, get_ml_client
 
-    client = get_ml_client(AzureTarget.from_env())
+    target = AzureTarget.from_env()
+    client = get_ml_client(target)
     inv = collect_inventory(client)
+    inv.items.extend(read_orphans(target))
     print(format_inventory(inv))
     return 0
 
