@@ -93,7 +93,10 @@ def argv_of(result: subprocess.CompletedProcess) -> list[str]:
     for line in result.stdout.splitlines():
         if line.startswith("ARGV: "):
             return line[len("ARGV: ") :].split()
-    raise AssertionError(f"entrypoint never reached exec.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+    raise AssertionError(
+        f"entrypoint never reached exec.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
 
 
 # --- the regression this file exists for -----------------------------------
