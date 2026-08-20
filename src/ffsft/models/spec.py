@@ -8,9 +8,27 @@ an Azure OpenAI model is a config change, not a code change.
 
 from __future__ import annotations
 
-from enum import StrEnum
+import sys
+from enum import Enum
 
 from pydantic import BaseModel, Field, model_validator
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
+    # Azure ML's curated deep-learning base images (aifx/acpt/*) are all built on
+    # Python 3.10 -- there is no 3.11+ ACPT tag -- and we would rather run on the
+    # image Microsoft validates for GPU training than drop it to keep one stdlib
+    # import. `StrEnum` is only sugar over the classic mixin, but the mixin alone
+    # is not equivalent: on 3.10 `str(Provider.HF)` yields "Provider.HF" while
+    # `f"{Provider.HF}"` yields "hf". Pinning both dunders to `str`'s makes the
+    # two behave identically here and on 3.11+, so YAML round-trips and log lines
+    # do not silently change meaning with the interpreter.
+    class StrEnum(str, Enum):  # type: ignore[no-redef]
+        """Backport of :class:`enum.StrEnum` for Python 3.10."""
+
+        __str__ = str.__str__
+        __format__ = str.__format__
 
 
 class Provider(StrEnum):

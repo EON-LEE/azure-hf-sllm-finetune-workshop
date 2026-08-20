@@ -1,0 +1,76 @@
+"""Submit a training or preflight job to the Azure ML cluster.
+
+    python scripts/submit_training.py --subscription <id> --preflight
+    python scripts/submit_training.py --subscription <id> --model qwen3.8-27b \
+        --mix ko_smoke --max-steps 20 --max-samples 200
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from ffsft.azure_ml import AzureTarget  # noqa: E402
+from ffsft.train.aml_job import JobSpec, submit  # noqa: E402
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--subscription", required=True)
+    ap.add_argument("--resource-group", default="rg-ffsft-kc")
+    ap.add_argument("--workspace", default="mlw-ffsft")
+    ap.add_argument("--location", default="koreacentral")
+    ap.add_argument("--compute-name", default="gpu-a100-lp")
+    ap.add_argument("--sku", default="Standard_NC24ads_A100_v4")
+    ap.add_argument("--priority", default="LowPriority", choices=["LowPriority", "Dedicated"])
+    ap.add_argument("--model", default="qwen3.8-27b")
+    ap.add_argument("--mix", default="ko_smoke")
+    ap.add_argument("--max-steps", type=int, default=-1)
+    ap.add_argument("--max-samples", type=int, default=None)
+    ap.add_argument("--max-seq-length", type=int, default=1024)
+    ap.add_argument("--batch-size", type=int, default=1)
+    ap.add_argument("--grad-accum", type=int, default=16)
+    ap.add_argument("--rank", type=int, default=16)
+    ap.add_argument("--preflight", action="store_true", help="run the node self-test only")
+    ap.add_argument(
+        "--no-outputs",
+        action="store_true",
+        help="skip uri_folder output mounts (needed when workspace storage is network-isolated)",
+    )
+    ap.add_argument("--wait", action="store_true", help="stream logs until the job ends")
+    args = ap.parse_args()
+
+    target = AzureTarget(
+        subscription_id=args.subscription,
+        resource_group=args.resource_group,
+        workspace_name=args.workspace,
+        location=args.location,
+        compute_name=args.compute_name,
+        compute_sku=args.sku,
+        vm_priority=args.priority,
+    )
+    job = JobSpec(
+        model_key=args.model,
+        mix=args.mix,
+        max_steps=args.max_steps,
+        max_samples=args.max_samples,
+        max_seq_length=args.max_seq_length,
+        batch_size=args.batch_size,
+        grad_accum=args.grad_accum,
+        rank=args.rank,
+        preflight=args.preflight,
+        mount_outputs=not args.no_outputs,
+    )
+
+    info = submit(target, job, wait=args.wait)
+    print(json.dumps(info, indent=2))
+    return 0 if info.get("status") in (None, "Completed", "NotStarted", "Starting",
+                                       "Preparing", "Queued", "Running") else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

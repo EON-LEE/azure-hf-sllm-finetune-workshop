@@ -1,0 +1,11 @@
+# Only the build context needs to reach ACR, so keep it to what the image uses.
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+outputs/
+*.egg-info/
+docs/
+tests/

@@ -1,0 +1,91 @@
+# Training image: Azure Container for PyTorch (ACPT) + the newer Hugging Face stack.
+#
+# Why ACPT and not a plain Ubuntu base
+# ------------------------------------
+# ACPT is Microsoft's curated deep-learning image for Azure ML. torch, the CUDA
+# runtime, NCCL, the RDMA/InfiniBand user-space libraries, OpenMPI and ORTModule
+# are already installed and validated together against the AmlCompute host
+# drivers. Rebuilding that from PyPI wheels on a bare distro image "works" for a
+# single GPU but throws away the multi-GPU interconnect setup and the driver
+# compatibility guarantee, and it makes the image an unreviewed one-off. So the
+# base is left alone and only the model-side libraries are upgraded on top.
+#
+# What has to be upgraded
+# -----------------------
+# transformers>=5.8 is a hard floor: Qwen3.5/3.6/3.8 checkpoints declare
+# `model_type: qwen3_5`, and older releases fail to resolve it. That is also why
+# the curated acft-hf-nlp-gpu environment cannot be used as-is (it pins
+# transformers==5.5.0), and why the built-in chat_completion_finetune component
+# is not an option either -- it exposes LoRA knobs only, with no NF4 quantisation.
+#
+# scipy is upgraded for an unrelated reason: ACPT ships numpy 2.2 next to a scipy
+# old enough to still do `from numpy import Inf`, which numpy 2.0 removed. Nothing
+# in the base image imports that path, so the break stays invisible until
+# transformers reaches scipy through its object-detection losses -- on the GPU
+# node, minutes after the cluster was allocated.
+#
+# mlflow + azureml-mlflow are the job's only usable reporting channel. Azure ML
+# persists stdout to the workspace's default blob store and serves it over a SAS
+# URL, so when that storage account is network-isolated the log is written and
+# then 403s for anyone outside the VNet. MLflow writes to the tracking service,
+# which an ordinary ARM token can read.
+#
+# Python version
+# --------------
+# Every aifx/acpt/* tag is Python 3.10; there is no 3.11+ ACPT. `ffsft` therefore
+# targets 3.10 (see the StrEnum backport in ffsft/models/spec.py).
+#
+# Code is baked in, not shipped as a job snapshot
+# ----------------------------------------------
+# Submitting with `code=` makes the client upload a zip to the workspace storage
+# account. On this subscription that account has allowSharedKeyAccess=false and
+# publicNetworkAccess=Disabled with no private endpoint, so the upload cannot
+# succeed from outside the VNet. Baking the code in removes the snapshot, and is
+# what Microsoft's own finetune components do (azureml-assets copies
+# finetune_run.py into the image). Trade-off: a code change needs a rebuild.
+FROM mcr.microsoft.com/aifx/acpt/stable-ubuntu2204-cu126-py310-torch280:biweekly.202608.1
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HUB_ENABLE_HF_TRANSFER=1 \
+    TOKENIZERS_PARALLELISM=false
+
+# Pin torch to whatever the base image validated, then let pip resolve everything
+# else against that pin. Without this a transitive requirement can quietly pull a
+# different torch build from PyPI, which is exactly the ACPT guarantee we came
+# here for -- and the swap only shows up as a CUDA error on the GPU node.
+RUN set -eux; \
+    python -c "import torch; print(f'torch=={torch.__version__}')" > /tmp/base-constraints.txt; \
+    cat /tmp/base-constraints.txt
+
+RUN python -m pip install --no-cache-dir --upgrade \
+        -c /tmp/base-constraints.txt \
+        "transformers>=5.8" \
+        "trl>=1.10" \
+        "peft>=0.20" \
+        "accelerate>=1.14" \
+        "bitsandbytes>=0.50" \
+        "datasets>=4.8" \
+        "sentencepiece>=0.2" \
+        "hf_transfer" \
+        "pydantic>=2.7" \
+        "pyyaml>=6.0" \
+        "scipy>=1.13" \
+        "mlflow>=2.16" \
+        "azureml-mlflow>=1.57"
+
+# The registry resolves configs/models.yaml relative to the package (parents[3] of
+# ffsft/models/registry.py), so the repo layout has to be preserved on disk.
+COPY . /opt/ffsft
+ENV PYTHONPATH=/opt/ffsft/src
+WORKDIR /opt/ffsft
+
+# Fail the build, not a GPU job, if the upgrade broke the base stack. The
+# assertion lives in docker/verify_stack.py rather than inline: the classic
+# Docker builder does not support heredocs and silently reduces
+# `RUN python - <<'PY'` to a no-op that reads an empty stdin and exits 0, so the
+# checks look like they ran and never do. It runs after the COPY for that reason.
+RUN python docker/verify_stack.py
+
+RUN python -c "from ffsft.models import get_registry; print('registry OK:', get_registry().keys)"

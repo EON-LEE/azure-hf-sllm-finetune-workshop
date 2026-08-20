@@ -1,0 +1,11 @@
+# Azure ML uploads this directory as the job's code snapshot. Keep it small:
+# every megabyte here is re-uploaded on each submit and unpacked on the node.
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+outputs/
+*.egg-info/
+uv.lock

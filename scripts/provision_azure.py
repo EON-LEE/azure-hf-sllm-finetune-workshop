@@ -35,9 +35,16 @@ def main() -> int:
     ap.add_argument("--location", default="koreacentral")
     ap.add_argument("--model", default="qwen3.8-27b")
     ap.add_argument("--method", default="qlora", choices=[m.value for m in TuningMethod])
-    ap.add_argument("--compute-name", default="gpu-cluster")
+    ap.add_argument("--compute-name", default="gpu-a100-lp")
     ap.add_argument("--sku", help="override the registry's recommended_sku")
     ap.add_argument("--max-nodes", type=int, default=1)
+    ap.add_argument(
+        "--priority",
+        default="LowPriority",
+        choices=["LowPriority", "Dedicated"],
+        help="LowPriority is the default because it is the only tier with pooled "
+        "quota and the only one the tenant N-series deny policy permits",
+    )
     ap.add_argument("--dry-run", action="store_true", help="run guards only, create nothing")
     args = ap.parse_args()
 
@@ -56,15 +63,16 @@ def main() -> int:
         compute_name=args.compute_name,
         compute_sku=sku,
         max_nodes=args.max_nodes,
+        vm_priority=args.priority,
     )
 
-    ok, why = check_sku_fits(spec, method, sku)
+    ok, why = check_sku_fits(spec, method, sku, args.priority)
     print(f"sizing check : {'OK' if ok else 'FAIL'} -- {why}")
     if not ok:
         usable = [
             name
             for name, info in GPU_SKUS.items()
-            if info.get("aml_supported", True)
+            if (args.priority != "LowPriority" or info["low_priority"])
             and (spec.vram_gb.model_dump().get(method.value) or 0) <= info["vram_gb"]
         ]
         if usable:
@@ -74,7 +82,10 @@ def main() -> int:
     family = GPU_SKUS.get(sku, {}).get("family")
     cores = GPU_SKUS.get(sku, {}).get("cores")
     if family:
-        print(f"quota needed : {cores} vCPU of {family} in {args.location}")
+        if args.priority == "LowPriority":
+            print(f"quota needed : {cores} of the pooled TotalLowPriorityCores in {args.location}")
+        else:
+            print(f"quota needed : {cores} vCPU of {family} in {args.location}")
 
     if args.dry_run:
         print("\ndry run, nothing created")

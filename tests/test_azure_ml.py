@@ -17,27 +17,40 @@ def qwen():
     return get_registry().get("qwen3.8-27b")
 
 
-def test_a10_is_marked_unusable_by_azure_ml():
-    """Azure ML will not provision NVadsA10v5, however much quota you hold.
+def test_low_priority_is_the_default_tier():
+    """LowPriority is not a cost optimisation here, it is the only way in.
 
-    This is the trap that cost us a granted-but-worthless quota request: the
-    region's vmSizes API advertises Standard_NV36ads_A10_v5, and Microsoft.Quota
-    happily grants cores for it, but AmlCompute and ComputeInstance both reject
-    it at create time with InvalidPropertyValue. Verified against a live
-    workspace in koreacentral on 2026-08-20.
+    Azure ML keeps quota separate from Microsoft.Compute. Dedicated quota is
+    per family and every modern GPU family is absent by default, at which point
+    AmlCompute reports `InvalidPropertyValue ... not a supported VM size` --
+    a message that sends you hunting for a SKU problem that does not exist.
+    LowPriority draws on a single pooled TotalLowPriorityCores (300) instead,
+    and is also the sole carve-out in the tenant policy VirtualMachine_SKU_Deny
+    (`priority notEquals "Spot"`). Verified live in koreacentral 2026-08-20 by
+    creating Standard_NC24ads_A100_v4 as LowPriority after Dedicated failed.
     """
-    for sku, info in GPU_SKUS.items():
-        if "A10_v5" in sku:
-            assert info["aml_supported"] is False, f"{sku} must stay flagged unusable"
+    target = AzureTarget(subscription_id="x", resource_group="y", workspace_name="z")
+    assert target.vm_priority == "LowPriority"
+    assert GPU_SKUS[target.compute_sku]["low_priority"] is True
 
 
-def test_unusable_sku_is_rejected_even_when_it_has_enough_vram(qwen):
-    # 48 GB of A10 is numerically enough for a 28 GB QLoRA run, so a pure
-    # VRAM comparison would wave it through. The support flag must win.
-    assert GPU_SKUS["Standard_NV72ads_A10_v5"]["vram_gb"] > qwen.vram_gb.qlora
-    fits, why = check_sku_fits(qwen, TuningMethod.QLORA, "Standard_NV72ads_A10_v5")
+def test_sku_without_low_priority_support_is_rejected_despite_ample_vram(qwen):
+    # 160 GB of dual-A100 is far more than a 28 GB QLoRA run needs, so a pure
+    # VRAM comparison would wave it through. The tier check must win.
+    assert GPU_SKUS["Standard_NC48ads_A100_v4"]["vram_gb"] > qwen.vram_gb.qlora
+    assert GPU_SKUS["Standard_NC48ads_A100_v4"]["low_priority"] is False
+    fits, why = check_sku_fits(qwen, TuningMethod.QLORA, "Standard_NC48ads_A100_v4")
     assert fits is False
-    assert "Azure ML" in why
+    assert "low-priority capable" in why
+
+
+def test_the_same_sku_passes_once_you_ask_for_dedicated(qwen):
+    # The guard is about the tier, not about the hardware, so it must let the
+    # SKU through when the caller has real dedicated quota.
+    fits, _ = check_sku_fits(
+        qwen, TuningMethod.QLORA, "Standard_NC48ads_A100_v4", vm_priority="Dedicated"
+    )
+    assert fits is True
 
 
 def test_qlora_fits_the_recommended_sku(qwen):
@@ -46,7 +59,7 @@ def test_qlora_fits_the_recommended_sku(qwen):
 
 
 def test_recommended_sku_is_actually_provisionable(qwen):
-    assert GPU_SKUS[qwen.recommended_sku]["aml_supported"] is True
+    assert GPU_SKUS[qwen.recommended_sku]["low_priority"] is True
 
 
 def test_t4_is_too_small_for_27b_qlora(qwen):
@@ -79,7 +92,7 @@ def test_default_target_does_not_point_at_an_unusable_sku():
     target = AzureTarget(
         subscription_id="x", resource_group="y", workspace_name="z"
     )
-    assert GPU_SKUS[target.compute_sku]["aml_supported"] is True
+    assert GPU_SKUS[target.compute_sku]["low_priority"] is True
 
 
 def test_every_sku_declares_the_quota_family_it_bills_against():
@@ -89,3 +102,4 @@ def test_every_sku_declares_the_quota_family_it_bills_against():
         assert info.get("family"), f"{sku} is missing its quota family"
         assert info["cores"] > 0
         assert info["gpus"] > 0
+        assert isinstance(info["low_priority"], bool), f"{sku} missing low_priority"
