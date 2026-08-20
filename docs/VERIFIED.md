@@ -609,3 +609,76 @@ knee(무릎점) 탐지도 동작했다. 즉 **로드테스트가 보고하는 �
 | `tests/test_loadtest_e2e.py` | 로드테스트 측정 수식이 정답과 일치 | 5 |
 
 전체 **237 테스트 통과**, `ruff` 클린.
+
+---
+
+## 11. 삭제된 VM이 남긴 요금 — 실측 $41.66/월 누수 ✅
+
+`ffsft-lifecycle status` 는 **엔드포인트와 클러스터만** 본다. AML 워크스페이스
+클라이언트로 조회하기 때문인데, **디스크와 공인 IP는 워크스페이스 리소스가 아니라
+리소스 그룹 리소스**라 애초에 보이지 않는다. 구조적인 사각지대였다.
+
+리소스 그룹을 직접 훑어보니 삭제한 스팟 A10 VM의 잔해가 그대로 과금되고 있었다:
+
+| 리소스 | 상태 | 실제 요금 |
+|---|---|---|
+| `vm-a10-ffsft_OsDisk_...` | 256 GB Premium_LRS, **Unattached** | **$38.01/월** |
+| `vm-a10-ffsftPublicIP` | Standard static IPv4 | **$3.65/월** |
+| `vm-a10-ffsftVMNic` / NSG / VNET | 고아 | $0 |
+
+**합계 $41.66/월** — 아무 일도 하지 않는 리소스에 대해. 전부 삭제 완료.
+
+### 11.1 공인 IP가 함정이었다
+
+이 IP 는 `ipConfiguration` 이 **정상적으로 붙어 있었다.** 그래서
+`ipConfiguration is None` 만 보는 검사는 이걸 **정상이라고 판정한다.**
+실제로는 그 NIC 의 `virtualMachine` 이 `null` — VM 이 이미 삭제된 시체에
+붙어 있었던 것이다. 그래서 판정은 **NIC 를 한 단계 더 따라가야** 한다.
+`test_public_ip_attached_to_orphaned_nic_is_still_an_orphan` 이 이걸 고정한다.
+
+### 11.2 가격은 기억이 아니라 Retail Prices API 에서
+
+koreacentral 소비(Consumption) 단가를 API 로 직접 조회했다.
+처음 적어둔 6개 티어 중 **2개(P4·P6)가 틀렸다.**
+
+```
+P4  LRS   5.2795 USD/월      P15 LRS  38.012142 USD/월  ← 실제 누수분
+P6  LRS  10.207  USD/월      P20 LRS  73.22     USD/월
+P10 LRS  19.71   USD/월      P30 LRS 135.17     USD/월
+Standard IPv4 Static Public IP  0.005 USD/시 → 3.65 USD/월
+```
+
+> ⚠️ 단순 조회하면 **1년 예약(Reservation)** 행이 같이 나온다. P30 이
+> `1541.0` 으로 보이는데 소비 단가는 `135.17` 이다. **약 11배 차이** —
+> `type: Consumption` 으로 걸러야 한다. 리포트가 자신 있게 거짓말하는 전형적인 경로다.
+
+가격을 모르는 SKU 는 **추측하지 않고 "unknown" 으로 보고**한다.
+비용 리포트의 지어낸 숫자는 없는 것보다 나쁘다. 믿어버리기 때문이다.
+
+### 11.3 `down` 은 이걸 건드리지 않는다
+
+고아 리소스는 `bills_when_idle=True` 라 `inv.billing` 에 들어가지만,
+`teardown()` 은 의도적으로 무시하고 **삭제 명령만 출력**한다.
+디스크 삭제는 되돌릴 수 없고, `up` 이 다시 만들어주지도 않는다 — 사람이 판단할 일이다.
+`test_teardown_never_touches_orphans` 가 폭발하는 가짜 클라이언트로 이걸 고정한다.
+
+### 11.4 라이브 검증
+
+```
+RESULT Microsoft.Compute/disks:            http=200 count=0
+RESULT Microsoft.Network/publicIPAddresses: http=200 count=0
+RESULT Microsoft.Network/networkInterfaces: http=200 count=0
+read_orphans -> []
+REPLAY of the real leak -> [('vm-a10-ffsft_OsDisk_1', 38.01), ('vm-a10-ffsftPublicIP', 3.65)]
+TOTAL $/month: 41.66
+```
+
+`http=200 count=0` 이 중요하다. `read_orphans` 는 어떤 실패에도 `[]` 를 돌려주므로
+"고아 없음"이 "인증 실패"를 가리고 있을 수 있다. 200/0 이니 **진짜로 없는 것**이다.
+
+### 11.5 ACR 정리
+
+`ffsft-serve:1,2` · `ffsft-train:1,2,3` · `ffsft-probe:1,2` 삭제.
+**23.33 GB → 19.51 GB.** 레이어가 공유되어 절감폭은 작다.
+남은 19.5 GB 는 `serve:3`(9.15 GB) + `train:4`(10.36 GB) 로 **둘 다 필요한 최소치**다.
+(ACR Basic 포함 용량은 10 GB 라 초과분은 과금된다.)
