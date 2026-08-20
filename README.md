@@ -238,10 +238,28 @@ tests/              # 167+ 테스트 (Azure 호출 없음, 무과금)
 
 ## 엔드포인트 올리기 / 내리기
 
+> **⛔ 이 구독에서는 지금 온라인 배포가 막혀 있습니다.**
+> 워크스페이스 스토리지 계정이 `publicNetworkAccess: Disabled` 인데
+> IP 규칙도, VNet 규칙도, 프라이빗 엔드포인트도 없습니다. **들어갈 길이 아예 없습니다.**
+> Managed Online Deployment 는 이 계정을 통해 아티팩트를 스테이징하므로
+> 컨테이너가 시작조차 못 하고, 롤아웃이 한 시간 넘게 `Creating` 에 머물다 실패합니다.
+> `az storage account update --public-network-access Enabled` 는 **rc=0 을 반환하고도
+> 값이 그대로 `Disabled`** 입니다 — Azure Policy 의 `modify` 효과라 제자리에서는 못 고칩니다.
+> 전체 진단은 `docs/VERIFIED.md` §0.
+>
+> 그래서 `ffsft-lifecycle up` 은 **배포를 시도하기 전에 이 상태를 먼저 검사하고 거부**합니다
+> (`src/ffsft/deploy/preflight.py`). 한 시간을 기다린 뒤 실패하는 대신 **2초 만에** 알려줍니다.
+
 Managed Online Endpoint 는 **scale-to-zero 가 없어서 idle 상태에서도 24시간 과금**됩니다.
 실험이 끝나면 반드시 내려야 하고, 나중에 같은 명령으로 다시 올릴 수 있습니다.
 
 ```bash
+# 이 CLI 는 azure 엑스트라와 환경변수 3개가 있어야 동작합니다
+uv sync --extra dev --extra azure
+export FFSFT_SUBSCRIPTION_ID=...
+export FFSFT_RESOURCE_GROUP=rg-ffsft-kc
+export FFSFT_WORKSPACE=mlw-ffsft
+
 ffsft-lifecycle status              # 지금 과금 중인 리소스 + 시간당/월 비용
 ffsft-lifecycle up   --endpoint ffsft-smoke --model qwen3.8-27b
 ffsft-lifecycle up   --endpoint ffsft-smoke --hf-model Qwen/Qwen3-0.6B
@@ -251,11 +269,14 @@ ffsft-lifecycle down --all --yes    # 과금되는 것 전부 정리
 
 `--model` 은 `configs/models.yaml` 의 키다. 이걸 주면 해당 모델의
 **아키텍처 플래그**(`--mamba-cache-mode` / `--language-model-only` /
-`--reasoning-parser`)가 자동으로 결정된다. 이미지에 굽지 않는 이유는
-`docs/VERIFIED.md` 5.2 참고 — 이미지 기본값 때문에 실제로 배포가 깨졌다.
+`--reasoning-parser`)와 **프로브 예산**이 자동으로 결정된다.
+레지스트리에 없는 `--hf-model` 이라도 repo id 에서 크기를 되찾아 쓰고
+(`Qwen/Qwen3-0.6B` → 0.6B), 정 안 되면 `--params-b` 로 직접 줄 수 있다.
+플래그를 이미지에 굽지 않는 이유는 `docs/VERIFIED.md` 5.2 참고.
 
 `down` 은 **엔드포인트만 삭제**하고 **컴퓨트 클러스터는 0 노드로 스케일 다운**합니다.
 클러스터 정의는 유지 비용이 없고 재생성에 수 분이 걸리므로 남겨 두는 편이 낫습니다.
+엔드포인트 삭제는 **20~40분** 걸리니 `status` 로 `BILLING NOW: nothing` 을 확인하세요.
 
 ## 서브트리 워크플로
 
@@ -287,10 +308,15 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
 - [x] 학습 경로: ACPT 커스텀 이미지 빌드 · A100 프리플라이트 통과
 - [x] 서빙 경로: vLLM 이미지 빌드 · 아키텍처 등록 검증
 - [x] 평가: 벤치마크 러너 + LLM-as-judge (TDD)
-- [x] 부하 테스트: TTFT / TPOT / knee 측정기
+- [x] 부하 테스트: TTFT / TPOT / knee 측정기 — **모의 서버로 측정 정확도 실검증**
 - [x] 라이프사이클: `up` / `down` / `status` — **실제 테어다운 검증 완료**
+- [x] 배포 프리플라이트: 스토리지 도달 불가 시 2초 만에 거부 (TDD)
+- [ ] **온라인 배포 ← 구독 차단 상태.** 워크스페이스 스토리지에 네트워크 경로가 없음
+      (위 ⛔ 참고). 뚫으려면 **프라이빗 엔드포인트 생성 +
+      `managedNetwork.isolationMode: AllowInternetOutbound`** 가 필요하고,
+      이건 Azure 리소스를 새로 만드는 일이라 **승인 필요**.
 - [ ] Qwen3.8-27B QLoRA 호환성 실검증 ← **최우선 리스크**
-- [ ] 27B 실학습 · 튜닝 전후 벤치마크 비교
+- [ ] 27B 실학습 · 튜닝 전후 벤치마크 비교 (같은 스토리지 이슈로 막힘, `docs/VERIFIED.md` §2.2)
 
 ## 사전 요구사항
 
