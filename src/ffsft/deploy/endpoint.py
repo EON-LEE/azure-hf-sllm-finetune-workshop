@@ -259,11 +259,20 @@ def deploy_online(
         log.warning("deploying despite: %s", blocker)
 
     # Quota is not the only thing that makes a rollout impossible before it
-    # starts. If Azure ML cannot reach the workspace's storage account, the
-    # deployment retries until Azure's own timeout: over an hour in `Creating`,
-    # no container logs, and the GPU billing throughout. Two endpoints were lost
-    # to that before anyone read this setting. Checking it costs two ARM reads.
+    # starts. Two endpoints were lost to a permissions gap that produces no
+    # logs at all: the endpoint's *own* managed identity had no AcrPull on the
+    # image registry, so the container never started and Azure could only
+    # report a generic error an hour later. Checking it costs four ARM reads.
+    from .identity import acr_id_for_image, identity_blocker, read_identity_grants
     from .preflight import read_storage_reachability, storage_blocker
+
+    acr_id = acr_id_for_image(SERVE_IMAGE, target.subscription_id, target.resource_group)
+    grants = read_identity_grants(target, endpoint_name, acr_id) if acr_id else None
+    identity_issue = identity_blocker(grants) if grants else None
+    if identity_issue and not force:
+        raise RuntimeError(identity_issue)
+    if identity_issue:
+        log.warning("deploying despite: %s", identity_issue)
 
     reachability = read_storage_reachability(target)
     storage_issue = storage_blocker(reachability) if reachability else None

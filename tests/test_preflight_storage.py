@@ -158,3 +158,69 @@ def test_both_managed_vnet_modes_count_as_isolated(mode):
         )
     )
     assert got is None
+
+
+# --------------------------------------------------------------------------
+# Correction. The tests above encoded a diagnosis that was wrong.
+#
+# `networkAcls.bypass: AzureServices` lets trusted Microsoft services through
+# regardless of `publicNetworkAccess`, and Azure ML is a trusted service:
+#
+#   "access to a storage account from trusted services takes the highest
+#    precedence over other network access restrictions ... exceptions that you
+#    previously configured ... will remain in effect."
+#   -- storage/common/storage-network-security-limitations
+#
+# The account that supposedly caused two failed deployments had that bypass set
+# the whole time. Left uncorrected, this preflight refuses every deployment on
+# this subscription for a reason that is not real.
+# --------------------------------------------------------------------------
+
+
+def test_trusted_service_bypass_is_not_a_blocker():
+    """The measured live configuration. It must deploy."""
+    state = StorageReachability(
+        account_name="mlwffsftstorage8cb451dd1",
+        public_network_access="Disabled",
+        bypass="AzureServices",
+    )
+    assert storage_blocker(state) is None
+
+
+def test_bypass_none_with_public_access_off_is_still_a_blocker():
+    """Without the bypass the original reasoning does hold."""
+    state = StorageReachability(
+        account_name="sa",
+        public_network_access="Disabled",
+        bypass="None",
+    )
+    assert storage_blocker(state) is not None
+
+
+def test_logging_only_bypass_does_not_help_azure_ml():
+    """`Logging, Metrics` is a bypass value that excludes AzureServices."""
+    state = StorageReachability(
+        account_name="sa",
+        public_network_access="Disabled",
+        bypass="Logging, Metrics",
+    )
+    assert storage_blocker(state) is not None
+
+
+def test_bypass_is_matched_case_insensitively_within_a_list():
+    state = StorageReachability(
+        account_name="sa",
+        public_network_access="Disabled",
+        bypass="Logging, Metrics, azureservices",
+    )
+    assert storage_blocker(state) is None
+
+
+def test_unread_bypass_does_not_manufacture_a_pass():
+    """None means "not read". It must not be treated as permission to deploy."""
+    state = StorageReachability(
+        account_name="sa",
+        public_network_access="Disabled",
+        bypass=None,
+    )
+    assert storage_blocker(state) is not None

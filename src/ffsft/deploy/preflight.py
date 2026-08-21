@@ -38,6 +38,10 @@ class StorageReachability:
     #: `properties.publicNetworkAccess`. `None` means "not read", which is
     #: different from "off" and must never be treated as a blocker.
     public_network_access: str | None
+    #: `properties.networkAcls.bypass`. `None` means "not read". When this
+    #: contains `AzureServices` the account is reachable by Azure ML no matter
+    #: what `publicNetworkAccess` says -- see `storage_blocker`.
+    bypass: str | None = None
     ip_rules: list[str] = field(default_factory=list)
     vnet_rules: list[str] = field(default_factory=list)
     private_endpoints: list[str] = field(default_factory=list)
@@ -50,6 +54,13 @@ class StorageReachability:
         return self.public_network_access.strip().lower() == "disabled"
 
     @property
+    def trusted_services_bypass(self) -> bool:
+        """True when Azure ML is exempt from the network rules entirely."""
+        if self.bypass is None:
+            return False
+        return any(p.strip().lower() == "azureservices" for p in self.bypass.split(","))
+
+    @property
     def workspace_is_isolated(self) -> bool:
         mode = (self.workspace_isolation_mode or "").strip().lower()
         return mode in ISOLATED_MODES
@@ -58,20 +69,30 @@ class StorageReachability:
 def storage_blocker(state: StorageReachability) -> str | None:
     """Return why Azure ML cannot reach workspace storage, or None if it can.
 
-    Only two arrangements work. Either the account is reachable over the public
-    endpoint, or it has a private endpoint *and* the workspace's managed network
-    is enabled so the compute running the deployment is on a network that can
-    use it. A private endpoint with a non-isolated workspace is the trap worth
-    naming explicitly: the account looks fixed, and nothing that runs the
-    deployment is on that network.
+    Three arrangements work. The account is reachable over the public endpoint;
+    or `networkAcls.bypass` includes `AzureServices`, which exempts Azure ML
+    from the network rules altogether; or there is a private endpoint *and* the
+    workspace's managed network is enabled, so the compute running the
+    deployment sits on a network that can use it. A private endpoint with a
+    non-isolated workspace is the trap worth naming: the account looks fixed,
+    and nothing that runs the deployment is on that network.
 
-    `networkAcls` is deliberately not consulted for the verdict.
-    `publicNetworkAccess: Disabled` overrides it completely -- the account that
-    caused this had `defaultAction: Allow` and still refused every connection --
-    so reading the ACLs is exactly how someone talks themselves out of the right
-    conclusion.
+    The bypass clause is here because leaving it out was a real and expensive
+    mistake. An earlier version of this function argued that `networkAcls` need
+    not be consulted at all, since `publicNetworkAccess: Disabled` overrides it.
+    That is false, and Microsoft says so directly: trusted-service access "takes
+    the highest precedence over other network access restrictions". The account
+    on this subscription had the bypass set the entire time, so the function
+    would have refused every deployment for a reason that was never real -- and
+    the confident docstring is exactly what would have stopped anyone checking.
+
+    `ip_rules` and `vnet_rules` remain deliberately unconsulted: they cannot
+    grant access that `publicNetworkAccess: Disabled` has already withdrawn.
     """
     if not state.public_access_off:
+        return None
+
+    if state.trusted_services_bypass:
         return None
 
     if state.private_endpoints and state.workspace_is_isolated:
@@ -169,6 +190,7 @@ def read_storage_reachability(target, *, credential=None) -> StorageReachability
         return StorageReachability(
             account_name=sa_body.get("name", storage_id.rsplit("/", 1)[-1]),
             public_network_access=sa_props.get("publicNetworkAccess"),
+            bypass=acls.get("bypass"),
             ip_rules=[r.get("value", "") for r in acls.get("ipRules") or []],
             vnet_rules=[r.get("id", "") for r in acls.get("virtualNetworkRules") or []],
             private_endpoints=[
