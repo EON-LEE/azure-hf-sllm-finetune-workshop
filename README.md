@@ -327,6 +327,10 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
 - [x] **학습 경로 실검증** — A100 LowPriority 에서 preflight 잡 2회 `Completed`,
       노드 실측 `nf4_matmul_ok: True` / `transformers 5.15.1` / A100 80GB,
       QLoRA 실제 학습 스텝 성공 (`docs/VERIFIED.md` §16)
+- [x] **QLoRA 학습 엔드투엔드 `Completed`** — `olive_machine_58qllrq6y9`,
+      `train_loss 1.601` / 10 스텝 / 276초 / 학습 파라미터 **1.06%** /
+      VRAM 피크 2.79 GB (§19). 성공 런의 stdout 은 블롭 권한 때문에 읽을 수
+      없으므로 수치는 전부 `ffsft/train/report.py` → MLflow 로 회수했다.
 - [x] 잡 제출 가드: 모델이 `lora_target_modules` 를 선언 안 하면 **GPU 를 빌리기 전에**
       거부 (TDD, `tests/test_aml_job.py`)
 - [x] 라이브러리 rename 내성: transformers v5 의 `warmup_ratio` 제거 등을

@@ -1059,3 +1059,58 @@ TypeError: SFTConfig.__init__() got an unexpected keyword argument 'warmup_ratio
 
 §14에서 CPU SKU 가 GPU 배포 원인을 8분에 찾아낸 것과 같은 규칙이다.
 **가장 싼 재현 수단에서 먼저 실패시켜라.**
+
+---
+
+## 19. 학습 파이프라인 첫 성공 — `olive_machine_58qllrq6y9`
+
+이미지 `ffsft-train:6`, Qwen3.5-0.8B, 10 스텝. **`FINAL: Completed`.**
+프로젝트를 시작한 이래 처음으로 학습이 끝까지 갔다.
+
+```
+START 2026-08-21T06:06:29Z   END 2026-08-21T06:11:46Z   (5분 17초)
+```
+
+MLflow 에서 읽은 수치 (블롭이 아니라 `report.py` 가 심어놓은 것):
+
+| 키 | 값 | 의미 |
+|---|---|---|
+| `train.train_loss` | **1.601** | 실제로 학습이 일어났다 |
+| `train.steps` | 10 | 요청한 만큼 |
+| `train.wall_seconds` | 276.3 | 순수 학습 시간 |
+| `train.effective_batch_size` | 16 | batch 1 × grad_accum 16 |
+| `train.examples` | 128 | `carrotai_ko_instruction` |
+| `train.max_seq_length` | 512 | |
+| `train.trainable_params_m` | 5.41 | LoRA rank 8 |
+| `train.trainable_pct` | **1.0631** | 전체의 1% 만 학습 = QLoRA 가 의도대로 동작 |
+| `train.vram_peak_gb` | **2.79** | / `train.vram_card_gb` 85.1 |
+| `train.torch` | 2.8.0+cu126 | |
+
+### 19.1 `report.py` 가 없었으면 이 표는 존재하지 않는다
+
+스트림은 여전히 이렇게 끝난다:
+
+```
+Streaming user_logs/std_log.txt
+<Error><Code>AuthorizationFailure</Code>...
+```
+
+**성공한 런의 stdout 은 노트북에서 읽을 수 없다.** §17 과 같은 스토리지 경계
+문제다. 실패는 run-history 의 오류 메타데이터로 진단이 됐지만, 성공은 아무것도
+남기지 않는다 — 로그를 못 읽으면 "Completed" 라는 단어 하나가 전부다.
+`ffsft/train/report.py` 가 숫자는 `log_metric`, 나머지는 `set_tag` 로 보내고
+절대 예외를 던지지 않기 때문에 위 표를 얻었다. **이 워크스페이스에서 유일하게
+동작하는 판독 채널이다.**
+
+주의: 로컬에 `mlflow` 가 없으면 읽을 수 없고, run-history REST 의 `rundata` 는
+**태그만** 돌려준다(문자열). 숫자는 metric 서비스에 따로 있다. 실제로 통한 방법:
+
+```bash
+uv run --with mlflow --with azureml-mlflow python -c "..."   # MlflowClient.get_run
+```
+
+### 19.2 세 개의 실제 버그가 이 한 번의 성공을 만들었다
+
+`warmup_ratio` (§18) → trl `_is_vlm` 오판 → 그리고 blob 판독 불가.
+셋 다 0.8B 스모크런이 5분 안에 드러냈다. 27B 로 먼저 갔다면 같은 정보에
+회당 1시간과 $1.5 를 냈을 것이다.
