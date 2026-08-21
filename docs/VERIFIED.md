@@ -757,3 +757,141 @@ BILLING NOW: nothing. No always-on compute in this workspace.
 - ACR: 사용 중인 2개 태그만 유지 (§11.5)
 
 **지금 이 구독에서 이 프로젝트로 과금되는 리소스는 없다.**
+
+---
+
+## 14. ⛔ 세 번째 배포도 실패 — `AcrPull` 가설도 틀렸다
+
+**§0의 진단(엔드포인트 ID에 `AcrPull` 없음)도 원인이 아니었다.**
+권한을 부여하고 재배포했으나 **113분 만에 동일한 `InternalServerError`**.
+
+```
+09:37:19  deploy 시작 (ffsft-acrtest, Qwen3-0.6B, NV18ads_A10_v5)
+11:30:40  InternalServerError            ← 113분
+비용      113분 × $2.160/hr ≈ $4.07
+```
+
+배포 직전 실측으로 확인한 것들 — **전부 정상이었다**:
+
+| 확인 항목 | 결과 |
+|---|---|
+| 엔드포인트 MI `AcrPull` on `acrffsftkc` | ✅ 부여됨 |
+| 엔드포인트 MI `Storage Blob Data Reader` | ✅ 부여됨 |
+| 환경 `ffsft-serve:2` → 이미지 태그 | ✅ `ffsft-serve:3`, ACR에 실존 |
+| `inferenceConfig` (liveness/readiness/scoring) | ✅ `/health:8000`, `/v1/chat/completions:8000` |
+| `StandardNVADSA10v5Family` 온라인 쿼터 | ✅ **limit=72** |
+| ACR `publicNetworkAccess` | ✅ Enabled |
+
+### 14.1 이번에 처음 얻은 진짜 신호
+
+종료 상태에서 로그를 조회했더니 **`Creating` 중과 다른 메시지**가 나왔다:
+
+```
+Creating 중 : "Deployment is in deleting or creating state so logs can't be retrieved."
+Failed 후   : "There are no logs for this deployment at the moment."
+```
+
+두 문장은 전혀 다른 뜻이다. 앞은 "안 보여준다", 뒤는 "없다"이다.
+`ffsft/deploy/logs.py` 가 이 구분을 강제하는 이유가 이것이다.
+
+다만 **뒤 문장도 "컨테이너가 없었다"의 증명은 아니다.** 로그 수집 지연일 수도
+있다. 이번엔 단정하지 않는다 — 두 번 그렇게 틀렸다.
+
+### 14.2 Activity Log에는 아무것도 없다
+
+```
+az monitor activity-log list ... --query "[?status.value=='Failed']"
+FAILED rows: 0
+```
+
+실패가 **ARM 컨트롤 플레인에 아예 기록되지 않는다.** AML 데이터 플레인 내부에서
+끝난다는 뜻이고, 외부에서 원인을 볼 수 있는 창구가 사실상 없다.
+
+### 14.3 이번 실수 — 로그를 못 건지고 지웠다
+
+`Failed` 확정 직후 로그가 "no logs"로 나왔고, 곧바로 엔드포인트를 삭제했다.
+**로그 수집이 지연됐던 것이라면 몇 분 뒤엔 나왔을 수도 있다.** 삭제하면 영영
+못 본다. 다음부터는 **터미널 상태에서 최소 10분간 로그를 재시도한 뒤** 삭제한다.
+
+### 14.4 지금까지 배제된 것 / 남은 가설
+
+배제됨(실측):
+- 모델 크기 (0.6B로도 실패)
+- 이미지 ENV / 엔트리포인트 (중립 플래그로도 실패)
+- 스토리지 네트워크 (`bypass: AzureServices`)
+- 엔드포인트 ID 권한 (`AcrPull` + `Blob Data Reader` 부여 후에도 실패)
+- 온라인 엔드포인트 쿼터 (A10 v5 limit=72)
+- 삭제된 이미지 태그 (태그 3 실존)
+
+남은 가설(**미검증**):
+1. **A10 v5 노드를 온라인 엔드포인트에 할당하지 못한다** — 학습 클러스터는
+   저우선순위로 통과했지만 온라인 엔드포인트는 전용 할당이라 테넌트 정책의
+   N-series 거부에 걸릴 수 있다.
+2. 이미지 자체가 이 런타임에서 기동 실패 (9.15 GB, vLLM)
+3. 리전/구독 단위의 플랫폼 문제
+
+§14.5의 CPU SKU 실험이 1번과 2번을 가른다.
+
+### 14.5 CPU SKU 진단 — 8분 $0.04로 원인 확정 ✅
+
+GPU에서 113분 $4.07 을 태우고도 못 얻은 답을, **같은 이미지를 CPU SKU
+(`Standard_DS3_v2`, $0.29/hr)에 배포**해서 **8분 $0.04** 에 얻었다.
+
+vLLM 은 GPU 없이는 못 뜨지만, **이미지 pull 은 SKU 와 무관**하다. 그래서
+"pull 문제인가, GPU 노드 문제인가"를 가르는 데 GPU 가 전혀 필요 없다.
+
+**1차 CPU 테스트(권한 없음)** — 8분 만에 터미널, 그리고 처음으로 진짜 로그:
+
+```
+UserContainerImagePull: InProgress
+Kind: Pod, Name: ImagePullFailed, Message: Image pull failed, retrying.
+
+ImageFetcher: "Found user ACR image" IdentityType:"XDS"
+              clientid: 8d8cc0ae-ca15-4d88-929a-132e3cde3a1a
+HTTP status code: 401
+exchange refresh token failed: {"code":"UNAUTHORIZED",
+  "message":"authentication required, visit https://aka.ms/acr/authorization"}
+```
+
+`8d8cc0ae-...` 를 조회하니:
+
+```
+displayName: mlw-ffsft/onlineEndpoints/ffsft-cputest
+type:        ManagedIdentity
+```
+
+**엔드포인트 자신의 MI 가 맞다.** (로그에 찍히는 건 appId, 롤 부여에 쓰는 건
+objectId 라서 값이 달라 보인다.) §0 의 진단 방향은 옳았다.
+
+**2차 CPU 테스트(AcrPull 부여 + 5분 대기)**:
+
+```
+elapsed: 60.6s    total: 4.5 Gi (76.8 MiB/s)
+unpacking linux/amd64 sha256:e7d8024a...
+done: 5m16.5s
+"Imagefetcher runs successfully."
+
+UserContainerImagePull: Succeeded      ← 이전엔 InProgress→Failed
+UserContainerStart: Waiting            ← CPU라 vLLM 기동 불가 (예상된 실패)
+```
+
+### 14.6 그래서 `ffsft-acrtest` 는 왜 실패했나 — 롤 전파
+
+`AcrPull` 을 부여하고 **거의 즉시** 배포했다. ACR 토큰 교환은 롤 전파가
+끝나야 성공한다. 2차 CPU 테스트는 **5분을 기다린 뒤** 배포했고 통과했다.
+
+> **부여 후 최소 5분 기다린 뒤 배포할 것.** 안 기다리면 113분 뒤에
+> `InternalServerError` 로 돌아오고, 그 실패는 권한이 없을 때와 구별되지 않는다.
+
+### 14.7 방법론 교훈 — 이게 이 절에서 제일 중요하다
+
+| | GPU 로 진단 | CPU 로 진단 |
+|---|---|---|
+| 1회 소요 | **113분** | **8분** |
+| 1회 비용 | **$4.07** | **$0.04** |
+| 얻은 정보 | `InternalServerError` (무의미) | 401 + clientid + 스택트레이스 |
+
+**비싼 자원 위에서 디버깅하지 말 것.** 실패 지점(이미지 pull)이 비싼
+자원(GPU)과 무관하다면, 싼 SKU 에서 똑같이 재현된다. 세 번의 GPU 실패
+(68 + 114 + 113 = 295분, 약 $10.6) 중 **단 한 번도** 8분짜리 CPU 테스트가
+준 정보를 주지 못했다.
