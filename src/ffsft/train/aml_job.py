@@ -21,11 +21,15 @@ runs and one that never gets a node:
    `docker/Dockerfile.train` upgrades the model-side libraries on top of ACPT
    and the result is pushed to our own registry.
 
-3. No code snapshot. `command(code=...)` uploads a zip to the workspace storage
-   account from the client, and a locked-down account (no shared keys, public
-   network access disabled, no private endpoint) makes that upload impossible
-   from outside the VNet. The code is baked into the image instead, which is
-   what Microsoft's own finetune components do.
+3. No code snapshot. `command(code=...)` zips the working tree and uploads it to
+   the workspace storage account *from the client machine*, and this account
+   refuses connections from outside its allowed networks -- a developer laptop
+   included. Note the asymmetry: Azure ML itself reaches the account fine via
+   the `AzureServices` trusted-services bypass, so this is a limitation of
+   where the *client* sits, not of the account being unreachable. Baking the
+   code into the image sidesteps it entirely, because `az acr build` runs the
+   build in the registry and never touches workspace storage. It is also what
+   Microsoft's own finetune components do.
 """
 
 from __future__ import annotations
