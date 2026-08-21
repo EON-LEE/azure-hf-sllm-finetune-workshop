@@ -23,7 +23,7 @@ suites:
 
   ko_fast:
     description: Quick regression check during training iterations.
-    benchmarks: [ifeval_ko, kobest]
+    benchmarks: [kobest]
 
 benchmarks:
   - key: kmmlu
@@ -53,7 +53,7 @@ benchmarks:
     license: cc-by-nc-nd-4.0
     eval_only: true
     metric: accuracy
-    harness_task: hae_rae_bench
+    harness_task: haerae
     description: Korean culture, vocabulary, history and reading comprehension (4,900 items).
 
   - key: kobest
@@ -69,7 +69,9 @@ benchmarks:
     license: apache-2.0
     eval_only: true
     metric: strict_instruction_accuracy
-    harness_task: ifeval_ko
+    # No `harness_task`: lm-evaluation-harness ships `ifeval` (English) but has
+    # no Korean variant, so naming one here only fails after the weights load.
+    # Running this needs a custom task YAML pointed at allganize/IFEval-Ko.
     description: >-
       Korean instruction-following with programmatically checkable constraints.
       The single most useful signal that SFT actually improved obedience.

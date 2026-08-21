@@ -44,7 +44,7 @@ def test_unknown_benchmark_key_rejected():
 
 def test_suite_expansion():
     specs = get_benchmark_registry().suite("ko_fast")
-    assert {s.key for s in specs} == {"ifeval_ko", "kobest"}
+    assert {s.key for s in specs} == {"kobest"}
 
 
 def test_unknown_suite_rejected():
@@ -61,7 +61,7 @@ def test_resolve_mixes_suites_and_keys_without_duplicates():
     resolved = get_benchmark_registry().resolve(["ko_fast", "kobest", "kmmlu"])
     keys = [s.key for s in resolved]
     assert keys.count("kobest") == 1
-    assert set(keys) == {"ifeval_ko", "kobest", "kmmlu"}
+    assert set(keys) == {"kobest", "kmmlu"}
 
 
 def test_suite_referencing_unknown_benchmark_rejected():
@@ -76,10 +76,15 @@ def test_suite_referencing_unknown_benchmark_rejected():
 
 
 def test_split_benchmarks_separates_judge_tasks():
+    """`others` is everything the harness cannot run, for either reason.
+
+    `logickor` needs a judge LLM; `ifeval_ko` has no upstream lm-eval task at
+    all, so it has no `harness_task` and lands here too.
+    """
     specs = get_benchmark_registry().resolve(["ko_core"])
     tasks, others = split_benchmarks(specs)
     assert "kmmlu" in tasks
-    assert [s.key for s in others] == ["logickor"]
+    assert {s.key for s in others} == {"logickor", "ifeval_ko"}
 
 
 def test_build_model_args_includes_adapter_and_quantization():

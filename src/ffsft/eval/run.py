@@ -33,6 +33,87 @@ from .registry import BenchmarkSpec, get_benchmark_registry
 log = logging.getLogger("ffsft.eval")
 
 
+def hflm_kwargs(
+    hf_id: str,
+    adapter: str | None,
+    *,
+    load_in_4bit: bool,
+    dtype: str,
+    max_length: int,
+    batch_size: str | int,
+) -> dict:
+    """Everything `HFLM(...)` needs, as primitives.
+
+    4-bit is requested as `quantization_config`, never as `load_in_4bit`.
+    lm-eval forwards unknown keys straight into `AutoModel.from_pretrained`;
+    transformers v4 intercepted `load_in_4bit` and built the config itself, and
+    v5 removed that shim, so the flag now falls through to the model
+    constructor and raises `TypeError`. `quantization_config` is the spelling
+    that survived, and it is passed through untouched.
+
+    The value stays a plain dict here rather than a `BitsAndBytesConfig` so the
+    mapping is testable without transformers installed -- it lives in the
+    training image, not in the dev environment. `run_harness` materialises it.
+
+    Evaluating the tuned model in the *same* 4-bit quantization it was trained
+    in is deliberate: a bf16 evaluation of a QLoRA adapter measures a
+    configuration that will never be served, and the quantization error is on
+    the same order as the fine-tuning delta we are trying to detect.
+    """
+    kwargs: dict = {
+        "pretrained": hf_id,
+        "dtype": dtype,
+        "max_length": max_length,
+        "batch_size": batch_size,
+    }
+    if adapter:
+        kwargs["peft"] = adapter
+    if load_in_4bit:
+        kwargs["quantization_config"] = {
+            "load_in_4bit": True,
+            "bnb_4bit_quant_type": "nf4",
+            "bnb_4bit_use_double_quant": True,
+            "bnb_4bit_compute_dtype": dtype,
+        }
+    return kwargs
+
+
+def describe_model_args(kwargs: dict) -> str:
+    """Render `hflm_kwargs` output the way lm-eval's `--model_args` reads.
+
+    Derived from the kwargs rather than built alongside them. The previous code
+    logged a string advertising `bnb_4bit_quant_type=nf4` while constructing
+    HFLM with a bare `load_in_4bit=True`, so the log described a configuration
+    that was not the one running.
+    """
+    parts = []
+    for key, value in kwargs.items():
+        if isinstance(value, dict):
+            parts += [f"{k}={v}" for k, v in value.items()]
+        else:
+            parts.append(f"{key}={value}")
+    return ",".join(parts)
+
+
+def unknown_harness_tasks(tasks: list[str], known: set[str] | None = None) -> list[str]:
+    """Which of `tasks` lm-eval has never heard of.
+
+    Called before any weights load. A misspelled task only fails inside
+    `simple_evaluate`, which runs *after* the model is downloaded and
+    quantised -- on a 27B model that is several minutes of A100 spent to learn
+    that a string in a YAML file was wrong. Every offender is returned at once
+    so one round trip names them all.
+
+    `known` is injectable so the mapping can be tested without lm-eval, which
+    lives in the training image rather than the dev environment.
+    """
+    if known is None:
+        from lm_eval.tasks import TaskManager
+
+        known = set(TaskManager().all_tasks)
+    return [t for t in tasks if t not in known]
+
+
 def build_model_args(
     hf_id: str,
     adapter: str | None,
@@ -42,20 +123,14 @@ def build_model_args(
     max_length: int,
     batch_size: str | int,
 ) -> str:
-    """Build lm-eval's `--model_args` string.
-
-    Evaluating the tuned model in the *same* 4-bit quantization it was trained in
-    is deliberate: a bf16 evaluation of a QLoRA adapter measures a configuration
-    that will never be served, and the quantization error is on the same order as
-    the fine-tuning delta we are trying to detect.
-    """
-    parts = [f"pretrained={hf_id}", f"dtype={dtype}", f"max_length={max_length}"]
-    if load_in_4bit:
-        parts += ["load_in_4bit=True", "bnb_4bit_quant_type=nf4", "bnb_4bit_use_double_quant=True"]
-    if adapter:
-        parts.append(f"peft={adapter}")
-    parts.append(f"batch_size={batch_size}")
-    return ",".join(parts)
+    """Backwards-compatible wrapper: the `--model_args` string for a CLI call."""
+    return describe_model_args(
+        hflm_kwargs(
+            hf_id, adapter,
+            load_in_4bit=load_in_4bit, dtype=dtype,
+            max_length=max_length, batch_size=batch_size,
+        )
+    )
 
 
 def run_harness(
@@ -75,14 +150,23 @@ def run_harness(
     from lm_eval import simple_evaluate
     from lm_eval.models.huggingface import HFLM
 
-    model_args = build_model_args(
+    kwargs = hflm_kwargs(
         hf_id, adapter,
         load_in_4bit=load_in_4bit, dtype=dtype, max_length=max_length, batch_size=batch_size,
     )
-    log.info("lm-eval | tasks=%s | %s", ",".join(tasks), model_args)
+    log.info("lm-eval | tasks=%s | %s", ",".join(tasks), describe_model_args(kwargs))
 
-    lm = HFLM(pretrained=hf_id, peft=adapter, dtype=dtype, max_length=max_length,
-              batch_size=batch_size, load_in_4bit=load_in_4bit)
+    quant = kwargs.get("quantization_config")
+    if quant is not None:
+        from transformers import BitsAndBytesConfig
+
+        quant = dict(quant)
+        # The dict carries a dtype *name* so the mapping stays importable
+        # without torch; only here is there a torch to resolve it against.
+        quant["bnb_4bit_compute_dtype"] = getattr(torch, quant["bnb_4bit_compute_dtype"])
+        kwargs["quantization_config"] = BitsAndBytesConfig(**quant)
+
+    lm = HFLM(**kwargs)
     out = simple_evaluate(model=lm, tasks=tasks, num_fewshot=num_fewshot, limit=limit)
 
     # Free the weights before the next model loads, or the pair evaluation OOMs
@@ -178,12 +262,28 @@ def evaluate(
 
     if needs_judge:
         log.warning(
-            "these benchmarks need a judge LLM and are skipped by this runner: %s. "
-            "Run `python -m ffsft.eval.judge` against a served endpoint instead.",
-            ", ".join(b.key for b in needs_judge),
+            "skipped, not runnable by the harness: %s",
+            ", ".join(
+                f"{b.key} (needs a judge LLM -- run `python -m ffsft.eval.judge` "
+                f"against a served endpoint)"
+                if b.judge_required
+                else f"{b.key} (no upstream lm-eval task; needs a custom task YAML)"
+                for b in needs_judge
+            ),
         )
     if not tasks:
         raise ValueError("no harness-runnable benchmarks selected")
+
+    # Before the download, not after it.
+    missing = unknown_harness_tasks(tasks)
+    if missing:
+        raise ValueError(
+            f"lm-eval does not define these tasks: {', '.join(missing)}. "
+            f"Fix `harness_task` in configs/benchmarks.yaml -- the Korean groups "
+            f"the harness actually ships are kobest, kmmlu and haerae. A benchmark "
+            f"with no upstream task needs a custom task YAML; leave its "
+            f"`harness_task` unset until then."
+        )
 
     started = time.time()
     common = dict(
