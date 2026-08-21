@@ -1901,3 +1901,58 @@ Hub로 서빙 가능한 온라인 패턴까지 BLOCKED 로 보고했다. 실제�
 §24와 README는 "모든 호스팅 패턴이 스토리지 벽에 막혔다"고 썼다. **너무 강한
 주장이었다.** 정확히는 **모델 자산을 요구하는 패턴만** 막힌다. 온라인 vLLM은
 Hub 경로로 우회 가능하고, 실제로 우회했다.
+
+### 26.8 결말 — 롤아웃은 완료되지 않았다
+
+정직하게 적는다. **배포는 성공하지 않았다.**
+
+```
+18:31  엔드포인트 ffsft-a10 생성           → Succeeded
+18:31  배포 blue 생성 (NV12ads_A10_v5)
+18:40  실패: Endpoint identity does not have pull permission   (약 10분)
+18:41  AcrPull 수동 부여 → 확인됨
+18:50  배포 blue 재생성
+19:53  여전히 Creating       (63분, percentComplete 0.0)
+20:15  여전히 Creating       (85분, percentComplete 0.0)
+20:16  비용 때문에 중단, 삭제
+```
+
+두 번째 시도 시점의 상태는 전부 정상으로 측정됐다:
+
+```
+provisioningState  Creating          (85분간)
+percentComplete    0.0
+instanceType       Standard_NV12ads_A10_v5      ← 수락됨
+model              null                          ← Hub 경로, 정상
+MODEL_PATH         Qwen/Qwen3.5-0.8B
+엔드포인트 ID 권한  AzureML Metrics Writer / Storage Blob Data Reader / AcrPull
+```
+
+즉 **쿼터·SKU·이미지 권한·모델 경로가 모두 맞는데 롤아웃이 진행되지 않았다.**
+`percentComplete` 가 85분간 0.0 이었다는 것은 노드 할당 단계에서 더 나아가지
+못했다는 뜻이다. 승인된 쿼터(36코어)와 요청량(24코어)은 맞지만, **쿼터가 있다는
+것과 그 리전에 실제 A10 용량이 있다는 것은 다른 문제다.** §22에서 배운 교훈이
+여기서도 반복된다 — 쿼터는 필요조건이지 충분조건이 아니다.
+
+컨테이너 로그는 끝내 못 봤다: `Deployment is in deleting or creating state so
+logs can't be retrieved`. 컨테이너가 시작조차 안 했으므로 볼 로그가 없다.
+
+**그래서 무엇이 남았나:**
+
+| 항목 | 상태 |
+|---|---|
+| A10 SKU 를 온라인 엔드포인트가 수락 | ✅ 실증 (§26.2) |
+| Hub 경로가 스토리지 벽을 우회 | ✅ 실증 — 배포 리소스에 `model: null` |
+| AcrPull 근본 원인과 자동 부여 | ✅ 실증 + 코드로 고침 (§26.4) |
+| 프리체크가 못 잡던 구조적 결함 | ✅ 고침 |
+| **실제로 서빙되는 GPU 엔드포인트** | ❌ **미완** — 85분간 노드 미할당 |
+
+실제 추론 성능 수치(TTFT/TPOT)는 여전히 §25의 로컬 CPU 측정치뿐이다.
+GPU 수치는 없다. **없는 것을 있는 것처럼 적지 않는다.**
+
+다음에 재시도할 때 바꿔볼 것:
+1. 더 작은 SKU (`Standard_NV6ads_A10_v5`, 12코어) — 용량 확보 가능성이 높다
+2. 다른 리전 (A10 쿼터가 있는 곳)
+3. 같은 명령을 시간대를 바꿔서 — 용량 문제라면 시점 의존적이다
+
+명령은 `docs/RUNBOOK.md` §3 에 그대로 있다.

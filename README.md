@@ -354,19 +354,33 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
       가 쿼터 숫자 대신 **실제 create 호출**로 판정한다 (TDD,
       `tests/test_sku_probe.py`). 거부는 2초 만에 아무것도 안 만들고 돌아오고,
       승인은 `min_instances=0` 이라 노드를 띄우지 않는다.
-- [ ] **Azure 서빙 ⛔ 이 구독에서는 불가능 — 벽이 둘이다**
-      1. **전용 GPU 쿼터 0** (§22) → 매니지드 온라인 엔드포인트 불가.
-         `ClusterMinNodesExceedCoreQuota` 가 API 응답에 그대로 적혀 있다.
-      2. **데이터스토어 도달 불가** (§24) → 배치·AKS 도 불가.
-         워크스페이스 스토리지가 `publicNetworkAccess=Disabled` + 프라이빗
-         엔드포인트 0개라 노드도 내 클라이언트도 세션을 열 수 없다.
-         완료된 런 3개 모두 `artifacts=0` 이고, 그래서 등록할 모델 자산이
-         없다. **AML 배포는 온라인이든 배치든 모델 자산을 입력으로 받는다.**
-      이전에 "배치는 오늘 당장 가능"이라고 적었던 것은 **틀렸다** — 쿼터만
-      보고 판단했기 때문이다. `check_pattern` 이 이제 데이터스토어까지
-      확인하고 네 패턴 모두 `BLOCKED` 로 보고한다 (TDD,
-      `tests/test_model_store.py`). `AcrPull` 문제는 해결됐고 CPU SKU 에서
-      이미지 pull 성공도 실증했다(§14).
+- [x] **Azure 서빙 벽 두 개 중 하나가 뚫렸다 — 그런데 롤아웃은 완료 못 했다** (§26)
+      1. **전용 GPU 쿼터**: A100 은 여전히 0 이지만 **A10 은 36 코어로 승인**됐다.
+         그리고 매니지드 온라인 엔드포인트는 `Standard_NV12ads_A10_v5` 를
+         **수락한다** — AmlCompute 가 같은 계열을 `InvalidPropertyValue` 로
+         거부하는데도 그렇다. **두 표면은 SKU 카탈로그를 공유하지 않는다.**
+         주의: 기본 SKU 는 NV36 이고 온라인은 롤링 업데이트분까지 2배를
+         요구하므로 72 코어가 필요해 승인된 36 으로는 못 올린다. NV12 로 바꿔야 한다.
+      2. **데이터스토어 도달 불가** (§24) → 배치·모델 자산 등록은 여전히 불가.
+         하지만 **온라인 vLLM 은 우회한다**: `--hf-model` 을 주면 컨테이너가
+         Hub 에서 직접 가중치를 받아 데이터스토어를 아예 안 탄다. §24 의
+         "모든 호스팅 패턴이 막혔다"는 **과잉 주장이었고 정정했다** —
+         정확히는 **모델 자산을 요구하는 패턴만** 막힌다.
+      실측 결과: 엔드포인트 `Succeeded`, 배포는 첫 시도에서 10분 뒤
+      `Endpoint identity does not have pull permission` 으로 죽었고(§26.4),
+      AcrPull 부여 후 재시도에서는 **80분 넘게 `Creating` / `percentComplete: 0`**
+      에 머물러 완료되지 않았다. 설정·권한·SKU 는 모두 정상으로 측정됐다.
+      비용 때문에 내렸고, `docs/RUNBOOK.md` 에 그대로 재시도할 수 있는
+      명령을 남겼다.
+- [x] **프리플라이트가 구조적으로 눈멀어 있던 것을 고쳤다** (§26.4) —
+      AcrPull 검사가 **엔드포인트 생성보다 먼저** 돌아서 신규 엔드포인트에서는
+      항상 404 → 항상 통과였다. 권한이 없는 게 확실한 유일한 경우에 침묵했다.
+      이제 생성 직후에 검사하고 `ensure_acr_pull()` 이 **직접 부여**한다
+      (TDD, `tests/test_acr_pull_grant.py`).
+- [x] **스토리지를 안 타는 경로를 CLI 에서 쓸 수 있게 했다** (§26.5) —
+      `deploy_online()` 은 `hf_model=` 을 진작 받고 있었는데 파서가
+      `--model-uri` 를 필수로 강제해 유일한 열린 경로가 명령줄에서 막혀 있었다
+      (TDD, `tests/test_deploy_cli.py`).
 - [x] **서빙 + 부하 테스트 실검증 (로컬)** — Azure 서빙이 전부 막혀 있어
       로컬 패턴에 CPU `transformers` 엔진을 추가했다(`ffsft-serve-local`).
       첫 로드테스트가 **HTTP 200 을 12번 받고 12번 실패**로 기록했는데,
