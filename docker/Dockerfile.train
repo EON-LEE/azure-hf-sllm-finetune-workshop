@@ -75,6 +75,17 @@ RUN python -m pip install --no-cache-dir --upgrade \
         "mlflow>=2.16" \
         "azureml-mlflow>=1.57"
 
+# lm-eval goes in its own layer, after the stack above is already resolved.
+# Evaluation has to run on the node that holds the adapter -- a separate eval
+# job would need the adapter to travel through workspaceblobstore, which is the
+# one path this workspace does not allow (see JobSpec.mount_outputs). So the
+# training image carries the harness. Its requirements have no upper bounds
+# (`transformers>=4.1`, `peft>=0.2`, `torch>=1.8`), and the verify step below
+# re-asserts the pins in case a future release adds one.
+RUN python -m pip install --no-cache-dir \
+        -c /tmp/base-constraints.txt \
+        "lm-eval>=0.4.9"
+
 # The registry resolves configs/models.yaml relative to the package (parents[3] of
 # ffsft/models/registry.py), so the repo layout has to be preserved on disk.
 COPY . /opt/ffsft

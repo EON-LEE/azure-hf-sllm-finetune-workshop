@@ -91,6 +91,17 @@ class JobSpec:
     #: `./outputs` instead is uploaded by the run-history artifact service,
     #: which is a separate code path that mounts nothing.
     mount_outputs: bool = False
+    #: Benchmark suite to score *in the same job*, right after training. Empty
+    #: means train only. This is chained rather than submitted as a second job
+    #: because a second job would have to read the adapter back out of
+    #: `workspaceblobstore`, and the node cannot open a session against that
+    #: account at all -- the same finding that forced `mount_outputs=False`.
+    #: Chained, the adapter never leaves the local disk it was written to.
+    eval_suite: str | None = None
+    #: Examples per benchmark task. A 27B model scored on a full suite is hours
+    #: of GPU; a limit turns that into minutes while still comparing base vs
+    #: tuned on identical items.
+    eval_limit: int | None = None
 
 
 def ensure_environment(client: MLClient) -> str:
@@ -129,6 +140,7 @@ def build_command(job: JobSpec) -> str:
     if job.preflight:
         return "python -m ffsft.train.preflight"
 
+    output_dir = "${{outputs.model_dir}}" if job.mount_outputs else "./outputs"
     parts = [
         "python -m ffsft.train.qlora",
         f"--model {job.model_key}",
@@ -139,16 +151,30 @@ def build_command(job: JobSpec) -> str:
         f"--grad-accum {job.grad_accum}",
     ]
     # `${{outputs.model_dir}}` only resolves to a path when the output is mounted.
-    parts.append(
-        "--output-dir ${{outputs.model_dir}}" if job.mount_outputs else "--output-dir ./outputs"
-    )
+    parts.append(f"--output-dir {output_dir}")
     if job.max_steps > 0:
         parts.append(f"--max-steps {job.max_steps}")
     if job.max_samples:
         parts.append(f"--max-samples {job.max_samples}")
     if job.allow_default_lora_targets:
         parts.append("--allow-default-lora-targets")
-    return " ".join(parts)
+    train = " ".join(parts)
+
+    if not job.eval_suite:
+        return train
+
+    # `&&`, not `;`: a failed training run leaves no adapter, and scoring the
+    # base model under a "tuned" label would be worse than reporting nothing.
+    evaluate = [
+        "python -m ffsft.eval.run",
+        f"--model {job.model_key}",
+        f"--adapter {output_dir}",
+        f"--suite {job.eval_suite}",
+        f"--output-dir {output_dir}/eval",
+    ]
+    if job.eval_limit:
+        evaluate.append(f"--limit {job.eval_limit}")
+    return f"{train} && {' '.join(evaluate)}"
 
 
 def submit(target: AzureTarget, job: JobSpec, wait: bool = False) -> dict:

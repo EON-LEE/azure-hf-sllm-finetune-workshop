@@ -198,3 +198,59 @@ def test_submit_passes_the_declared_target_model_through_unblocked(
     assert info["priority"] == "LowPriority"
     assert info["image"] == aml_job.TRAIN_IMAGE
     assert len(fake_client.jobs.created) == 1
+
+
+# ---------------------------------------------------------------------------
+# Chaining evaluation onto the training job.
+#
+# Evaluating in a *separate* job would mean the adapter has to travel
+# training node -> workspaceblobstore -> eval node. That round trip is not
+# hypothetically risky here, it is the exact path that fails: the node cannot
+# open a FUSE session against the storage account (docs/VERIFIED.md 17), which
+# is why `mount_outputs` defaults to False. Chaining keeps the adapter on the
+# node's local disk, where it was just written.
+# ---------------------------------------------------------------------------
+
+
+def test_no_eval_step_unless_asked():
+    cmd = aml_job.build_command(aml_job.JobSpec(model_key="qwen3.8-27b"))
+    assert "ffsft.eval.run" not in cmd
+    assert "&&" not in cmd
+
+
+def test_eval_suite_appends_a_second_stage():
+    cmd = aml_job.build_command(
+        aml_job.JobSpec(model_key="qwen3.8-27b", eval_suite="ko_fast")
+    )
+    train, _, evaluate = cmd.partition("&&")
+    assert "ffsft.train.qlora" in train
+    assert "ffsft.eval.run" in evaluate
+    assert "--suite ko_fast" in evaluate
+    assert "--model qwen3.8-27b" in evaluate
+
+
+def test_eval_reads_the_adapter_the_trainer_just_wrote():
+    """The two stages must agree on the directory, or the eval scores the base."""
+    job = aml_job.JobSpec(model_key="qwen3.8-27b", eval_suite="ko_fast")
+    cmd = aml_job.build_command(job)
+    train, _, evaluate = cmd.partition("&&")
+    assert "--output-dir ./outputs" in train
+    assert "--adapter ./outputs" in evaluate
+
+
+def test_eval_limit_is_passed_through():
+    cmd = aml_job.build_command(
+        aml_job.JobSpec(model_key="qwen3.8-27b", eval_suite="ko_fast", eval_limit=25)
+    )
+    assert "--limit 25" in cmd.partition("&&")[2]
+
+
+def test_eval_limit_alone_does_nothing():
+    """A limit without a suite must not silently start a 27B evaluation."""
+    cmd = aml_job.build_command(aml_job.JobSpec(model_key="qwen3.8-27b", eval_limit=25))
+    assert "ffsft.eval.run" not in cmd
+
+
+def test_preflight_never_chains_an_eval():
+    cmd = aml_job.build_command(aml_job.JobSpec(preflight=True, eval_suite="ko_fast"))
+    assert cmd == "python -m ffsft.train.preflight"
