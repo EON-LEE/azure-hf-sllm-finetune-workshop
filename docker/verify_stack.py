@@ -28,9 +28,6 @@ import peft
 import torch
 import transformers
 import trl
-from peft import LoraConfig, prepare_model_for_kbit_training  # noqa: F401
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig  # noqa: F401
-from trl import SFTConfig, SFTTrainer  # noqa: F401
 
 # The evaluator is chained onto the training job rather than submitted
 # separately, so a missing harness would surface only after the GPU had already
@@ -38,6 +35,9 @@ from trl import SFTConfig, SFTTrainer  # noqa: F401
 # inside a function, which is good for the unit tests and useless as a build
 # check -- so import the same symbol here.
 from lm_eval.models.huggingface import HFLM  # noqa: F401
+from peft import LoraConfig, prepare_model_for_kbit_training  # noqa: F401
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig  # noqa: F401
+from trl import SFTConfig, SFTTrainer  # noqa: F401
 
 with open("/tmp/base-constraints.txt") as fh:
     expected = fh.read().strip().split("==", 1)[1]
