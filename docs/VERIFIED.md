@@ -950,3 +950,112 @@ GPU 총 360분(6시간), 약 **$12.9**. CPU 총 22분, 약 **$0.11**.
 2. 불가하다면 서빙은 **AKS 연결(Kubernetes online endpoint)** 또는
    **저우선순위 클러스터 + 배치 엔드포인트**로 전환
 3. 어느 쪽이든 **CPU SKU로 먼저 pull/기동을 검증**한 뒤 GPU로 올린다
+
+---
+
+## 16. ✅ 학습은 된다 — 막힌 것은 추론뿐이다
+
+사용자 질문: **"지금 학습이 안되는거야 추론이 안되는거야??"**
+문서가 아니라 워크스페이스의 잡 이력에서 직접 확인했다.
+
+```
+$ az rest --method get --url ".../workspaces/mlw-ffsft/jobs?api-version=2024-10-01"
+dreamy_airport_8vfzj212yl  Completed  preflight-Standard_NC24ads_A100_v4  gpu-a100-lp
+serene_spade_rctv64wnc0    Completed  preflight-Standard_NC24ads_A100_v4  gpu-a100-lp
+```
+
+`dreamy_airport` 의 MLflow 태그가 노드에서 실측한 스택 전체다:
+
+```
+device: NVIDIA A100 80GB PCIe   capability 8.0   bf16_supported: True
+torch 2.8.0+cu126   transformers 5.15.1   trl 1.10.0   peft 0.20.0   bnb 0.50.1
+nf4_matmul_ok: True        ← 가장 위험한 의존성(bitsandbytes CUDA 커널) 통과
+preflight.passed: true     ← Qwen3-0.6B QLoRA 실제 학습 스텝 성공
+```
+
+### 16.1 두 경로의 차이는 노드 할당 방식 하나다
+
+| | 학습 (AML Job) | 추론 (Managed Online Endpoint) |
+|---|---|---|
+| 컴퓨트 티어 | **LowPriority 선택 가능** | **선택 불가 — 전용만** |
+| 대기→실행 | **3분** (`Queued`→`Running`) | 65분+ `Creating` 후 타임아웃 |
+| 로그 | **로컬에서 스트리밍됨** | 종료 후에도 안 나옴 |
+| 결과 | Completed | 5회 전부 실패 |
+
+테넌트 정책 `VirtualMachine_SKU_Deny` 의 유일한 예외가 `priority equals "Spot"`
+이고(§2), 매니지드 온라인 엔드포인트에는 저우선순위 옵션 자체가 없다. **§15의
+가설과 정확히 일치한다.**
+
+### 16.2 잡 로그는 노트북에서 읽힌다 — 엔드포인트 로그와 다르다
+
+`MLClient.jobs.stream()` 이 실패 원인을 그대로 뱉는다. 엔드포인트 로그가 끝까지
+withheld 였던 것과 대조적이다. **학습 디버깅은 추론 디버깅보다 비교할 수 없이 싸다.**
+
+---
+
+## 17. ⛔ `mount_outputs=True` 는 이 워크스페이스에서 반드시 실패한다
+
+`green_kettle_w1zpbvd64q` (Qwen3.8-27B, mount_outputs=True):
+
+```
+OrchestrateJobError: Service 'DATA_CAPABILITY' returned code 500:
+  data-capability.AssetMountOutputSession.Exception  target: AssetMountOutputSession:model_dir
+Failed to mount URI azureml://.../datastores/workspaceblobstore/paths/azureml/<run>/model_dir/
+```
+
+### 17.1 이것은 §0에서 뒤집힌 그 진단이 **아니다**
+
+혼동하기 쉬우므로 명시한다. 범위가 완전히 다르다.
+
+| | 틀렸던 진단(§0) | 이번에 실측된 사실(§17) |
+|---|---|---|
+| 주체 | Azure ML **서비스** | 컴퓨트 **노드**의 FUSE 마운트 세션 |
+| 주장 | 스토리지에 아예 못 간다 | 출력 마운트만 안 된다 |
+| 근거 | 없음(문서 오독) | 잡 실패 로그 |
+
+`AzureServices` 신뢰 서비스 바이패스는 컨트롤 플레인에 적용되고, **노드가 여는
+data-capability 마운트 세션에는 적용되지 않는다.** 같은 노드가 ACR 이미지는
+정상적으로 pull 했고 HF 허브에서 가중치도 받았다. 스토리지 계정 **하나**의,
+**출력 마운트 한 경로**만 막힌다.
+
+### 17.2 우회는 `./outputs`
+
+`JobSpec.mount_outputs` 의 기본값을 **False 로 뒤집었다.** `./outputs` 는
+run-history 아티팩트 서비스가 업로드하며, 이는 마운트가 아닌 별도 경로다.
+비용: 노드 할당 + 9 GB 이미지 pull 후 사망 = 약 5분 A100. 27B였다면 54 GB
+다운로드까지 마친 뒤 죽었을 것이다.
+
+---
+
+## 18. 스모크런이 27B 한 시간을 아꼈다 — `warmup_ratio`
+
+`quiet_animal_s39032rvj6` (Qwen3.5-0.8B, max_steps=10):
+
+```
+TypeError: SFTConfig.__init__() got an unexpected keyword argument 'warmup_ratio'
+  at qlora.py:218
+```
+
+거기까지 **전부 성공했다**: 모델 다운로드 → NF4 양자화 →
+`prepare_model_for_kbit_training` → LoRA 구성 → **한국어 데이터셋(`carrotai_ko_instruction`)
+로드** → 챗 템플릿 렌더링. 끊긴 곳은 마지막 한 줄이다.
+
+원인은 transformers v5의 파괴적 변경이다. `warmup_ratio` 가 제거되고
+`warmup_steps` 가 1 미만 float 을 비율로 해석하도록 바뀌었다(`huggingface/peft#2949`,
+`MIGRATION_GUIDE_V5.md`). trl 도 `max_seq_length` → `max_length` 로 옮겼다.
+이미지는 Qwen3.8 때문에 transformers 5.15.1 에 고정돼 있으므로 **이 종류의 이동은
+계속 생긴다.**
+
+`qlora.sft_config_kwargs()` 가 이름을 실제 클래스에 대해 해석하고, 대체 이름이
+있으면 바꿔 넣고, 둘 다 없으면 경고 후 버린다. 이제 이런 rename 은 로그 한 줄이다.
+
+### 18.1 규칙: 27B 전에 0.8B 를 돌려라
+
+| | 스모크(0.8B) | 실전(27B) |
+|---|---|---|
+| 가중치 | ~2 GB | ~54 GB |
+| 실패까지 | 약 6분 | 약 1시간 추정 |
+| 비용 | 약 $0.10 | 약 $1.5 |
+
+§14에서 CPU SKU 가 GPU 배포 원인을 8분에 찾아낸 것과 같은 규칙이다.
+**가장 싼 재현 수단에서 먼저 실패시켜라.**

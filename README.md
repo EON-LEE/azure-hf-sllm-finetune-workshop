@@ -324,13 +324,20 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
 - [x] 라이프사이클: `up` / `down` / `status` — **실제 테어다운 검증 완료**
 - [x] 비용 누수 탐지: 삭제된 VM 잔해 스캔 (TDD) — **실제 $41.66/월 발견·제거**
 - [x] 배포 프리플라이트: 엔드포인트 ID 권한 부족 시 2초 만에 거부 (TDD)
-- [ ] **온라인 배포 ← 권한 부여 완료, 실배포 미검증.** 엔드포인트 ID 에
-      `AcrPull` + `Storage Blob Data Reader` 를 부여했고 성공 가능성이 있는
-      첫 배포가 남아 있음. $2.160/hr 이라 실행 전 알림 필요.
-- [ ] Qwen3.8-27B QLoRA 호환성 실검증 ← **최우선 리스크**
+- [x] **학습 경로 실검증** — A100 LowPriority 에서 preflight 잡 2회 `Completed`,
+      노드 실측 `nf4_matmul_ok: True` / `transformers 5.15.1` / A100 80GB,
+      QLoRA 실제 학습 스텝 성공 (`docs/VERIFIED.md` §16)
+- [x] 잡 제출 가드: 모델이 `lora_target_modules` 를 선언 안 하면 **GPU 를 빌리기 전에**
+      거부 (TDD, `tests/test_aml_job.py`)
+- [x] 라이브러리 rename 내성: transformers v5 의 `warmup_ratio` 제거 등을
+      런타임에 해석 (TDD, `tests/test_qlora_config.py`, §18)
+- [ ] **온라인 배포 ⛔ 5회 전부 실패 — 남은 블로커는 GPU 노드 할당.**
+      `AcrPull` 문제는 해결됐고 CPU SKU 에서 이미지 pull 성공을 실증했지만
+      (§14), 같은 엔드포인트·같은 이미지로 SKU 만 A10 으로 바꾸면 65분간
+      `Creating` 에서 못 나온다(§15). 테넌트 정책이 **전용** N-series 를 막고
+      매니지드 엔드포인트에는 저우선순위 옵션이 없다는 것이 유력한 가설이다.
+      학습이 되는 이유도 같다 — 학습만 LowPriority 를 쓸 수 있다(§16.1).
 - [ ] 27B 실학습 · 튜닝 전후 벤치마크 비교
-      (로컬 PC 가 스토리지에 네트워크 차단되어 코드 스냅샷 업로드 불가,
-      `docs/VERIFIED.md` §2.2 — 학습 코드를 블롭에 미리 올려두는 방식으로 우회 예정)
 
 ## 사전 요구사항
 
