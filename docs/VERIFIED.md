@@ -1524,3 +1524,153 @@ A100 LowPriority 로 대략 2~4시간이다.
 평가를 별도 잡으로 쪼갰다면 54 GB 다운로드가 한 번 더 일어나고
 어댑터가 `workspaceblobstore` 를 거쳐야 했다 — §17 에서 실패가 증명된 경로다.
 `train && eval` 체이닝(§21.6)이 그 둘을 동시에 없앴다.
+
+---
+
+## 24. ⛔ 스토리지 — 사용자가 계속 물어본 그 문제의 정체
+
+> "스토리지 이슈가 뭔지 이해를 못했어. 디플로이가 안 되는 거야?
+> 내 로컬로 뭘 갖고 올 필요가 없잖아. 모델 웨이트나 학습 코드 추론 코드는
+> 다 블롭에 있으면 되는 거 아니야? 뭐가 문제였어?"
+
+맞는 지적이었다. 블롭에 있으면 된다. **문제는 블롭에 아무것도 넣을 수 없고,
+넣을 수 없다는 사실이 지금까지 증상으로만 보였다는 것이다.**
+
+### 24.1 한 줄 원인
+
+```
+mlwffsftstorage8cb451dd1
+  publicNetworkAccess       = Disabled
+  privateEndpointConnections = []          ← 0개
+  networkAcls.defaultAction  = Allow       ← 무의미
+  networkAcls.bypass         = AzureServices ← 무의미
+```
+
+공용 엔드포인트가 꺼져 있고 프라이빗 엔드포인트도 없다.
+`defaultAction=Allow` 는 **공용 엔드포인트가 켜져 있을 때** 누구를 들일지
+정하는 규칙이라, 엔드포인트 자체가 꺼져 있으면 아무 효과가 없다.
+이 계정은 지금 **어디에서도 접근할 수 없다** — 내 노트북도, Azure ML 컴퓨트
+노드도.
+
+### 24.2 그래서 지금까지 본 증상 전부가 이거 하나였다
+
+| 증상 | 기록 위치 |
+|---|---|
+| `code=` 클라이언트 업로드 거부 → 소스를 이미지에 굽게 됨 | §17, §21.2 |
+| `mount_outputs=True` 가 노드 셋업에서 실패 | `aml_job.py` 주석 |
+| `./outputs` 아티팩트 업로드가 조용히 0건 | 아래 |
+| 잡 출력으로 모델 등록 불가 | 아래 |
+| 배치 엔드포인트 배포 불가 | §24.5 |
+
+아티팩트 API 로 완료된 런 3개를 직접 조회했다:
+
+```
+heroic_fennel_085y2rwm3s: HTTP 200 artifacts=0
+hungry_bell_lpf45kx8kv  : HTTP 200 artifacts=0
+olden_bean_302vkc7nbz   : HTTP 200 artifacts=0
+```
+
+**학습된 어댑터는 노드 로컬 디스크에서 태어나 노드와 함께 사라진다.**
+그래서 모델 등록이 이렇게 끝난다:
+
+```
+azureml://jobs/heroic_fennel_085y2rwm3s/outputs/artifacts/paths/outputs/
+  → (NoMatchingArtifactsFoundFromJob) No artifacts matching outputs found from Job
+azureml://jobs/heroic_fennel_085y2rwm3s/outputs/default/paths/outputs/
+  → (NoMatchingOutputFoundFromJob) Job output default not found
+```
+
+### 24.3 고치려고 했고, 고칠 수 없다
+
+```bash
+az storage account update -n mlwffsftstorage8cb451dd1 -g rg-ffsft-kc \
+    --public-network-access Enabled
+# exit=0  →  publicNetworkAccess: Disabled     (그대로)
+
+az rest --method patch --url ".../storageAccounts/mlwffsftstorage8cb451dd1" \
+    --body '{"properties":{"publicNetworkAccess":"Enabled"}}'
+# HTTP 200, provisioningState: Succeeded
+#   "publicNetworkAccess": "Disabled"          (그대로)
+```
+
+ARM 이 요청을 받아들이고 성공을 반환한 뒤 **값을 바꾸지 않는다.**
+
+결정적 확인 — 아예 새 스토리지 계정을 만들어 봤다:
+
+```bash
+az storage account create -n stffsftserve01 -g rg-ffsft-kc \
+    --public-network-access Enabled ...
+# → publicNetworkAccess: Disabled
+```
+
+**명시적으로 Enabled 를 요구하며 만든 계정이 Disabled 로 태어난다.**
+(확인 후 즉시 삭제했다.)
+
+### 24.4 누가 강제하는가 — 조회되지 않는다
+
+| 확인한 것 | 결과 |
+|---|---|
+| 리소스그룹 deny assignment | **0개** |
+| 구독 스코프 정책 중 network/storage/public 관련 | 없음 |
+| 관리그룹 스코프 (Tenant Root Group) 동일 검색 | 없음 |
+| 이 계정에 걸린 비준수 정책 5건 | 전부 *audit* — "Storage accounts should use private link" 류 |
+
+audit 정책은 막지 않는다. 즉 **내 자격 증명으로 열거할 수 없는 상위 계층에서
+강제된다.** §22 의 A100 전용 쿼터 0 과 §15 의 A10 SKU 거부와 같은 성격의
+테넌트 통제로 보이며, 셋 다 코드로 넘을 수 없다.
+
+### 24.5 결론 — 온라인뿐 아니라 배치도 막혀 있다
+
+이전까지 `ffsft-deploy check` 는 배치 패턴을 `ok` 로 표시했다.
+쿼터만 봤기 때문이다. **AML 배포는 온라인이든 배치든 등록된 모델 자산을
+입력으로 받는다.** 모델 자산은 데이터스토어 안의 경로이고, 접근 가능한
+데이터스토어가 없으면 LowPriority 쿼터가 아무리 많아도 배포할 수 없다.
+
+`check_pattern` 에 데이터스토어 검사를 추가한 뒤의 실측:
+
+```
+  datastore  UNREACHABLE  mlwffsftstorage8cb451dd1 (publicNetworkAccess=Disabled, 0 private endpoints)
+
+  aks_vllm         BLOCKED   no reachable datastore: ...
+  aml_batch        BLOCKED   no reachable datastore: ...
+  aml_batch_vllm   BLOCKED   no reachable datastore: ...
+  aml_online_vllm  BLOCKED   no reachable datastore: ...
+  local_vllm       n/a       (local, no Azure quota involved)
+```
+
+**이 구독에서 서빙을 막는 것은 두 개의 독립된 벽이다.**
+
+| 벽 | 무엇을 막나 | 코드로 우회 가능? |
+|---|---|---|
+| 전용 GPU 쿼터 = 0 (§22) | 관리형 온라인 엔드포인트 | ✗ |
+| 데이터스토어 도달 불가 (§24) | 온라인·배치·AKS **전부** | ✗ |
+
+### 24.6 그럼 학습은 왜 되나
+
+**학습 잡은 스토리지를 한 번도 건드리지 않기 때문이다.**
+
+```
+소스   → 이미지에 구움 (COPY . /opt/ffsft)     — 업로드 없음
+데이터 → 노드에서 HF Hub 로 직접 다운로드       — 스토리지 무관
+가중치 → 노드에서 HF Hub 로 직접 다운로드       — 스토리지 무관
+어댑터 → 노드 로컬 디스크                       — 업로드 없음
+평가   → 같은 잡에서 그 로컬 디스크를 읽음      — 업로드 없음
+지표   → MLflow 런히스토리 (별개 서비스)        — 스토리지 무관
+```
+
+§21.6 에서 학습과 평가를 한 잡으로 묶은 것은 시간을 아끼려던 결정이었는데,
+**결과적으로 이 구독에서 파이프라인이 동작하는 유일한 이유가 됐다.**
+두 잡으로 나눴다면 두 번째 잡이 어댑터를 스토리지에서 읽어야 했고,
+그 경로는 존재하지 않는다.
+
+### 24.7 실제 해결책 (미검증 — 이 구독에서 실행하지 않음)
+
+강제를 이길 수 없으므로 **강제를 만족시키는 방향**이 유일한 길이다:
+
+1. VNet + 서브넷 생성
+2. 스토리지 계정에 **프라이빗 엔드포인트** 연결 (그러면 `Disabled` 가 정상 posture 가 된다)
+3. AML 컴퓨트를 그 VNet 에 주입
+4. 그 위에서 배치 엔드포인트 배포 — LowPriority 쿼터는 이미 있다
+
+온라인 엔드포인트는 이걸 해도 **여전히 막힌다** (§22, 전용 쿼터 0).
+이 절차는 이 문서의 다른 내용과 달리 **실행해서 확인하지 않았다.**

@@ -161,6 +161,107 @@ def _discard_probe(client, name: str) -> None:
         log.warning("probe cluster %s could not be deleted; it holds no nodes", name)
 
 
+@dataclasses.dataclass(frozen=True)
+class StoreProbe:
+    """Whether a model asset can be created at all, and why not.
+
+    Azure exposes no API that answers "can I register a model?", so this
+    reconstructs the answer from the two properties that decide it on the
+    workspace's default datastore account.
+    """
+
+    account: str
+    public_access: str
+    private_endpoints: int
+    reachable: bool
+    detail: str
+
+
+def classify_store(account: str, public_access: str, private_endpoints: int) -> StoreProbe:
+    """Decide whether a storage account is reachable by anything.
+
+    Two ways to be reachable, and they are the only two:
+
+    * the public endpoint is on -- then `networkAcls` decides who gets in, and
+      an `Allow` default action lets in the compute node and this laptop alike;
+    * the public endpoint is off but a private endpoint exists -- the designed
+      hardened posture, where traffic arrives over a private link instead.
+
+    Off with no private endpoint is not a posture, it is an outage. Measured on
+    this subscription (§24): three finished training runs each uploaded zero
+    artifacts, `mount_outputs=True` fails during node setup, and registering a
+    model from a job output returns `NoMatchingArtifactsFoundFromJob` -- all one
+    cause. An ARM `PATCH` setting `publicNetworkAccess: Enabled` returns 200 and
+    changes nothing, and a *newly created* account asked for `Enabled` comes
+    back `Disabled`, so this is enforced above the subscription and cannot be
+    fixed from here.
+
+    Anything this function cannot read reports reachable. A probe that cannot
+    see is not the same as a resource that is broken, and the expensive mistake
+    in this project has consistently been turning the former into the latter.
+    """
+    if public_access != "Disabled":
+        return StoreProbe(account, public_access, private_endpoints, True, "")
+    if private_endpoints > 0:
+        return StoreProbe(
+            account,
+            public_access,
+            private_endpoints,
+            True,
+            f"{account}: public access off, reached over {private_endpoints} private endpoint(s)",
+        )
+    detail = (
+        f"no reachable datastore: '{account}' has publicNetworkAccess=Disabled "
+        f"and 0 private endpoints, so neither this client nor the Azure ML "
+        f"compute node can open a session against it. Job outputs never upload "
+        f"(artifacts=0 on every finished run), so there is nothing to register "
+        f"as a model -- and every hosted pattern deploys a model asset. "
+        f"Fix: attach a private endpoint to the account and put the compute in "
+        f"that VNet. Turning public access back on is rejected silently by "
+        f"tenant-level enforcement."
+    )
+    return StoreProbe(account, public_access, private_endpoints, False, detail)
+
+
+def probe_model_store(target) -> StoreProbe:
+    """Read the live public-access posture of the workspace's default datastore.
+
+    Free and read-only: two ARM GETs, no resource is created or touched.
+    """
+    import requests
+    from azure.identity import AzureCliCredential
+
+    cred = AzureCliCredential()
+    tok = cred.get_token("https://management.azure.com/.default").token
+    head = {"Authorization": f"Bearer {tok}"}
+    root = (
+        f"https://management.azure.com/subscriptions/{target.subscription_id}"
+        f"/resourceGroups/{target.resource_group}/providers"
+    )
+    try:
+        ws = requests.get(
+            f"{root}/Microsoft.MachineLearningServices/workspaces/"
+            f"{target.workspace_name}?api-version=2024-10-01",
+            headers=head,
+            timeout=60,
+        ).json()
+        account_id = ws["properties"]["storageAccount"]
+        account = account_id.rsplit("/", 1)[-1]
+        sa = requests.get(
+            f"https://management.azure.com{account_id}?api-version=2023-05-01",
+            headers=head,
+            timeout=60,
+        ).json()["properties"]
+        return classify_store(
+            account,
+            sa.get("publicNetworkAccess", "Unknown"),
+            len(sa.get("privateEndpointConnections") or []),
+        )
+    except Exception as exc:  # noqa: BLE001 - an unreadable probe must not block
+        log.warning("could not read the datastore posture: %s", exc)
+        return classify_store("unknown", "Unknown", 0)
+
+
 def check_pattern(
     pattern_key: str,
     subscription_id: str,
@@ -168,13 +269,20 @@ def check_pattern(
     *,
     sku: str | None = None,
     instances: int = 1,
+    store: StoreProbe | None = None,
 ) -> tuple[ServingSpec, str | None]:
     """Return the spec plus a human-readable blocker, or None if it can deploy."""
     spec = get_serving_registry().get(pattern_key)
+    if store is not None and spec.requires_model_asset and not store.reachable:
+        # Checked before quota on purpose: no model asset means no deployment of
+        # any kind, so leading with a quota number would imply that raising the
+        # quota would help.
+        return spec, store.detail
     if spec.allows_low_priority or not spec.quota_family:
         return spec, None
     available = read_dedicated_quota(subscription_id, location, spec.quota_family)
     return spec, spec.blocked_reason(available, instances=instances, sku=sku)
+
 
 
 def startup_grace_for(params_b: float | None) -> int:
@@ -538,15 +646,24 @@ def cmd_check(args) -> int:
     registry = get_serving_registry()
     print(f"subscription {target.subscription_id} / {target.location}\n")
 
+    store = probe_model_store(target)
+    if not store.reachable:
+        print(f"  datastore  UNREACHABLE  {store.account} "
+              f"(publicNetworkAccess={store.public_access}, "
+              f"{store.private_endpoints} private endpoints)\n")
+
     client = get_ml_client(target) if args.probe else None
     width = max(len(s.key) for s in registry)
     for index, spec in enumerate(sorted(registry, key=lambda s: s.key)):
         if spec.surface is Surface.LOCAL:
             print(f"  {spec.key:<{width}}  n/a       (local, no Azure quota involved)")
             continue
-        _, blocker = check_pattern(spec.key, target.subscription_id, target.location)
+        _, blocker = check_pattern(
+            spec.key, target.subscription_id, target.location, store=store
+        )
         if blocker:
-            print(f"  {spec.key:<{width}}  BLOCKED   {blocker.split('. ')[1]}")
+            summary = blocker if len(blocker) <= 110 else blocker[:107].rstrip() + "..."
+            print(f"  {spec.key:<{width}}  BLOCKED   {summary}")
             continue
 
         if client is not None:

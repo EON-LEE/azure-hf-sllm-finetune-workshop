@@ -146,6 +146,22 @@ class ServingSpec(BaseModel):
         return self.surface in {Surface.AML_ONLINE_ENDPOINT, Surface.KUBERNETES, Surface.LOCAL}
 
     @property
+    def requires_model_asset(self) -> bool:
+        """Does deploying this pattern mean registering a model in Azure ML?
+
+        Every hosted surface does. An Azure ML deployment -- online or batch --
+        names a model asset as its input, and a model asset is a path in a
+        datastore. Only the local pattern escapes it, because it reads weights
+        straight off the Hub onto the machine running the container.
+
+        This matters because it is a *second*, independent way for a pattern to
+        be undeployable, and it is invisible to every quota API. A subscription
+        can hold plenty of LowPriority quota and still be unable to create a
+        model asset, if no datastore is reachable to hold one.
+        """
+        return self.surface is not Surface.LOCAL
+
+    @property
     def load_testable(self) -> bool:
         """Only an OpenAI-compatible interactive endpoint can be load-tested."""
         return self.is_interactive and self.openai_compatible
