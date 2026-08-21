@@ -915,6 +915,9 @@ UserContainerStart: Waiting            ← CPU라 vLLM 기동 불가 (예상된 
 
 ### 15.1 쿼터는 있는데 왜 안 되나 (가설, 미검증)
 
+> **⚠️ 이 절의 가설은 §22 에서 반증됐다.** 정책 거부가 아니라
+> **전용 A100 쿼터가 0** 인 것이 원인이다. 아래는 기록으로만 남긴다.
+
 ```
 StandardNVADSA10v5Family  limit=72   ← 쿼터는 충분
 ```
@@ -985,6 +988,10 @@ preflight.passed: true     ← Qwen3-0.6B QLoRA 실제 학습 스텝 성공
 테넌트 정책 `VirtualMachine_SKU_Deny` 의 유일한 예외가 `priority equals "Spot"`
 이고(§2), 매니지드 온라인 엔드포인트에는 저우선순위 옵션 자체가 없다. **§15의
 가설과 정확히 일치한다.**
+
+> **⚠️ 위 문단의 정책 설명은 §22 에서 반증됐다.** 그런 정책 할당은 존재하지
+> 않는다. 표의 관찰(저우선순위 선택 가능 여부가 갈림길이라는 것)은 옳았지만
+> 이유가 틀렸다 — 진짜 이유는 **전용 A100 쿼터 0** 이다.
 
 ### 16.2 잡 로그는 노트북에서 읽힌다 — 엔드포인트 로그와 다르다
 
@@ -1327,3 +1334,110 @@ tuned 가 동일 조건으로 측정되며, 두 모델이 순차 적재돼도 OO
 그 경로가 §17 에서 실패가 증명된 바로 그 경로다. 그래서 `build_command` 가
 `train && eval` 로 **한 노드 안에서** 이어 붙인다. 부수 효과로 54 GB
 다운로드도 한 번만 일어난다.
+
+---
+
+## 22. ✅ 서빙 블로커 확정 — **전용 A100 쿼터가 0 이다**
+
+§15.1 과 §16.1 은 "테넌트 정책이 전용 N-series 를 거부한다"는 **가설**을
+적어두고 미검증으로 남겨뒀다. 이제 확정한다. **가설은 틀렸고, 진짜 원인은
+훨씬 단순했다.**
+
+### 22.1 정책은 원인이 아니다 — 조회로 반증
+
+```
+$ az policy assignment list --scope /subscriptions/<sub> --disable-scope-strict-match
+Defender for Containers provisioning Policy extension for Arc-enabled ...
+Defender for Containers provisioning Azure Policy Addon for Kubernetes ...
+Defender for Containers provisioning ARC k8s Enabled
+ASC OpenSourceRelationalDatabasesProtection
+ASC DataProtection
+Defender for SQL Servers on Machines provisioning
+```
+
+전부 Defender/ASC 프로비저닝 정책이다. **`VirtualMachine_SKU_Deny` 는 구독
+어디에도 할당돼 있지 않다.** 관리그룹(Tenant Root Group)까지 조회해도 없고,
+`policy state` 에 SKU/Deny 관련 비준수 레코드도 없다.
+
+§2 에서 본 그 문자열은 **정책 목록이 아니라 오류 메시지**였다. 정황을
+원인으로 승격시킨 것이 잘못이었다.
+
+### 22.2 진짜 원인 — API 가 직접 말해준다
+
+전용 A100 클러스터 생성을 시도했다.
+
+```
+ClusterMinNodesExceedCoreQuota:
+"The specified subscription has a Standard NCADSA100v4 family vCPU quota of 0
+ and cannot accomodate for at least 1 requested managed compute nodes which
+ maps to 24 vCPUs."
+```
+
+**전용(dedicated) A100 쿼터가 문자 그대로 0 이다.**
+
+쿼터 API 가 같은 말을 한다.
+
+```
+$ az rest ... /providers/Microsoft.MachineLearningServices/locations/koreacentral/quotas
+   0  Standard NCADSA100v4 Family Cluster Dedicated vCPUs   ← 학습에 쓰는 그 패밀리
+  72  Standard NVADSA10v5 Family Cluster Dedicated vCPUs
+ 100  Standard NC Family Cluster Dedicated vCPUs            ← K80. 27B 불가
+```
+
+그리고 저우선순위 쪽은 넉넉하다.
+
+```
+TotalLowPriorityCores        24 / 300     ← 24 는 지금 도는 27B 잡
+standardNCADSA100v4Family    24 / -1      ← 제한 없음
+TotalDedicatedCores           0 / 1072
+```
+
+### 22.3 통제 실험 — SKU 와 tier 를 각각 바꿔봤다
+
+| SKU | tier | 결과 |
+|---|---|---|
+| `Standard_NC24ads_A100_v4` | LowPriority | ✅ 생성됨 (= 지금 쓰는 `gpu-a100-lp`) |
+| `Standard_NC24ads_A100_v4` | **Dedicated** | ❌ `ClusterMinNodesExceedCoreQuota` (**쿼터 0**) |
+| `Standard_NV18ads_A10_v5` | Dedicated | ❌ `InvalidPropertyValue` |
+| `Standard_NV18ads_A10_v5` | LowPriority | ❌ `InvalidPropertyValue` |
+
+A10 은 **tier 와 무관하게** 거부된다. 흥미로운 건 `compute.list_sizes()` 에는
+16개 GPU SKU 가 A10 6종을 포함해 전부 나온다는 점이다 —
+**카탈로그에 보이는 것과 실제로 만들 수 있는 것은 다르다.**
+`InvalidPropertyValue` 가 돌려주는 "지원 VM 목록"은 D/DS/F/NC/NCv2/NCv3/ND/NV
+같은 **구형 SKU 뿐**이라 더 헷갈린다 — 우리가 지금 잘 쓰고 있는
+`NC24ads_A100_v4` 조차 그 목록에 없다. **저 메시지는 믿을 게 못 된다.**
+
+### 22.4 결론 — 왜 매니지드 온라인 엔드포인트가 불가능한가
+
+세 사실을 곱하면 끝이다.
+
+1. 매니지드 온라인 엔드포인트는 **항상 전용**이다. 저우선순위 옵션이 없다.
+2. 이 구독에서 만들 수 있는 유일한 최신 GPU 패밀리는 `NCADSA100v4` 인데,
+   그 **전용 쿼터가 0** 이다.
+3. 쿼터가 72 로 남아있는 `NVADSA10v5` 는 tier 를 뭘 주든 생성이 거부된다.
+
+⇒ **이 구독·리전에서 GPU 매니지드 온라인 엔드포인트는 만들 수 없다.**
+권한도, 이미지도, 스토리지도, vLLM 설정도 원인이 아니었다. §15 에서 A10
+엔드포인트가 65~114분 `Creating` 에 머물다 죽은 것도 이걸로 설명된다 —
+엔드포인트는 SKU 를 받아줬지만 노드는 영원히 오지 않았다.
+
+### 22.5 그래서 학습은 왜 되나
+
+`gpu-a100-lp` 가 **LowPriority** 이기 때문이다. 저우선순위 A100 코어는
+300개가 열려 있고 패밀리 제한은 아예 없다(`-1`). 학습은 잡이라 저우선순위를
+고를 수 있고, 추론(매니지드 엔드포인트)은 고를 수 없다. **차이는 그 한 줄이다.**
+
+### 22.6 열어둘 길
+
+쿼터 0 은 코드로 못 넘는다. 남은 선택지는 셋이고, 전부 이 저장소의 코드가
+이미 지원하거나 작은 변경으로 닿는다.
+
+| 선택지 | 필요한 것 | 비고 |
+|---|---|---|
+| **전용 A100 쿼터 상향 요청** | 지원 티켓 | 가장 곧은 길. 승인되면 `ffsft-lifecycle up` 이 그대로 동작한다 |
+| **배치 엔드포인트** | 코드 소폭 추가 | `gpu-a100-lp` 를 그대로 쓴다 — **저우선순위라 쿼터 문제가 없다** |
+| **AKS 연결** | AKS 클러스터 | GPU 노드풀도 같은 전용 쿼터를 먹는다. 같은 벽일 가능성이 높다 |
+
+실시간 온라인 서빙이 목표라면 **1번 외에는 우회로가 없다.**
+처리량 위주라면 **2번이 오늘 당장 가능하다.**
