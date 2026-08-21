@@ -10,90 +10,94 @@
 
 ---
 
-## 0. ⛔ 가장 중요한 결론 — 이 워크스페이스에서는 Managed Online Endpoint가 뜰 수 없다
+## 0. ⛔ 가장 중요한 결론 — 실패 원인은 스토리지가 아니라 **엔드포인트 자신의 권한**이었다
 
-**두 번의 배포(`ffsft-smoke`, `ffsft-smoke2`)가 모두 실패했고, 원인은 같다.**
-모델도, 이미지도, 프로브도 아니었다. **워크스페이스 기본 스토리지 계정이
-어디에서도 접근 불가능**하기 때문이다.
+> **정정 기록.** 이 절은 원래 "워크스페이스 스토리지 계정이 접근 불가라서
+> 온라인 배포가 불가능하다"고 단정했다. **그 결론은 틀렸다.** 사용자가
+> "모델 웨이트나 코드가 블롭에 있으면 되는 거 아니냐"고 되물어서 다시 확인했고,
+> 그 과정에서 뒤집혔다. 틀린 진단을 지우지 않고 남기는 이유는 §0.4에 있다.
 
-ARM에서 직접 읽은 값:
+**두 번의 배포(`ffsft-smoke`, `ffsft-smoke2`)가 모두 실패했고 원인은 같다.**
+모델도, 이미지도, 프로브도, 스토리지도 아니었다. **온라인 엔드포인트에 붙는
+시스템 할당 관리 ID가 이미지를 pull 할 권한이 없었다.**
+
+갓 만든 엔드포인트 셸에서 직접 측정한 값(배포를 붙이지 않으면 컴퓨트 요금 0):
 
 ```
-storageAccount: mlwffsftstorage8cb451dd1
-  publicNetworkAccess         Disabled     ← 공용 경로 없음
-  networkAcls.defaultAction   Allow        ← 무의미 (PNA가 우선)
-  networkAcls.ipRules         []
-  networkAcls.virtualNetworkRules []
-  privateEndpointConnections  []           ← 프라이빗 경로도 없음
-  allowSharedKeyAccess        false
+endpoint ffsft-acrtest  MI = 87ec28b5-bcc6-43f7-abd8-617abdfc13e6
+  roles on acrffsftkc            -> NONE      ← 9.15 GB 이미지를 읽을 권한 없음
+  roles on mlwffsftstorage8cb...  -> NONE
 workspace mlw-ffsft
-  managedNetwork.isolationMode  Disabled   ← 컴퓨트가 VNet 안에 있지도 않음
-resourceGroup rg-ffsft-kc
-  privateEndpoints            []
+  properties.containerRegistry   -> ""        ← 연결된 ACR이 없다
 ```
 
-공용 경로도 없고 프라이빗 경로도 없다. Managed Online Endpoint 배포는 이 계정을
-통해 아티팩트를 스테이징하므로, 롤아웃은 **Azure 자체 타임아웃까지 재시도**한다.
-관측된 증상이 정확히 그것이다:
+마지막 줄이 핵심이다. Azure는 **워크스페이스에 연결된 ACR**에 대해서만 엔드포인트
+ID에 pull 권한을 자동으로 준다. 이 워크스페이스는 연결된 ACR이 없으므로
+`acrffsftkc`는 **고객 소유 레지스트리**이고, 아무도 권한을 주지 않는다.
+
+### 0.1 모든 증상이 이 사실 하나에서 나온다
 
 | 관측 | 설명 |
 |---|---|
-| `Creating` 상태로 68분+ | 재시도 루프 |
-| 컨테이너 로그 없음 | Azure는 **터미널 상태 전까지 로그를 주지 않는다** |
-| App Insights `traces` 비어 있음 | 컨테이너가 **아예 시작조차 못 했다** |
-| 엔드포인트는 `Succeeded` | 컨트롤 플레인만 성공 |
-| 첫 배포는 `InternalServerError` | Azure의 범용 실패 코드 |
+| `Creating` 상태로 68분+ | 이미지 pull 재시도 루프 |
+| 컨테이너 로그 없음 | 컨테이너가 **생성조차 되지 않았다** |
+| App Insights `traces` 비어 있음 | 실행된 코드가 0줄 |
+| 엔드포인트는 `Succeeded` | 컨트롤 플레인은 정상 (ID 발급까지만 함) |
+| 최종 `InternalServerError` | 플랫폼 타임아웃 시 범용 코드 |
 
-**즉 느린 실패가 자기 실패 원인을 가린다.** 그래서 같은 원인에 두 번 당했다.
+**느린 실패가 자기 원인을 가린다.** 그래서 같은 원인에 두 번 당했다.
 
-### 0.1 인플레이스 수정은 불가능하다 — 정책이 되돌린다
+### 0.2 왜 스토리지 진단이 틀렸나 — 다시 밟지 말 것
+
+| 내가 근거로 삼은 것 | 실제 |
+|---|---|
+| `publicNetworkAccess: Disabled` | 맞다. 하지만 **`networkAcls.bypass: AzureServices`** 를 안 읽었다 |
+| "PNA가 ACL보다 우선한다" | **거짓.** MS 문서: 신뢰할 수 있는 서비스 접근이 *"takes the highest precedence over other network access restrictions"* |
+| "AML이 스토리지에 못 간다" | AML(`Microsoft.MachineLearningServices`)은 **신뢰 서비스 목록에 있다** |
+| `allowSharedKeyAccess: false` | 데이터스토어가 `credentialsType: None`(ID 기반)이라 **무관** |
+| 워크스페이스 MI 권한 | `Storage Blob Data Contributor` + `AcrPull` **이미 있었다** |
+
+출처: `learn.microsoft.com/azure/storage/common/storage-network-security-limitations`
+
+**진짜인 스토리지 사실은 하나뿐이다.** 내 로컬 PC가 네트워크로 차단된다
+(`az storage container list --auth-mode login` → `blocked by network rules`).
+이건 §2.2의 **로컬에서의 코드 스냅샷 업로드** 실패만 설명하고, Azure 내부
+동작과는 아무 관련이 없다.
+
+### 0.3 얻은 교훈 (코드 주석과 테스트로 고정)
+
+> **워크스페이스 ID가 어떤 권한을 갖고 있다는 사실은, 엔드포인트 ID가 그
+> 권한을 갖고 있는지에 대해 아무것도 말해주지 않는다.**
+
+두 principal은 완전히 다른 객체다. 나는 워크스페이스만 확인하고 "권한은 문제
+없다"고 결론지었다.
+
+### 0.4 그래서 코드로 막았다
+
+`src/ffsft/deploy/identity.py` 의 `identity_blocker()` 가 `deploy_online()`
+앞에서 ARM 4회 읽기로 판정한다. **90분 침묵 + $2.16/hr 대신 2초 만에** 중단하고
+바로 실행 가능한 명령을 출력한다:
 
 ```
-$ az storage account update --public-network-access Enabled ...
-rc= 0                       ← 성공을 반환하고
-after: { "pna": "Disabled" }  ← 값은 그대로다
+az role assignment create --assignee 87ec28b5-... \
+  --role AcrPull --scope /subscriptions/.../registries/acrffsftkc
 ```
 
-이건 Azure Policy의 `modify` 이펙트가 되돌리는 전형적인 신호다.
-**옵션 1(공용 접근 재활성화)은 이 구독에서 불가능하다.**
+`storage_blocker()` 도 함께 고쳤다 — 이제 `networkAcls.bypass` 를 읽고,
+`AzureServices` 가 있으면 통과시킨다. 고치지 않았다면 이 구독의 **모든** 배포를
+존재하지도 않는 이유로 영구히 거부했을 것이다.
 
-### 0.2 이미 §2.2와 같은 원인이었다
+**틀린 진단을 지우지 않는 이유:** 원래 `storage_blocker()` 의 독스트링은
+*"`networkAcls`는 일부러 보지 않는다"* 고 자신 있게 못 박아 두었다. 그 자신감이
+바로 다음 사람이 확인하지 않게 만드는 장치였다. 확신에 찬 문장이 틀렸을 때
+가장 비싸다는 게 이 절의 진짜 교훈이다.
 
-§2.2의 "코드 스냅샷 업로드가 막힌다"(학습 잡 제출 불가)와 **같은 스토리지
-계정, 같은 설정**이다. 증상이 전혀 달라 보여서 같은 문제로 인식하지 못했다.
+### 0.5 상태
 
-### 0.3 그래서 코드로 막았다
-
-`src/ffsft/deploy/preflight.py` 의 `storage_blocker()` 가 `deploy_online()`
-맨 앞에서 ARM 2회 읽기로 이걸 판정한다. **90분 침묵 + $2.16/hr 대신 2초 만에**
-아래를 출력하고 중단한다(`force=True`로 무시 가능):
-
-```
-workspace storage account 'mlwffsftstorage8cb451dd1' is unreachable:
-publicNetworkAccess=Disabled
-  there is no private endpoint and no public path, so nothing can reach it.
-...
-Fix it one of two ways, then retry:
-  1. re-enable public access on the storage account, or
-  2. create a private endpoint for it and set the workspace's managedNetwork
-     isolation mode to AllowInternetOutbound.
-```
-
-판정에서 `networkAcls`는 **일부러 보지 않는다.** 이 계정은
-`defaultAction: Allow` 인데도 모든 연결을 거부한다 — ACL을 읽는 순간 잘못된
-결론으로 새기 딱 좋다.
-
-### 0.4 남은 선택지
-
-옵션 1이 정책으로 막혔으므로 실제 경로는 하나뿐이다:
-
-- **옵션 2**: 스토리지 계정에 **프라이빗 엔드포인트 생성** +
-  워크스페이스 `managedNetwork.isolationMode` 를 `AllowInternetOutbound` 로 변경.
-  → **새 Azure 리소스 생성이 필요하므로 사용자 확인 후 진행.**
-
-> 주의(테스트로 고정됨): 프라이빗 엔드포인트만 만들고 워크스페이스를 격리
-> 모드로 바꾸지 않으면 **여전히 안 된다.** 배포를 실행하는 컴퓨트가 그 네트워크
-> 위에 있지 않기 때문이다. 겉보기엔 고쳐진 것처럼 보이는 게 함정이다.
+- ✅ `ffsft-acrtest` 엔드포인트 ID에 `AcrPull` + `Storage Blob Data Reader` 부여 완료
+- ⏳ **아직 실제 배포로 검증되지 않았다.** 성공 가능성이 있는 첫 배포이며,
+  $2.160/hr 이 드는 실험이다.
+- ❌ 프라이빗 엔드포인트 + managed VNet 은 **필요 없다.** (틀린 진단의 산물)
 
 ---
 
@@ -685,7 +689,12 @@ TOTAL $/month: 41.66
 
 ---
 
-## 12. 두 번째 배포도 동일하게 사망 — 근본 원인 최종 확정 ✅
+## 12. 두 번째 배포도 동일하게 사망 — signature 확정 ✅
+
+> **정정.** 이 절은 원래 제목이 "근본 원인 최종 확정"이었고, 실패가 스토리지
+> 진단을 확증한다고 적혀 있었다. 확증한 것은 **실패의 signature**(로그 없음 /
+> traces 없음 / 범용 에러)이지 원인이 아니다. 같은 signature는 **이미지 pull
+> 실패**에서도 똑같이 나오며, 실제 원인은 그쪽이었다. §0 참조.
 
 `ffsft-smoke2` 배포 명령이 **1시간 54분** 만에 최종 실패로 돌아왔다.
 
@@ -697,9 +706,7 @@ Code: InternalServerError
 Message: Internal error. Please see troubleshooting guide ... #error-internalservererror
 ```
 
-§0 이 예측한 signature 와 정확히 일치한다:
-
-| 예측 | 실제 |
+| 예측한 signature | 실제 |
 |---|---|
 | 한 시간 넘게 `Creating` | **1시간 54분** |
 | 컨테이너 로그 없음 | 종료 시점까지 계속 withheld |
@@ -708,10 +715,15 @@ Message: Internal error. Please see troubleshooting guide ... #error-internalser
 
 이로써 **0.6B 모델 / 중립 플래그 / 수정된 엔트리포인트** 조합으로도 실패한다는 게
 확정됐다. 모델도, 이미지 ENV 도, 엔트리포인트도 원인이 아니다.
-**스토리지 계정에 네트워크 경로가 없다**는 단 하나의 사실이 전부 설명한다.
+**컨테이너가 시작조차 못 했다**는 사실이 전부 설명하며, 그 이유는 스토리지가
+아니라 **엔드포인트 ID에 `AcrPull` 이 없어서 이미지를 못 읽은 것**이다(§0).
+
+여기서 배운 방법론: **signature 일치는 원인 확정이 아니다.** "예측대로
+실패했다"는 관측은 같은 signature를 내는 다른 원인을 전혀 배제하지 못한다.
+나는 이걸 확증으로 읽고 커밋까지 했다.
 
 그리고 이 실패에 **$2.160/시 × 1.9시간 ≈ $4.1** 이 청구됐다.
-프리플라이트(§0.3)는 이걸 **2초**에 거부한다. 이 한 번의 실패만으로도 값을 한다.
+프리플라이트(§0.4)는 이걸 **2초**에 거부한다. 이 한 번의 실패만으로도 값을 한다.
 
 ---
 

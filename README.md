@@ -238,17 +238,18 @@ tests/              # 167+ 테스트 (Azure 호출 없음, 무과금)
 
 ## 엔드포인트 올리기 / 내리기
 
-> **⛔ 이 구독에서는 지금 온라인 배포가 막혀 있습니다.**
-> 워크스페이스 스토리지 계정이 `publicNetworkAccess: Disabled` 인데
-> IP 규칙도, VNet 규칙도, 프라이빗 엔드포인트도 없습니다. **들어갈 길이 아예 없습니다.**
-> Managed Online Deployment 는 이 계정을 통해 아티팩트를 스테이징하므로
-> 컨테이너가 시작조차 못 하고, 롤아웃이 한 시간 넘게 `Creating` 에 머물다 실패합니다.
-> `az storage account update --public-network-access Enabled` 는 **rc=0 을 반환하고도
-> 값이 그대로 `Disabled`** 입니다 — Azure Policy 의 `modify` 효과라 제자리에서는 못 고칩니다.
-> 전체 진단은 `docs/VERIFIED.md` §0.
+> **⚠️ 온라인 배포 전에 엔드포인트 ID 권한부터 확인하세요.**
+> 이 워크스페이스는 **연결된 ACR 이 없습니다**(`properties.containerRegistry` 가 빈 값).
+> 그래서 `acrffsftkc` 는 고객 소유 레지스트리이고, **온라인 엔드포인트의 시스템 할당
+> 관리 ID 에 `AcrPull` 이 자동으로 부여되지 않습니다.** 권한 없이 배포하면 컨테이너가
+> 이미지를 못 받아 시작조차 못 하고, 롤아웃이 **한 시간 넘게 `Creating`** 에 머물다
+> **로그 한 줄 없이** `InternalServerError` 로 죽습니다. 이 함정에 두 번 당했습니다
+> (약 $8). 워크스페이스 ID 에 권한이 있다는 사실은 **엔드포인트 ID 와 무관합니다** —
+> 서로 다른 principal 입니다. 전체 진단은 `docs/VERIFIED.md` §0.
 >
-> 그래서 `ffsft-lifecycle up` 은 **배포를 시도하기 전에 이 상태를 먼저 검사하고 거부**합니다
-> (`src/ffsft/deploy/preflight.py`). 한 시간을 기다린 뒤 실패하는 대신 **2초 만에** 알려줍니다.
+> 그래서 `ffsft-lifecycle up` 은 **배포 전에 엔드포인트 ID 의 실제 role 을 읽어
+> 검사하고 거부**합니다(`src/ffsft/deploy/identity.py`). 한 시간을 기다린 뒤 실패하는
+> 대신 **2초 만에** 그대로 붙여 넣을 수 있는 `az role assignment create` 명령을 줍니다.
 
 Managed Online Endpoint 는 **scale-to-zero 가 없어서 idle 상태에서도 24시간 과금**됩니다.
 실험이 끝나면 반드시 내려야 하고, 나중에 같은 명령으로 다시 올릴 수 있습니다.
@@ -322,13 +323,14 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
 - [x] 부하 테스트: TTFT / TPOT / knee 측정기 — **모의 서버로 측정 정확도 실검증**
 - [x] 라이프사이클: `up` / `down` / `status` — **실제 테어다운 검증 완료**
 - [x] 비용 누수 탐지: 삭제된 VM 잔해 스캔 (TDD) — **실제 $41.66/월 발견·제거**
-- [x] 배포 프리플라이트: 스토리지 도달 불가 시 2초 만에 거부 (TDD)
-- [ ] **온라인 배포 ← 구독 차단 상태.** 워크스페이스 스토리지에 네트워크 경로가 없음
-      (위 ⛔ 참고). 뚫으려면 **프라이빗 엔드포인트 생성 +
-      `managedNetwork.isolationMode: AllowInternetOutbound`** 가 필요하고,
-      이건 Azure 리소스를 새로 만드는 일이라 **승인 필요**.
+- [x] 배포 프리플라이트: 엔드포인트 ID 권한 부족 시 2초 만에 거부 (TDD)
+- [ ] **온라인 배포 ← 권한 부여 완료, 실배포 미검증.** 엔드포인트 ID 에
+      `AcrPull` + `Storage Blob Data Reader` 를 부여했고 성공 가능성이 있는
+      첫 배포가 남아 있음. $2.160/hr 이라 실행 전 알림 필요.
 - [ ] Qwen3.8-27B QLoRA 호환성 실검증 ← **최우선 리스크**
-- [ ] 27B 실학습 · 튜닝 전후 벤치마크 비교 (같은 스토리지 이슈로 막힘, `docs/VERIFIED.md` §2.2)
+- [ ] 27B 실학습 · 튜닝 전후 벤치마크 비교
+      (로컬 PC 가 스토리지에 네트워크 차단되어 코드 스냅샷 업로드 불가,
+      `docs/VERIFIED.md` §2.2 — 학습 코드를 블롭에 미리 올려두는 방식으로 우회 예정)
 
 ## 사전 요구사항
 
