@@ -188,22 +188,11 @@ def publish(report: dict) -> None:
     instead, which is reachable with an ordinary ARM token, so that is the
     channel a self-test should report through.
     """
-    try:
-        import mlflow
-    except ImportError:
-        print("\n(mlflow unavailable; report is stdout-only)")
-        return
+    from ffsft.train.report import publish as _publish
 
-    try:
-        for key, value in report.items():
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                mlflow.set_tag(f"preflight.{key}", str(value))
-            else:
-                mlflow.log_metric(f"preflight.{key}", float(value))
-        mlflow.set_tag("preflight.passed", "true")
+    if _publish(report, prefix="preflight."):
+        _publish({"passed": True}, prefix="preflight.")
         print("\npublished report to MLflow")
-    except Exception as exc:  # noqa: BLE001 - reporting must never fail the run
-        print(f"\n(mlflow publish failed: {type(exc).__name__}: {exc})")
 
 
 def main() -> int:

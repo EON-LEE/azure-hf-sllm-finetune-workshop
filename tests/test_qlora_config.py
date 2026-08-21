@@ -21,7 +21,12 @@ from __future__ import annotations
 
 import pytest
 
-from ffsft.train.qlora import QLoRAConfig, accepted_fields, sft_config_kwargs
+from ffsft.train.qlora import (
+    QLoRAConfig,
+    accepted_fields,
+    sft_config_kwargs,
+    sft_trainer_kwargs,
+)
 
 # The names that matter, as each generation spells them.
 V4_FIELDS = {
@@ -121,3 +126,44 @@ def test_accepted_fields_falls_back_to_the_signature_for_a_plain_class():
     assert {"a", "b"} <= fields
     assert "self" not in fields
     assert "kwargs" not in fields
+
+
+# --------------------------------------------------------------------------
+# SFTTrainer construction
+# --------------------------------------------------------------------------
+
+
+def test_the_tokenizer_is_handed_over_explicitly():
+    """Omitting it makes trl load a processor and call the run multimodal.
+
+    trl picks its vision/language path purely from the type of
+    `processing_class`: a `ProcessorMixin` sets `_is_vlm = True`, a
+    `PreTrainedTokenizerBase` sets it False. Leave the argument out and trl
+    resolves one itself with `AutoProcessor.from_pretrained`, which for
+    Qwen3.5/3.6/3.8 succeeds -- those checkpoints really are multimodal
+    (`Qwen3_5ForConditionalGeneration`, with vision and video tokens).
+
+    But this recipe loads them through `AutoModelForCausalLM`, which resolves
+    to `Qwen3_5ForCausalLM` and drops the vision tower, exactly as text-only
+    Korean SFT wants. So trl decides it is training a VLM while holding a
+    language model, and dies in `_patch_chunked_ce_lm_head` reaching for
+    `model.config.text_config` on a `Qwen3_5TextConfig` that has no such
+    attribute. Observed on honest_coat_ydlrntjjrn.
+
+    Passing the tokenizer says what we are actually doing, and costs nothing.
+    """
+    sentinel = object()
+    kwargs = sft_trainer_kwargs(
+        model="m", args="a", dataset="d", peft_config="p", tokenizer=sentinel
+    )
+    assert kwargs["processing_class"] is sentinel
+
+
+def test_trainer_kwargs_carry_the_pieces_the_trainer_needs():
+    kwargs = sft_trainer_kwargs(
+        model="m", args="a", dataset="d", peft_config="p", tokenizer="t"
+    )
+    assert kwargs["model"] == "m"
+    assert kwargs["args"] == "a"
+    assert kwargs["train_dataset"] == "d"
+    assert kwargs["peft_config"] == "p"

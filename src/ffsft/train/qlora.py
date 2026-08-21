@@ -244,6 +244,33 @@ def sft_config_kwargs(cfg: QLoRAConfig, accepted: Collection[str]) -> dict[str, 
     return resolved
 
 
+def sft_trainer_kwargs(
+    *, model: Any, args: Any, dataset: Any, peft_config: Any, tokenizer: Any
+) -> dict[str, Any]:
+    """Assemble the SFTTrainer arguments, saying explicitly that this is text.
+
+    `processing_class` is not optional in practice. trl decides between its
+    vision and language paths purely from that argument's type -- a
+    `ProcessorMixin` sets `_is_vlm = True`, a `PreTrainedTokenizerBase` sets it
+    False -- and if the argument is absent it resolves one itself with
+    `AutoProcessor.from_pretrained`. For Qwen3.5/3.6/3.8 that call succeeds,
+    because those checkpoints genuinely are multimodal.
+
+    This recipe loads them through `AutoModelForCausalLM`, which resolves to
+    `Qwen3_5ForCausalLM` and drops the vision tower -- the right thing for
+    text-only Korean SFT. So trl ends up convinced it is training a VLM while
+    holding a language model, and fails in `_patch_chunked_ce_lm_head` on
+    `model.config.text_config`, which a `Qwen3_5TextConfig` does not have.
+    """
+    return {
+        "model": model,
+        "args": args,
+        "train_dataset": dataset,
+        "peft_config": peft_config,
+        "processing_class": tokenizer,
+    }
+
+
 def report_memory(tag: str) -> dict[str, float]:
     import torch
 
@@ -270,6 +297,7 @@ def train(cfg: QLoRAConfig, allow_default_targets: bool = False) -> dict:
 
     from ffsft.data.korean import load_sft_dataset
     from ffsft.models import get_model
+    from ffsft.train.report import publish
 
     spec = get_model(cfg.model_key)
     if not spec.hf_id:
@@ -296,10 +324,13 @@ def train(cfg: QLoRAConfig, allow_default_targets: bool = False) -> dict:
     sft_config = SFTConfig(**sft_config_kwargs(cfg, accepted_fields(SFTConfig)))
 
     trainer = SFTTrainer(
-        model=model,
-        args=sft_config,
-        train_dataset=dataset,
-        peft_config=peft_config,
+        **sft_trainer_kwargs(
+            model=model,
+            args=sft_config,
+            dataset=dataset,
+            peft_config=peft_config,
+            tokenizer=tokenizer,
+        )
     )
 
     trainable = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
@@ -307,6 +338,22 @@ def train(cfg: QLoRAConfig, allow_default_targets: bool = False) -> dict:
     log.info(
         "trainable params: %.1f M / %.2f B (%.3f%%)",
         trainable / 1e6, total / 1e9, trainable / total * 100,
+    )
+
+    # Report before training, not only after. The cluster is low-priority, so the
+    # node can be preempted mid-run; without this a preempted job is
+    # indistinguishable from one that never loaded the model.
+    publish(
+        {
+            "model": spec.key,
+            "hf_id": spec.hf_id,
+            "mix": cfg.mix,
+            "examples": len(dataset),
+            "trainable_params_m": round(trainable / 1e6, 2),
+            "trainable_pct": round(trainable / total * 100, 4),
+            "vram_after_load_gb": round(load_stats.get("allocated_gb", 0.0), 2),
+        },
+        prefix="setup.",
     )
 
     result = trainer.train()
@@ -336,6 +383,9 @@ def train(cfg: QLoRAConfig, allow_default_targets: bool = False) -> dict:
     with open(os.path.join(cfg.output_dir, "run_summary.json"), "w") as fh:
         json.dump(summary, fh, indent=2, ensure_ascii=False)
     log.info("summary: %s", json.dumps(summary, ensure_ascii=False))
+    # run_summary.json lands in blob storage, which answers AuthorizationFailure
+    # to the submitter on this workspace. MLflow is the copy anyone can read.
+    publish(summary, prefix="train.")
     return summary
 
 
