@@ -33,27 +33,30 @@ from .registry import BenchmarkSpec, get_benchmark_registry
 log = logging.getLogger("ffsft.eval")
 
 
-def hflm_kwargs(
-    hf_id: str,
-    adapter: str | None,
-    *,
-    load_in_4bit: bool,
-    dtype: str,
-    max_length: int,
-    batch_size: str | int,
-) -> dict:
-    """Everything `HFLM(...)` needs, as primitives.
+def model_load_kwargs(*, load_in_4bit: bool, dtype: str) -> dict:
+    """Everything `AutoModelForCausalLM.from_pretrained` needs, as primitives.
 
-    4-bit is requested as `quantization_config`, never as `load_in_4bit`.
-    lm-eval forwards unknown keys straight into `AutoModel.from_pretrained`;
-    transformers v4 intercepted `load_in_4bit` and built the config itself, and
-    v5 removed that shim, so the flag now falls through to the model
-    constructor and raises `TypeError`. `quantization_config` is the spelling
-    that survived, and it is passed through untouched.
+    The model is built here rather than by lm-eval because lm-eval's loader
+    has no supported route to on-the-fly bitsandbytes quantization. `HFLM`
+    does accept a `quantization_config`, but that name is reserved for the one
+    it reads off the *checkpoint's own* config (for repos that ship
+    pre-quantized) and forwards itself -- passing our own collides:
 
-    The value stays a plain dict here rather than a `BitsAndBytesConfig` so the
-    mapping is testable without transformers installed -- it lives in the
-    training image, not in the dev environment. `run_harness` materialises it.
+        TypeError: HFLM._create_model() got multiple values for keyword
+                   argument 'quantization_config'
+
+    and the older spelling, `load_in_4bit`, is a transformers v4 shim that v5
+    deleted, so it falls through into the model constructor and raises there
+    instead. Both were real job failures (`ashy_hamster_9lvxsm0y2s`,
+    `hungry_bird_hlyr5cwzl8`).
+
+    Placement and attention kernel mirror `train/qlora.py` exactly. That pair
+    is what ran 27B at a 28.19 GB peak on `olden_bean_302vkc7nbz`; evaluating
+    through a different one would measure a model that was never trained.
+
+    The quantization value stays a plain dict so the mapping is testable
+    without transformers, which lives in the training image rather than the
+    dev environment. `load_for_eval` materialises it.
 
     Evaluating the tuned model in the *same* 4-bit quantization it was trained
     in is deliberate: a bf16 evaluation of a QLoRA adapter measures a
@@ -61,13 +64,10 @@ def hflm_kwargs(
     the same order as the fine-tuning delta we are trying to detect.
     """
     kwargs: dict = {
-        "pretrained": hf_id,
         "dtype": dtype,
-        "max_length": max_length,
-        "batch_size": batch_size,
+        "device_map": {"": 0},
+        "attn_implementation": "sdpa",
     }
-    if adapter:
-        kwargs["peft"] = adapter
     if load_in_4bit:
         kwargs["quantization_config"] = {
             "load_in_4bit": True,
@@ -78,13 +78,30 @@ def hflm_kwargs(
     return kwargs
 
 
-def describe_model_args(kwargs: dict) -> str:
-    """Render `hflm_kwargs` output the way lm-eval's `--model_args` reads.
+def harness_kwargs(*, max_length: int, batch_size: str | int) -> dict:
+    """Everything `HFLM(...)` needs once the model and tokenizer already exist.
 
-    Derived from the kwargs rather than built alongside them. The previous code
-    logged a string advertising `bnb_4bit_quant_type=nf4` while constructing
-    HFLM with a bare `load_in_4bit=True`, so the log described a configuration
-    that was not the one running.
+    Deliberately names neither a checkpoint nor an adapter. `HFLM.__init__`
+    only calls `_create_model` when `pretrained` is a `str`; handed an object
+    it just assigns `self._model` and reads `self._config` off it. Keeping a
+    repo id out of here is what holds that branch, and with it the whole class
+    of loader-signature breakage.
+
+    `backend` is pinned rather than inferred: left at `default`, HFLM guesses
+    causal vs seq2seq from the architecture name, and it would be guessing
+    about a `PeftModel` wrapping a checkpoint whose class is a
+    ConditionalGeneration.
+    """
+    return {"backend": "causal", "max_length": max_length, "batch_size": batch_size}
+
+
+def describe_model_args(kwargs: dict) -> str:
+    """Render kwargs the way lm-eval's `--model_args` string reads.
+
+    Derived from the kwargs rather than built alongside them. The original
+    code logged a string advertising `bnb_4bit_quant_type=nf4` while
+    constructing HFLM with a bare `load_in_4bit=True`, so the log described a
+    configuration that was not the one running.
     """
     parts = []
     for key, value in kwargs.items():
@@ -123,14 +140,49 @@ def build_model_args(
     max_length: int,
     batch_size: str | int,
 ) -> str:
-    """Backwards-compatible wrapper: the `--model_args` string for a CLI call."""
-    return describe_model_args(
-        hflm_kwargs(
-            hf_id, adapter,
-            load_in_4bit=load_in_4bit, dtype=dtype,
-            max_length=max_length, batch_size=batch_size,
-        )
-    )
+    """One log line describing the model actually being scored."""
+    described: dict = {"pretrained": hf_id}
+    if adapter:
+        described["peft"] = adapter
+    described.update(model_load_kwargs(load_in_4bit=load_in_4bit, dtype=dtype))
+    described.update(harness_kwargs(max_length=max_length, batch_size=batch_size))
+    return describe_model_args(described)
+
+
+def load_for_eval(
+    hf_id: str,
+    adapter: str | None,
+    *,
+    load_in_4bit: bool,
+    dtype: str,
+):
+    """Build the model and tokenizer to hand HFLM, adapter already applied.
+
+    `PeftModel.from_pretrained` is used directly instead of lm-eval's `peft=`
+    argument, because that argument is only honoured inside `_create_model` --
+    the code path being avoided.
+    """
+    import torch
+    import transformers
+
+    kwargs = model_load_kwargs(load_in_4bit=load_in_4bit, dtype=dtype)
+    # The dicts carry dtype *names* so the mapping stays importable without
+    # torch; only here is there a torch to resolve them against.
+    kwargs["dtype"] = getattr(torch, kwargs["dtype"])
+    quant = kwargs.get("quantization_config")
+    if quant is not None:
+        quant = dict(quant)
+        quant["bnb_4bit_compute_dtype"] = getattr(torch, quant["bnb_4bit_compute_dtype"])
+        kwargs["quantization_config"] = transformers.BitsAndBytesConfig(**quant)
+
+    model = transformers.AutoModelForCausalLM.from_pretrained(hf_id, **kwargs)
+    if adapter:
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(model, adapter)
+    model.eval()
+    tokenizer = transformers.AutoTokenizer.from_pretrained(hf_id)
+    return model, tokenizer
 
 
 def run_harness(
@@ -150,28 +202,29 @@ def run_harness(
     from lm_eval import simple_evaluate
     from lm_eval.models.huggingface import HFLM
 
-    kwargs = hflm_kwargs(
-        hf_id, adapter,
-        load_in_4bit=load_in_4bit, dtype=dtype, max_length=max_length, batch_size=batch_size,
+    log.info(
+        "lm-eval | tasks=%s | %s",
+        ",".join(tasks),
+        build_model_args(
+            hf_id, adapter,
+            load_in_4bit=load_in_4bit, dtype=dtype,
+            max_length=max_length, batch_size=batch_size,
+        ),
     )
-    log.info("lm-eval | tasks=%s | %s", ",".join(tasks), describe_model_args(kwargs))
 
-    quant = kwargs.get("quantization_config")
-    if quant is not None:
-        from transformers import BitsAndBytesConfig
-
-        quant = dict(quant)
-        # The dict carries a dtype *name* so the mapping stays importable
-        # without torch; only here is there a torch to resolve it against.
-        quant["bnb_4bit_compute_dtype"] = getattr(torch, quant["bnb_4bit_compute_dtype"])
-        kwargs["quantization_config"] = BitsAndBytesConfig(**quant)
-
-    lm = HFLM(**kwargs)
+    model, tokenizer = load_for_eval(
+        hf_id, adapter, load_in_4bit=load_in_4bit, dtype=dtype
+    )
+    lm = HFLM(
+        pretrained=model,
+        tokenizer=tokenizer,
+        **harness_kwargs(max_length=max_length, batch_size=batch_size),
+    )
     out = simple_evaluate(model=lm, tasks=tasks, num_fewshot=num_fewshot, limit=limit)
 
     # Free the weights before the next model loads, or the pair evaluation OOMs
     # on any card smaller than 2x the model.
-    del lm
+    del lm, model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     return out or {}
