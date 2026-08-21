@@ -79,13 +79,18 @@ class JobSpec:
     #: hybrid-attention model the defaults adapt a small minority of layers and
     #: train without any error -- see `qlora.resolve_target_modules`.
     allow_default_lora_targets: bool = False
-    #: Mount `uri_folder` outputs on the node. Turning this off is not a
-    #: micro-optimisation: the mount is performed by the node against
-    #: `workspaceblobstore`, so on a workspace whose storage account has public
-    #: network access disabled and no private endpoint it fails before the user
-    #: command ever starts, with "Failed to mount URI ... at mount point". A job
-    #: that only needs to report through stdout should not pay that.
-    mount_outputs: bool = True
+    #: Mount `uri_folder` outputs on the node. OFF by default, and that default
+    #: is load-bearing rather than a preference: the mount is a FUSE session the
+    #: *node* opens against `workspaceblobstore`, and it is not covered by the
+    #: `AzureServices` trusted-service bypass that lets the Azure ML control
+    #: plane reach the same account. On a workspace whose storage account has
+    #: public network access disabled and no private endpoint it fails with
+    #: `data-capability.AssetMountOutputSession.Exception`, inside the
+    #: lifecycler, *before* the user command starts -- so the run pays for node
+    #: allocation and a 9 GB image pull and then trains nothing. Writing to
+    #: `./outputs` instead is uploaded by the run-history artifact service,
+    #: which is a separate code path that mounts nothing.
+    mount_outputs: bool = False
 
 
 def ensure_environment(client: MLClient) -> str:

@@ -81,6 +81,26 @@ def test_output_dir_follows_whether_the_output_is_mounted():
     assert "--output-dir ./outputs" in build_command(JobSpec(mount_outputs=False))
 
 
+def test_outputs_are_not_mounted_by_default():
+    """Mounting a `uri_folder` output is the single most likely way to lose a run.
+
+    The mount is a FUSE session the *node* opens against `workspaceblobstore`,
+    and it is not covered by the `AzureServices` trusted-service bypass that
+    lets the Azure ML control plane through. On a workspace whose storage
+    account has public network access disabled and no private endpoint it fails
+    with `data-capability.AssetMountOutputSession.Exception`, and it fails in
+    the lifecycler *before* the user command starts -- so a 27B run dies after
+    paying for node allocation and the image pull, having trained nothing.
+
+    Writing to `./outputs` instead costs nothing: Azure ML uploads that
+    directory through the run-history artifact service, which is a different
+    code path with its own auth and does not mount anything. Verified on
+    green_kettle_w1zpbvd64q, which failed this way in about five minutes.
+    """
+    assert JobSpec().mount_outputs is False
+    assert "--output-dir ./outputs" in build_command(JobSpec())
+
+
 def test_default_lora_targets_opt_in_reaches_the_node():
     """The registry declares LoRA targets for 2 of 16 models.
 

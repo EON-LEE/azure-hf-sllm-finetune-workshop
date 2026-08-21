@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -166,6 +167,83 @@ def build_peft_config(spec: ModelSpec, cfg: QLoRAConfig, allow_default: bool = F
     )
 
 
+#: Constructor arguments that moved between library generations, as
+#: `preferred -> fallback`. transformers v5 removed `warmup_ratio` in favour of
+#: a `warmup_steps` that reads a float below 1 as a ratio, and trl renamed
+#: `max_seq_length` to `max_length`. Both renames are pure: the value carries
+#: over unchanged, so this is a lookup and not a conversion.
+_SFT_ARG_FALLBACKS = {
+    "warmup_ratio": "warmup_steps",
+    "max_length": "max_seq_length",
+}
+
+
+def accepted_fields(cls: type) -> set[str]:
+    """Every keyword `cls` will accept, whether it is a dataclass or not."""
+    import dataclasses
+    import inspect
+
+    if dataclasses.is_dataclass(cls):
+        return {f.name for f in dataclasses.fields(cls)}
+    return {
+        name
+        for name, param in inspect.signature(cls.__init__).parameters.items()
+        if name != "self"
+        and param.kind
+        not in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
+    }
+
+
+def sft_config_kwargs(cfg: QLoRAConfig, accepted: Collection[str]) -> dict[str, Any]:
+    """Map the recipe's knobs onto the argument names this trl actually has.
+
+    The image tracks bleeding-edge model libraries because Qwen3.8 requires
+    them, and those libraries rename constructor arguments between releases.
+    Passing a name that moved raises `TypeError` inside `SFTConfig.__init__`,
+    which on Azure ML happens after the node, the image and 54 GB of weights
+    have all been paid for. Resolving the name against the real class costs
+    nothing and turns that into a warning.
+    """
+    accepted = set(accepted)
+    desired: dict[str, Any] = {
+        "output_dir": cfg.output_dir,
+        "per_device_train_batch_size": cfg.per_device_batch_size,
+        "gradient_accumulation_steps": cfg.grad_accumulation,
+        "gradient_checkpointing": cfg.gradient_checkpointing,
+        "gradient_checkpointing_kwargs": {"use_reentrant": False},
+        "learning_rate": cfg.learning_rate,
+        "warmup_ratio": cfg.warmup_ratio,
+        "num_train_epochs": cfg.num_train_epochs,
+        "max_steps": cfg.max_steps,
+        "logging_steps": cfg.logging_steps,
+        "save_steps": cfg.save_steps,
+        "save_total_limit": 2,
+        "bf16": cfg.bf16,
+        "optim": "paged_adamw_8bit",
+        "lr_scheduler_type": "cosine",
+        "max_length": cfg.max_seq_length,
+        "seed": cfg.seed,
+        "report_to": [],
+    }
+
+    resolved: dict[str, Any] = {}
+    for name, value in desired.items():
+        if name in accepted:
+            resolved[name] = value
+            continue
+        fallback = _SFT_ARG_FALLBACKS.get(name)
+        if fallback and fallback in accepted:
+            log.info("SFTConfig has no '%s'; using '%s' instead", name, fallback)
+            resolved[fallback] = value
+            continue
+        log.warning(
+            "SFTConfig accepts neither '%s' nor its known alternatives; "
+            "dropping it and using the library default",
+            name,
+        )
+    return resolved
+
+
 def report_memory(tag: str) -> dict[str, float]:
     import torch
 
@@ -215,26 +293,7 @@ def train(cfg: QLoRAConfig, allow_default_targets: bool = False) -> dict:
     )
     log.info("dataset: %d examples", len(dataset))
 
-    sft_config = SFTConfig(
-        output_dir=cfg.output_dir,
-        per_device_train_batch_size=cfg.per_device_batch_size,
-        gradient_accumulation_steps=cfg.grad_accumulation,
-        gradient_checkpointing=cfg.gradient_checkpointing,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
-        learning_rate=cfg.learning_rate,
-        warmup_ratio=cfg.warmup_ratio,
-        num_train_epochs=cfg.num_train_epochs,
-        max_steps=cfg.max_steps,
-        logging_steps=cfg.logging_steps,
-        save_steps=cfg.save_steps,
-        save_total_limit=2,
-        bf16=cfg.bf16,
-        optim="paged_adamw_8bit",
-        lr_scheduler_type="cosine",
-        max_length=cfg.max_seq_length,
-        seed=cfg.seed,
-        report_to=[],
-    )
+    sft_config = SFTConfig(**sft_config_kwargs(cfg, accepted_fields(SFTConfig)))
 
     trainer = SFTTrainer(
         model=model,
