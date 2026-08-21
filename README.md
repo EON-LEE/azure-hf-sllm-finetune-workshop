@@ -331,6 +331,11 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
       `train_loss 1.601` / 10 스텝 / 276초 / 학습 파라미터 **1.06%** /
       VRAM 피크 2.79 GB (§19). 성공 런의 stdout 은 블롭 권한 때문에 읽을 수
       없으므로 수치는 전부 `ffsft/train/report.py` → MLflow 로 회수했다.
+- [x] **Qwen3.8-27B 실학습 `Completed`** — `olden_bean_302vkc7nbz`,
+      `ko_commercial_safe` 340건 / 30 스텝 / **41.6분** / `train_loss 1.2637` /
+      **VRAM 피크 28.19 GB** / 학습 파라미터 **116.73M (0.79%)** (§20).
+      하이브리드 Gated-DeltaNet 48개 층에도 NF4 QLoRA 가 동작함을 실증했고,
+      **40 GB GPU 면 충분하다**는 실측 근거를 얻었다(20 GB 는 불가).
 - [x] 잡 제출 가드: 모델이 `lora_target_modules` 를 선언 안 하면 **GPU 를 빌리기 전에**
       거부 (TDD, `tests/test_aml_job.py`)
 - [x] 라이브러리 rename 내성: transformers v5 의 `warmup_ratio` 제거 등을

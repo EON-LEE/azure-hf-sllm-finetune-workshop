@@ -1114,3 +1114,70 @@ uv run --with mlflow --with azureml-mlflow python -c "..."   # MlflowClient.get_
 `warmup_ratio` (§18) → trl `_is_vlm` 오판 → 그리고 blob 판독 불가.
 셋 다 0.8B 스모크런이 5분 안에 드러냈다. 27B 로 먼저 갔다면 같은 정보에
 회당 1시간과 $1.5 를 냈을 것이다.
+
+---
+
+## 20. Qwen3.8-27B 실학습 완료 — `olden_bean_302vkc7nbz`
+
+목표 모델 그 자체를, 한국어 상업이용 안전 믹스로, 실제로 학습시켰다.
+
+```
+model  Qwen/Qwen3.8-27B      mix  ko_commercial_safe (340 examples)
+rank   16                    seq  1024      batch 1 x grad_accum 16
+image  ffsft-train:6         SKU  Standard_NC24ads_A100_v4 (LowPriority)
+STATUS Completed
+```
+
+| 키 | 값 |
+|---|---|
+| `train.train_loss` | **1.2637** |
+| `train.steps` | 30 |
+| `train.wall_seconds` | **2496.4** (41.6분) |
+| `setup.vram_after_load_gb` | **17.67** |
+| `train.vram_peak_gb` | **28.19** |
+| `train.vram_card_gb` | 85.1 |
+| `train.trainable_params_m` | **116.73** |
+| `train.trainable_pct` | 0.7867 |
+
+### 20.1 하이브리드 어텐션에 QLoRA 가 먹히는가 — 먹힌다
+
+미해결 질문이었다. Qwen3.8-27B 는 64개 층 중 **48개가 Gated DeltaNet** 이고,
+bitsandbytes NF4 가 그 층들을 정상 양자화·역전파할지 검증된 적이 없었다.
+
+- 27B(26.9B 파라미터)가 **17.67 GB** 로 적재됐다. bf16이면 약 54 GB 다.
+  → NF4 양자화가 실제로 적용됐다.
+- 손실이 1.2637 로 **수렴했다**. 양자화된 층을 통과하는 그래디언트가 살아있다.
+
+### 20.2 `lora_target_modules` 를 명시한 것이 116.73M 로 증명된다
+
+`configs/models.yaml` 은 13종 모듈을 명시한다 —
+`q/k/v/o_proj` (full-attention 16개 층) + `in_proj_{qkv,z,b,a}` / `out_proj`
+(linear-attention 48개 층) + `gate/up/down_proj` (전 층).
+
+PEFT 기본값이었다면 `q/k/v/o_proj` 만 잡아 **48개 층이 조용히 학습에서 빠진다.**
+학습 파라미터가 116.73M (전체의 0.79%) 나온 것이 명시 목록이 실제로 걸렸다는
+증거다. §9의 `probe_architecture.py` 결과가 런타임에서 확인됐다.
+
+### 20.3 "A100 이 너무 큰 거 아니야? 20GB 로는 안 되나" — 실측 답
+
+| GPU | VRAM | 이 설정(27B/rank16/seq1024)에서 |
+|---|---|---|
+| T4 / A10 (일부) | 16 GB | ✗ 적재조차 안 됨 (17.67 GB 필요) |
+| **RTX 4090 / A10 24GB** | 24 GB | ✗ 적재는 되나 피크 28.19 GB 에서 OOM |
+| **A100 40GB / L40S 48GB** | 40–48 GB | ✓ **여유 있음** — 실측 피크의 1.4배 |
+| A100 80GB (실사용) | 85.1 GB | ✓ 3배 여유. 과했다 |
+
+**20 GB 로는 안 된다. 40 GB 면 된다.** 다만 80GB 를 쓴 이유는 남아있다 —
+이 구독에서 실제로 할당에 성공한 유일한 GPU SKU 가 `NC24ads_A100_v4` 이고,
+LowPriority 라 유휴 비용이 0 이다(§16.1). seq 를 2048 로 올리거나 rank 를
+키우면 피크는 다시 올라간다.
+
+### 20.4 처리량과 비용
+
+```
+2496.4초 / 30스텝 = 83.2초/스텝  (유효 배치 16, seq 1024)
+                  = 5.2초/샘플
+```
+
+전체 잡은 큐→완료 약 65분(54 GB 다운로드 + 양자화 + 학습).
+A100 LowPriority 기준 **약 $1**. 같은 정보를 전용 A100 으로 얻었다면 약 $5 였다.
