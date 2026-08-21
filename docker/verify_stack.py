@@ -19,6 +19,7 @@ of failure from a 20-minute GPU round trip to a build step.
 
 from __future__ import annotations
 
+import inspect
 import sys
 
 import accelerate
@@ -34,7 +35,7 @@ import trl
 # been paid for and the model trained. `ffsft.eval.run` imports HFLM lazily
 # inside a function, which is good for the unit tests and useless as a build
 # check -- so import the same symbol here.
-from lm_eval.models.huggingface import HFLM  # noqa: F401
+from lm_eval.models.huggingface import HFLM
 from peft import LoraConfig, prepare_model_for_kbit_training  # noqa: F401
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig  # noqa: F401
 from trl import SFTConfig, SFTTrainer  # noqa: F401
@@ -58,3 +59,36 @@ print("python", sys.version.split()[0])
 print("torch", torch.__version__, "cuda", torch.version.cuda)
 for module in (transformers, accelerate, peft, trl, bitsandbytes, datasets):
     print(module.__name__, module.__version__)
+
+# Three GPU jobs died in HFLM's constructor before the evaluator ever scored a
+# token: `load_in_4bit` (a transformers v4 shim v5 deleted), then
+# `quantization_config` twice (a name HFLM derives from the checkpoint's own
+# config and passes itself, so ours arrived as a duplicate). Each cost an image
+# build plus a training run to discover, because the evaluator only runs after
+# training succeeds.
+#
+# `ffsft.eval.run` now builds the model itself and hands HFLM the object, which
+# skips `_create_model` entirely. That only holds while these parameter names
+# mean what they mean here, so assert the contract at build time -- it is free,
+# offline, and catches the whole class of breakage in the layer that introduced
+# it.
+_hflm_params = inspect.signature(HFLM.__init__).parameters
+for _name in ("pretrained", "backend", "tokenizer", "max_length", "batch_size"):
+    if _name not in _hflm_params:
+        raise SystemExit(
+            f"lm_eval HFLM no longer accepts `{_name}`; ffsft.eval.run.harness_kwargs "
+            "and load_for_eval need updating before this image is usable"
+        )
+if "quantization_config" in _hflm_params:
+    raise SystemExit(
+        "lm_eval HFLM now takes `quantization_config` directly. ffsft.eval.run "
+        "quantises the model itself to work around its absence -- reconcile the two "
+        "before something passes it twice again."
+    )
+_pretrained = str(_hflm_params["pretrained"].annotation)
+if "PreTrainedModel" not in _pretrained:
+    raise SystemExit(
+        f"lm_eval HFLM `pretrained` is now {_pretrained}; it no longer takes a "
+        "preloaded model, so ffsft.eval.run cannot bypass its loader"
+    )
+print("lm_eval HFLM accepts a preloaded model")
