@@ -25,6 +25,7 @@ import dataclasses
 import logging
 import os
 import re
+import time
 from typing import TYPE_CHECKING
 
 from .registry import get_serving_registry
@@ -270,10 +271,18 @@ def check_pattern(
     sku: str | None = None,
     instances: int = 1,
     store: StoreProbe | None = None,
+    from_hub: bool = False,
 ) -> tuple[ServingSpec, str | None]:
-    """Return the spec plus a human-readable blocker, or None if it can deploy."""
+    """Return the spec plus a human-readable blocker, or None if it can deploy.
+
+    `from_hub` declares that the weights will come from the Hugging Face Hub at
+    container start. For a pattern whose server resolves its own model that
+    takes the datastore out of the picture entirely, so the storage check is
+    skipped -- see `ServingSpec.can_serve_from_hub`.
+    """
     spec = get_serving_registry().get(pattern_key)
-    if store is not None and spec.requires_model_asset and not store.reachable:
+    needs_store = spec.requires_model_asset and not (from_hub and spec.can_serve_from_hub)
+    if store is not None and needs_store and not store.reachable:
         # Checked before quota on purpose: no model asset means no deployment of
         # any kind, so leading with a quota number would imply that raising the
         # quota would help.
@@ -450,6 +459,7 @@ def deploy_online(
         target.location,
         sku=sku,
         instances=instance_count,
+        from_hub=bool(hf_model),
     )
     if blocker and not force:
         raise RuntimeError(blocker)
@@ -460,17 +470,15 @@ def deploy_online(
     # starts. Two endpoints were lost to a permissions gap that produces no
     # logs at all: the endpoint's *own* managed identity had no AcrPull on the
     # image registry, so the container never started and Azure could only
-    # report a generic error an hour later. Checking it costs four ARM reads.
-    from .identity import acr_id_for_image, identity_blocker, read_identity_grants
+    # report a generic error an hour later.
+    #
+    # That check used to run *here*, and it was useless: the endpoint -- and so
+    # the identity -- does not exist yet at this point, the ARM read 404s, and
+    # the preflight returns "nothing known" precisely on a first deployment,
+    # which is the one case where the grant is guaranteed to be missing. It now
+    # runs after the endpoint is created, below. Creating an endpoint is free;
+    # only a deployment allocates a GPU.
     from .preflight import read_storage_reachability, storage_blocker
-
-    acr_id = acr_id_for_image(SERVE_IMAGE, target.subscription_id, target.resource_group)
-    grants = read_identity_grants(target, endpoint_name, acr_id) if acr_id else None
-    identity_issue = identity_blocker(grants) if grants else None
-    if identity_issue and not force:
-        raise RuntimeError(identity_issue)
-    if identity_issue:
-        log.warning("deploying despite: %s", identity_issue)
 
     reachability = read_storage_reachability(target)
     storage_issue = storage_blocker(reachability) if reachability else None
@@ -486,6 +494,46 @@ def deploy_online(
     client.online_endpoints.begin_create_or_update(
         ManagedOnlineEndpoint(name=endpoint_name, auth_mode="key")
     ).result()
+
+    # Now the identity exists and can be checked -- and fixed. Azure wires up
+    # AcrPull automatically only for the workspace-linked registry; this
+    # workspace has none, so a customer registry needs an explicit assignment
+    # that nothing else creates. Measured cost of skipping it: ~10 minutes of
+    # provisioning followed by
+    #   (BadArgument) Endpoint identity does not have pull permission
+    from .identity import (
+        acr_id_for_image,
+        ensure_acr_pull,
+        identity_blocker,
+        read_identity_grants,
+    )
+
+    acr_id = acr_id_for_image(SERVE_IMAGE, target.subscription_id, target.resource_group)
+    if acr_id:
+        principal = getattr(
+            getattr(client.online_endpoints.get(name=endpoint_name), "identity", None),
+            "principal_id",
+            None,
+        )
+        result = ensure_acr_pull(acr_id, principal)
+        if result.granted:
+            # RBAC is eventually consistent; the image pull happens minutes from
+            # now, but a fresh assignment can still be invisible to the data
+            # plane for a short while.
+            log.info("granted AcrPull to the endpoint identity; waiting 60s to propagate")
+            time.sleep(60)
+        elif result.error:
+            log.warning(
+                "could not grant AcrPull automatically (%s).\nRun this yourself:\n%s",
+                result.error, result.manual_fix,
+            )
+
+        grants = read_identity_grants(target, endpoint_name, acr_id)
+        identity_issue = identity_blocker(grants) if grants else None
+        if identity_issue and not force:
+            raise RuntimeError(identity_issue)
+        if identity_issue:
+            log.warning("deploying despite: %s", identity_issue)
 
     # Azure refuses to update a deployment whose first provisioning failed:
     #   "Specified deployment [blue] failed during initial provisioning and is
@@ -661,6 +709,18 @@ def cmd_check(args) -> int:
         _, blocker = check_pattern(
             spec.key, target.subscription_id, target.location, store=store
         )
+        if blocker and spec.can_serve_from_hub and not store.reachable:
+            # The datastore is dark, but this server resolves its own weights.
+            # Re-ask without the storage constraint before calling it blocked --
+            # ffsft-a10 deployed exactly this way while storage stayed dark.
+            _, hub_blocker = check_pattern(
+                spec.key, target.subscription_id, target.location,
+                store=store, from_hub=True,
+            )
+            if hub_blocker is None:
+                print(f"  {spec.key:<{width}}  ok        via --hf-model "
+                      "(no model asset, storage not involved)")
+                continue
         if blocker:
             summary = blocker if len(blocker) <= 110 else blocker[:107].rstrip() + "..."
             print(f"  {spec.key:<{width}}  BLOCKED   {summary}")
@@ -698,7 +758,7 @@ def cmd_check(args) -> int:
     return 0
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="Deploy a tuned model to an Azure ML endpoint")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -713,10 +773,21 @@ def main() -> int:
         "deploy-online", help="Managed online endpoint (needs dedicated quota)."
     )
     online.add_argument("--endpoint", default="ffsft-online")
-    online.add_argument("--model-uri", required=True, help="e.g. azureml:qwen3-ko:1")
+    online.add_argument(
+        "--model-uri", default=None,
+        help="A registered Azure ML model, e.g. azureml:qwen3-ko:1. Mutually "
+             "exclusive with --hf-model.",
+    )
+    online.add_argument(
+        "--hf-model", default=None,
+        help="A Hugging Face repo id, e.g. Qwen/Qwen3.5-0.8B. vLLM downloads the "
+             "weights at container start, so this path needs no model asset and "
+             "no reachable workspace storage account (see VERIFIED.md section 24).",
+    )
     online.add_argument("--sku", default=None)
     online.add_argument("--instance-count", type=int, default=1)
     online.add_argument("--max-model-len", type=int, default=4096)
+    online.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     online.add_argument("--force", action="store_true", help="Ignore the quota precheck.")
 
     batch = sub.add_parser("deploy-batch", help="Batch endpoint on the LowPriority cluster.")
@@ -726,7 +797,12 @@ def main() -> int:
     batch.add_argument("--instance-count", type=int, default=1)
     batch.add_argument("--mini-batch-size", type=int, default=8)
 
-    args = ap.parse_args()
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = build_parser()
+    args = ap.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)-5s %(name)s | %(message)s"
     )
@@ -734,9 +810,14 @@ def main() -> int:
     if args.cmd == "check":
         return cmd_check(args)
     if args.cmd == "deploy-online":
+        # Exactly one weight source. Neither leaves vLLM with nothing to serve;
+        # both is a contradiction the deployment would resolve silently.
+        if bool(args.model_uri) == bool(args.hf_model):
+            ap.error("deploy-online needs exactly one of --model-uri or --hf-model")
         deploy_online(
-            args.endpoint, args.model_uri, sku=args.sku,
+            args.endpoint, args.model_uri, hf_model=args.hf_model, sku=args.sku,
             instance_count=args.instance_count, max_model_len=args.max_model_len,
+            gpu_memory_utilization=args.gpu_memory_utilization,
             force=args.force,
         )
         return 0

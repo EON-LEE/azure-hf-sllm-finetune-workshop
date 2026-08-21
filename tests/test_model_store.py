@@ -109,3 +109,62 @@ def test_local_pattern_ignores_the_store():
     store = classify_store(ACCOUNT, "Disabled", 0)
     _, blocker = check_pattern("local_vllm", "sub", "koreacentral", store=store)
     assert blocker is None
+
+
+# --- The Hub escape hatch -------------------------------------------------
+# Section 24 found the workspace storage account unreachable and concluded every
+# hosted pattern was blocked. That was too strong. A vLLM online deployment can
+# be handed a Hugging Face repo id instead of a model asset, and then it never
+# touches a datastore at all -- which is exactly how ffsft-a10 deployed on an
+# A10 while the storage account was still dark.
+
+DEAD_STORE = dict(
+    account="mlwffsftstorage8cb451dd1",
+    public_access="Disabled",
+    private_endpoints=0,
+    reachable=False,
+    detail="datastore UNREACHABLE: publicNetworkAccess=Disabled with 0 private endpoints",
+)
+
+
+def _dead():
+    from ffsft.deploy.endpoint import StoreProbe
+
+    return StoreProbe(**DEAD_STORE)
+
+
+def test_online_vllm_can_serve_from_hub():
+    from ffsft.deploy.endpoint import get_serving_registry
+
+    assert get_serving_registry().get("aml_online_vllm").can_serve_from_hub is True
+
+
+def test_batch_cannot_serve_from_hub():
+    """A batch deployment names a model asset; there is no --model flag to swap."""
+    from ffsft.deploy.endpoint import get_serving_registry
+
+    assert get_serving_registry().get("aml_batch").can_serve_from_hub is False
+
+
+def test_from_hub_clears_the_store_blocker_for_online(monkeypatch):
+    from ffsft.deploy import endpoint as ep
+
+    monkeypatch.setattr(ep, "read_dedicated_quota", lambda *a, **k: 9999)
+    _, blocked = ep.check_pattern(
+        "aml_online_vllm", "sub", "koreacentral", store=_dead()
+    )
+    assert blocked is not None and "unreachable" in blocked.lower()
+    _, unblocked = ep.check_pattern(
+        "aml_online_vllm", "sub", "koreacentral", store=_dead(), from_hub=True
+    )
+    assert unblocked is None, f"Hub path must not be storage-blocked, got: {unblocked}"
+
+
+def test_from_hub_does_not_rescue_batch(monkeypatch):
+    from ffsft.deploy import endpoint as ep
+
+    monkeypatch.setattr(ep, "read_dedicated_quota", lambda *a, **k: 9999)
+    _, blocked = ep.check_pattern(
+        "aml_batch", "sub", "koreacentral", store=_dead(), from_hub=True
+    )
+    assert blocked is not None, "batch has no Hub path; it must stay blocked"

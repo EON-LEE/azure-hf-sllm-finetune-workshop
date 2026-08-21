@@ -244,3 +244,130 @@ def acr_id_for_image(image: str, subscription_id: str, resource_group: str) -> s
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.ContainerRegistry/registries/{registry}"
     )
+
+
+#: ARM GUID for AcrPull, needed to *create* an assignment (the read path maps
+#: GUIDs to names; the write path needs the GUID back).
+ACR_PULL_ROLE_GUID = "7f951dda-4ed3-4680-a7ca-43fe172d538d"
+
+#: Roles that already imply pull rights, so re-granting would be noise.
+_PULL_EQUIVALENT = {ACR_PULL, "Owner", "Contributor"}
+
+
+@dataclass
+class GrantResult:
+    """What `ensure_acr_pull` actually did, so the caller can report honestly."""
+
+    granted: bool = False
+    already_had: bool = False
+    error: str | None = None
+    manual_fix: str | None = None
+
+
+class ArmRoleAuth:
+    """The ARM role-assignment API, narrowed to the two calls needed here."""
+
+    def __init__(self, credential=None):
+        self._credential = credential
+
+    def _headers(self):
+        from azure.identity import DefaultAzureCredential
+
+        cred = self._credential or DefaultAzureCredential()
+        token = cred.get_token("https://management.azure.com/.default").token
+        return {"Authorization": f"Bearer {token}"}
+
+    def list_roles(self, scope: str, principal_id: str) -> list[str]:
+        import requests
+
+        resp = requests.get(
+            f"https://management.azure.com{scope}"
+            f"/providers/Microsoft.Authorization/roleAssignments"
+            f"?api-version=2022-04-01&$filter=principalId eq '{principal_id}'",
+            headers=self._headers(),
+            timeout=30,
+        )
+        resp.raise_for_status()
+        out = []
+        for a in resp.json().get("value", []):
+            rid = (a.get("properties") or {}).get("roleDefinitionId", "")
+            out.append(_ROLE_NAMES.get(rid.rsplit("/", 1)[-1], rid.rsplit("/", 1)[-1]))
+        return out
+
+    def create_role(self, scope: str, principal_id: str, role: str) -> None:
+        import uuid
+
+        import requests
+
+        subscription = scope.split("/")[2]
+        body = {
+            "properties": {
+                "roleDefinitionId": (
+                    f"/subscriptions/{subscription}/providers"
+                    f"/Microsoft.Authorization/roleDefinitions/{ACR_PULL_ROLE_GUID}"
+                ),
+                "principalId": principal_id,
+                # Required for a freshly created managed identity: without it ARM
+                # tries to look the principal up in Entra and fails while the new
+                # identity is still replicating.
+                "principalType": "ServicePrincipal",
+            }
+        }
+        resp = requests.put(
+            f"https://management.azure.com{scope}"
+            f"/providers/Microsoft.Authorization/roleAssignments/{uuid.uuid4()}"
+            f"?api-version=2022-04-01",
+            headers={**self._headers(), "Content-Type": "application/json"},
+            json=body,
+            timeout=30,
+        )
+        if resp.status_code >= 400:
+            raise PermissionError(f"HTTP {resp.status_code}: {resp.text[:300]}")
+
+
+def _manual_fix(scope: str, principal_id: str) -> str:
+    return (
+        "  az role assignment create \\\n"
+        f"    --assignee-object-id {principal_id} \\\n"
+        "    --assignee-principal-type ServicePrincipal \\\n"
+        f'    --role "{ACR_PULL}" \\\n'
+        f"    --scope {scope}"
+    )
+
+
+def ensure_acr_pull(scope, principal_id, *, auth=None) -> GrantResult:
+    """Give the endpoint identity pull rights on the registry, if it lacks them.
+
+    Written after the preflight in this module failed to prevent the very
+    failure it documents. Detecting a missing grant and then asking a human to
+    run one `az` command is not much of an improvement when the tool is already
+    authenticated and the command is deterministic -- so this makes the grant.
+
+    Never raises. A credential without `Microsoft.Authorization/roleAssignments/write`
+    is a normal situation on a locked-down subscription, and the useful response
+    is the exact command to hand to somebody who does have it.
+    """
+    if not scope or not principal_id:
+        return GrantResult(error="no registry scope or no endpoint identity")
+
+    auth = auth or ArmRoleAuth()
+    try:
+        existing = auth.list_roles(scope, principal_id)
+    except Exception as exc:  # noqa: BLE001 - a failed read must not stop a deploy
+        return GrantResult(
+            error=f"could not read role assignments: {exc}",
+            manual_fix=_manual_fix(scope, principal_id),
+        )
+
+    if any(r in _PULL_EQUIVALENT for r in existing):
+        return GrantResult(already_had=True)
+
+    try:
+        auth.create_role(scope, principal_id, ACR_PULL)
+    except Exception as exc:  # noqa: BLE001 - report, do not crash the deploy
+        return GrantResult(
+            error=str(exc), manual_fix=_manual_fix(scope, principal_id)
+        )
+
+    log.info("granted %s to %s on %s", ACR_PULL, principal_id, scope.rsplit("/", 1)[-1])
+    return GrantResult(granted=True)

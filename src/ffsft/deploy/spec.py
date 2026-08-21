@@ -162,6 +162,25 @@ class ServingSpec(BaseModel):
         return self.surface is not Surface.LOCAL
 
     @property
+    def can_serve_from_hub(self) -> bool:
+        """Can this pattern take a Hugging Face repo id instead of a model asset?
+
+        Only where the *serving process* resolves the weights itself. vLLM does:
+        `--model Qwen/Qwen3.5-0.8B` makes the container download from the Hub at
+        startup, so nothing is ever read from a datastore. A batch deployment
+        cannot: the model asset is named in the deployment resource and mounted
+        by the platform before any of our code runs.
+
+        This is the escape hatch from the storage wall in VERIFIED.md section 24,
+        and it is the reason `requires_model_asset` alone over-reports blockage.
+        """
+        return self.openai_compatible and self.surface in {
+            Surface.AML_ONLINE_ENDPOINT,
+            Surface.KUBERNETES,
+            Surface.LOCAL,
+        }
+
+    @property
     def load_testable(self) -> bool:
         """Only an OpenAI-compatible interactive endpoint can be load-tested."""
         return self.is_interactive and self.openai_compatible
