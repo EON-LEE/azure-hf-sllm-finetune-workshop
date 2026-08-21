@@ -359,7 +359,12 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
       `AcrPull` 문제는 해결됐고 CPU SKU 에서 이미지 pull 성공도 실증했다(§14).
       **배치 엔드포인트는 오늘 당장 가능하다** — LowPriority 클러스터를 쓰므로
       쿼터 문제가 없고, `ffsft-deploy check --probe` 가 `ok` 로 확인해준다.
-- [ ] 27B 실학습 · 튜닝 전후 벤치마크 비교
+- [x] **27B 실학습 · 튜닝 전후 벤치마크 비교 `Completed`** —
+      `heroic_fennel_085y2rwm3s`, 학습부터 base/tuned 채점까지 한 잡에서 완주.
+      `train_loss 1.2638` 로 §20 의 `1.2637` 을 재현했다.
+      델타는 `kobest_boolq +0.16`, `kobest_sentineg +0.04` 가 나왔지만
+      **`eval_limit=25` 라 노이즈와 구분되지 않는다** — 이 잡이 증명하는 것은
+      점수가 아니라 측정 장치다(§23.3).
 
 ## 사전 요구사항
 
