@@ -1181,3 +1181,149 @@ LowPriority 라 유휴 비용이 0 이다(§16.1). seq 를 2048 로 올리거나
 
 전체 잡은 큐→완료 약 65분(54 GB 다운로드 + 양자화 + 학습).
 A100 LowPriority 기준 **약 $1**. 같은 정보를 전용 A100 으로 얻었다면 약 $5 였다.
+
+---
+
+## 21. 평가 단계가 세 번 죽었다 — lm-eval 로더를 우리 코드로 가져온 이유
+
+평가는 학습이 **성공한 뒤에야** 실행된다. 그래서 평가 버그 하나의 값은
+`이미지 빌드(7~13분) + 학습 완주(스모크 5분 / 27B 42분)` 이다.
+전부 같은 자리, `HFLM.__init__` 에서 터졌다.
+
+### 21.1 세 번의 실패
+
+| 잡 | 이미지 | 예외 |
+|---|---|---|
+| `hungry_bird_hlyr5cwzl8` | 7 | `TypeError: Qwen3_5ForCausalLM.__init__() got an unexpected keyword argument 'load_in_4bit'` |
+| `ashy_hamster_9lvxsm0y2s` | 8 | `TypeError: HFLM._create_model() got multiple values for keyword argument 'quantization_config'` |
+| `calm_giraffe_dk4cm4gk9y` | 8 | 위와 동일 |
+
+세 번 모두 학습은 정상이었다 — `train_loss` 1.6015 / 1.6009 / 1.6014.
+
+**1번**: transformers v4 는 `load_in_4bit` 를 가로채 `BitsAndBytesConfig` 로
+바꿔줬고, v5 가 그 shim 을 삭제했다. lm-eval 은 모르는 키를
+`from_pretrained` 로 그대로 흘려보내므로 모델 생성자까지 내려가 터진다.
+
+**2번**: `quantization_config` 로 바꿔 불렀더니 이번엔 중복이었다.
+`lm_eval/models/huggingface.py` 를 직접 읽어 원인을 확정했다:
+
+```python
+# HFLM.__init__, line ~359 — 로컬 변수에 대한 walrus
+if (quantization_config := getattr(self.config, "quantization_config", None)
+   ) is not None and isinstance(quantization_config, dict):
+    quantization_config = AutoQuantizationConfig.from_dict(quantization_config)
+
+self._create_model(..., quantization_config=quantization_config, **kwargs)  # line ~384
+```
+
+`quantization_config` 는 **`__init__` 의 파라미터가 아니다.** 이미 양자화된
+체크포인트(AWQ/GPTQ 등)가 자기 `config.json` 에 실어 보내는 값을 읽어
+lm-eval 이 **스스로** 넘기는 이름이다. 우리 것은 `**kwargs` 로 들어가
+같은 자리에 두 번 도달한다. **이 버전의 HFLM 에는 즉석 bitsandbytes
+양자화를 요청할 통로가 아예 없다.**
+
+**3번**은 진단이 아니라 내 착각이었다. 수정을 커밋하고 재제출했는데
+트레이스백이 여전히 옛 줄번호(`line 169, lm = HFLM(**kwargs)`)를 가리켰다.
+경로가 답이었다 — `/opt/ffsft/src/ffsft/eval/run.py`. **소스는 이미지에
+구워져 있다**(§17: `code=` 업로드가 스토리지 방화벽에 막혀 `COPY . /opt/ffsft`
+로 대체됐다). 즉 **파이썬 한 줄만 바꿔도 ACR 재빌드가 필수**다.
+"코드는 잡과 함께 업로드된다"는 가정이 틀렸다.
+
+### 21.2 고친 방법 — 모델을 우리가 만들어 넘긴다
+
+```python
+def __init__(
+    self,
+    pretrained: str | transformers.PreTrainedModel,
+    backend: Literal["default", "causal", "seq2seq"] = "default",
+    tokenizer: str | PreTrainedTokenizer | PreTrainedTokenizerFast | None = None,
+    ...
+```
+
+```python
+# line ~218
+if not isinstance(pretrained, str):
+    self._model = pretrained
+    self._device = self._model.device
+    self._config = self._model.config
+    gpus = 0
+else:
+    ...
+if isinstance(pretrained, str):      # line ~367
+    self._create_model(...)          # ← 문제의 로더. 객체면 아예 안 탄다
+```
+
+그래서 `ffsft.eval.run.load_for_eval()` 이 직접 적재하고 HFLM 에는 **객체**를
+넘긴다. 얻는 것이 세 가지다.
+
+1. `_create_model` 을 타지 않으므로 인자 배관 문제가 통째로 사라진다.
+2. `.to(self.device)` 도 `isinstance(pretrained, str)` 로 가드돼 있어
+   bitsandbytes 모델이 거부하는 이동이 일어나지 않는다.
+3. 양자화를 **학습과 글자 그대로 동일하게** 맞출 수 있다 —
+   NF4 + double-quant + `device_map={"": 0}` + `attn_implementation="sdpa"`.
+   §20 에서 27B 를 28.19 GB 로 돌린 바로 그 조합이다.
+
+어댑터도 `PeftModel.from_pretrained` 로 직접 붙인다. lm-eval 의 `peft=`
+인자는 `_create_model` 안에서만 처리되는데, 그 함수를 안 타기 때문이다.
+
+> **평가를 bf16 으로 하지 않은 이유.** 27B bf16 은 54 GB 로 85 GB 카드에
+> 들어가긴 한다. 그러나 QLoRA 어댑터를 bf16 으로 재는 것은 **서빙되지 않을
+> 구성**을 재는 것이고, 양자화 오차가 우리가 찾으려는 파인튜닝 델타와
+> 같은 자릿수다.
+
+### 21.3 같은 계열을 빌드에서 잡도록 만들었다
+
+`docker/verify_stack.py` 가 이제 계약을 빌드 시점에 검증한다. 오프라인이고
+비용이 0 이다.
+
+- `pretrained` / `backend` / `tokenizer` / `max_length` / `batch_size` 존재
+- `pretrained` 의 어노테이션에 `PreTrainedModel` 포함
+- **`quantization_config` 가 여전히 부재**할 것 —
+  lm-eval 이 나중에 이 인자를 받기 시작하면 우리 것이 또 두 번 가게 된다
+
+세 번의 실패는 전부 "GPU 20분 왕복"으로만 알 수 있던 것들이었다.
+이제 이미지 레이어에서 걸린다.
+
+### 21.4 벤치마크 태스크 이름은 검증 대상이다
+
+`configs/benchmarks.yaml` 이 존재하지 않는 태스크를 두 개 들고 있었다.
+업스트림 `EleutherAI/lm-evaluation-harness` 를 직접 확인한 결과:
+
+| 설정에 있던 이름 | 실제 |
+|---|---|
+| `ifeval_ko` | **없음.** 하네스는 영어 `ifeval` 만 제공 |
+| `hae_rae_bench` | **`haerae`** |
+| `kobest`, `kmmlu` | 정상 (그룹) |
+
+틀린 이름은 `simple_evaluate` 안에서야 터지는데, 그 시점은 **모델을 이미
+내려받아 양자화한 뒤**다. 27B 면 수 분의 A100 을 태우고 YAML 오타를 배우는
+셈이다. `unknown_harness_tasks()` 가 적재 **전에** 전부 모아서 거절한다.
+`TaskManager().all_tasks` 는 태스크·그룹·태그를 모두 포함하므로 `kobest`
+같은 그룹명도 오탐하지 않는다.
+
+### 21.5 ✅ 파이프라인 첫 관통 — `hungry_bell_lpf45kx8kv`
+
+이미지 9, `qwen3.5-0.8b`, 10스텝, `eval_suite=ko_fast`, `eval_limit=5`.
+**학습 → 어댑터 → base 평가 → tuned 평가 → 델타** 가 한 잡에서 끝났다.
+
+```
+train.train_loss = 1.6009
+eval.kobest.base = 0.4    eval.kobest.tuned = 0.4    eval.kobest.delta = 0.0
+eval.kobest_boolq      0.8 / 0.8 / 0.0
+eval.kobest_copa       0.4 / 0.4 / 0.0
+eval.kobest_hellaswag  0.4 / 0.4 / 0.0
+eval.kobest_sentineg   0.6 / 0.6 / 0.0
+eval.kobest_wic        0.6 / 0.6 / 0.0
+```
+
+**델타 0 은 여기서 정상이다.** `limit=5` 면 눈금이 0.2 이고, 128 샘플 10스텝
+LoRA 가 그 눈금을 움직일 리 없다. 이 잡이 증명하는 것은 점수가 아니라
+**배관**이다 — 어댑터가 같은 노드에서 평가로 넘어가고(§17 회피), base 와
+tuned 가 동일 조건으로 측정되며, 두 모델이 순차 적재돼도 OOM 이 없다.
+
+### 21.6 평가가 별도 잡이 될 수 없는 이유
+
+어댑터를 다른 잡으로 넘기려면 `workspaceblobstore` 를 거쳐야 하는데,
+그 경로가 §17 에서 실패가 증명된 바로 그 경로다. 그래서 `build_command` 가
+`train && eval` 로 **한 노드 안에서** 이어 붙인다. 부수 효과로 54 GB
+다운로드도 한 번만 일어난다.
