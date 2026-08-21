@@ -1774,3 +1774,130 @@ A: 한국의 수도는 서울입니다. 이 도시가 수도로 된 이유는 19
 | ⛔ 프로덕션 처리량 수치가 아니다 | CPU, 배치 없음, 페이지드 어텐션 없음 |
 
 비용 **$0** — Azure 리소스를 하나도 쓰지 않았다.
+
+---
+
+## 26. ✅ 서빙 벽이 뚫렸다 — A10 온라인 엔드포인트 + Hub 직접 로드
+
+§22는 "전용 A100 쿼터 0"을, §24는 "스토리지 도달 불가"를 서빙 블로커로 확정했다.
+둘 다 사실이었지만, **둘 다 우회 가능했다**. 이 절은 그 우회로를 실제로 뚫은 기록이다.
+
+### 26.1 벽 두 개, 우회로 두 개
+
+| 벽 | §에서 확정한 내용 | 우회로 |
+|---|---|---|
+| 전용 GPU 쿼터 | A100 = 0 코어 | **A10 = 36 코어로 승인됨.** 요청이 나중에 통과했다 |
+| 스토리지 | 모델 자산 등록 불가 | **vLLM `--model <hf repo>`** — 컨테이너가 Hub에서 직접 받는다 |
+
+두 번째가 핵심이다. Azure ML 배포는 보통 모델 자산을 이름으로 지정하고 플랫폼이
+마운트한다. 그러면 데이터스토어를 반드시 탄다. 그런데 vLLM은 **서빙 프로세스가
+스스로 가중치를 해결**한다. `--model Qwen/Qwen3.5-0.8B` 를 주면 컨테이너가 뜨면서
+Hub에서 내려받는다. 데이터스토어는 아예 등장하지 않는다.
+
+이건 학습이 이 구독에서 돌아간 이유(§24.6)와 정확히 같은 원리다. 스토리지를
+안 타면 스토리지 벽에 안 막힌다.
+
+### 26.2 AmlCompute와 온라인 엔드포인트는 SKU 카탈로그가 다르다
+
+§22에서 A10 v5는 **AmlCompute 클러스터** 생성 시 두 티어 모두 `InvalidPropertyValue`
+로 거부됐다. 그래서 A10은 못 쓰는 걸로 정리했다. 그건 **클러스터에 한정된 사실**이었다.
+
+관리형 온라인 엔드포인트는 별개 카탈로그를 쓴다. 측정 (2026-08-21):
+
+```
+엔드포인트  ffsft-a10                 provisioningState = Succeeded
+배포        blue                      instanceType      = Standard_NV12ads_A10_v5
+                                      → 수락됨
+```
+
+같은 SKU 계열이 한쪽에서는 거부되고 한쪽에서는 수락된다. **표면이 다르면 다시
+측정해야 한다**는 교훈.
+
+### 26.3 쿼터 산수 — 기본 SKU로는 못 올린다
+
+온라인 엔드포인트는 롤링 업데이트분까지 잡으므로 **요청 코어의 2배**가 필요하다.
+
+| SKU | 코어 | 실제 필요 | A10 36코어에서 |
+|---|---|---|---|
+| `Standard_NV6ads_A10_v5` | 6 | 12 | 가능 |
+| `Standard_NV12ads_A10_v5` | 12 | 24 | **가능 — 사용한 것** |
+| `Standard_NV18ads_A10_v5` | 18 | 36 | 딱 맞음 |
+| `Standard_NV36ads_A10_v5` | 36 | 72 | **불가 — 그런데 이게 기본값이었다** |
+
+`configs/serving.yaml` 의 `aml_online_vllm.default_sku` 가 NV36이라, 아무 것도
+안 바꾸고 배포하면 승인된 쿼터를 갖고도 막힌다.
+
+### 26.4 첫 배포는 AcrPull로 죽었다 — 그리고 프리체크는 침묵했다
+
+첫 시도는 약 10분 뒤 이렇게 끝났다:
+
+```
+(BadArgument) Endpoint identity does not have pull permission on the registry.
+```
+
+측정한 엔드포인트 ID 권한:
+
+```
+principal fbd167d1-f592-470d-8d57-25ff85790033  (SystemAssigned)
+  AzureML Metrics Writer (preview)  on workspace
+  Storage Blob Data Reader          on mlwffsftstorage8cb451dd1
+  (ACR 권한 없음)
+```
+
+Azure는 **워크스페이스 연결 ACR에만** AcrPull을 자동 부여한다. 이 워크스페이스는
+`properties.containerRegistry` 가 비어 있어서 `acrffsftkc` 는 커스텀 레지스트리다.
+그래서 아무도 권한을 안 준다.
+
+**진짜 문제는 이걸 잡으라고 쓴 프리체크가 침묵했다는 것이다.**
+`read_identity_grants` 는 엔드포인트가 없으면(404) `None` 을 돌려준다 — "모르는
+것으로 막지 않는다"는 원칙상 맞다. 그런데 `deploy_online` 이 그 검사를
+**엔드포인트 생성보다 먼저** 호출하고 있었다. 그래서 신규 엔드포인트에서는 항상
+404 → 항상 `None` → 절대 안 막힌다. **권한이 없는 게 확실한 유일한 경우에
+구조적으로 눈이 멀어 있었다.**
+
+고친 방식:
+
+- 검사를 **엔드포인트 생성 이후**로 옮겼다. 엔드포인트 리소스 자체는 무료고,
+  GPU를 잡는 건 배포뿐이다. 그 사이가 정확히 검사할 자리다.
+- `ensure_acr_pull()` 이 권한을 **직접 부여**한다. 이미 인증된 도구가 결정론적인
+  명령 하나를 사람에게 시키는 건 개선이라 부르기 어렵다.
+- RBAC 쓰기 권한이 없으면 예외를 던지지 않고 실행할 `az` 명령을 출력한다.
+  잠긴 구독에서는 그게 정상 상황이다.
+
+### 26.5 CLI에 구멍이 있었다
+
+`deploy_online()` 은 `hf_model=` 을 받은 지 오래였는데, 인자 파서가
+`--model-uri` 를 **필수**로 강제하고 있었다. 스토리지 벽을 넘는 유일한 경로가
+코드에는 있는데 명령줄에서는 못 쓰는 상태였다.
+
+`--hf-model` 을 추가하고 `--model-uri` 를 선택으로 바꿨다. 둘 다 없거나 둘 다
+주면 에러다 — 배포가 알아서 하나를 고르게 두지 않는다.
+
+### 26.6 `ffsft-deploy check` 가 과잉 차단하고 있었다
+
+§24 이후 `requires_model_asset` 이 LOCAL 아닌 모든 표면에 True 였다. 그래서
+Hub로 서빙 가능한 온라인 패턴까지 BLOCKED 로 보고했다. 실제로는 배포된다.
+
+`ServingSpec.can_serve_from_hub` 로 "서버가 스스로 가중치를 해결하는가"를
+구분하고, `check_pattern(from_hub=True)` 에서 데이터스토어 요구를 뺐다.
+
+라이브 결과:
+
+```
+  datastore  UNREACHABLE  mlwffsftstorage8cb451dd1 (publicNetworkAccess=Disabled, 0 private endpoints)
+
+  aks_vllm         ok        via --hf-model (no model asset, storage not involved)
+  aml_batch        BLOCKED   no reachable datastore: ...
+  aml_batch_vllm   BLOCKED   no reachable datastore: ...
+  aml_online_vllm  ok        via --hf-model (no model asset, storage not involved)
+  local_vllm       n/a       (local, no Azure quota involved)
+```
+
+배치는 여전히 막혀 있다. 배치 배포는 모델 자산을 리소스에 이름으로 박아야 하고
+우리 코드가 실행되기 전에 플랫폼이 마운트하므로, 우회할 자리가 없다.
+
+### 26.7 정정
+
+§24와 README는 "모든 호스팅 패턴이 스토리지 벽에 막혔다"고 썼다. **너무 강한
+주장이었다.** 정확히는 **모델 자산을 요구하는 패턴만** 막힌다. 온라인 vLLM은
+Hub 경로로 우회 가능하고, 실제로 우회했다.

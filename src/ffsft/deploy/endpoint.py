@@ -750,10 +750,14 @@ def cmd_check(args) -> int:
             )
     if client is None:
         print(
-            "\n  ok? means quota only. Quota is necessary and not sufficient: "
-            "StandardNVADSA10v5Family reports 72 cores here and every A10 v5 create "
-            "call is still refused.\n  Re-run with --probe to ask the control plane "
-            "itself (free -- a refusal creates nothing, an acceptance is deleted)."
+            "\n  ok? means quota only, and quota is necessary but not sufficient: "
+            "a family can report free cores and still refuse every create call.\n"
+            "  Re-run with --probe to ask the control plane itself (free -- a "
+            "refusal creates nothing, an acceptance is deleted).\n"
+            "  Note that AmlCompute and managed online endpoints do not share a "
+            "SKU catalogue: A10 v5 is refused for clusters here and accepted for\n"
+            "  online endpoints (measured 2026-08-21, ffsft-a10 on "
+            "Standard_NV12ads_A10_v5)."
         )
     return 0
 
