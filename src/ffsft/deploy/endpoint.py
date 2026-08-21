@@ -21,6 +21,7 @@ the pattern that works today and the right one for evaluation and bulk scoring.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import os
 import re
@@ -69,6 +70,95 @@ def read_dedicated_quota(subscription_id: str, location: str, family: str) -> in
         return 0
     resp.raise_for_status()
     return int(resp.json()["properties"]["limit"]["value"])
+
+
+@dataclasses.dataclass(frozen=True)
+class SkuProbe:
+    """What the control plane said when actually asked to create the cluster."""
+
+    sku: str
+    tier: str
+    creatable: bool
+    code: str
+    detail: str
+
+    @property
+    def blocker(self) -> str | None:
+        if self.creatable:
+            return None
+        return f"{self.code}. {self.detail}"
+
+
+def classify_cluster_error(message: str) -> tuple[str, str]:
+    """Turn an AmlCompute create failure into a code plus an actionable reason.
+
+    The two responses differ in what they ask of you -- one is a support
+    ticket, the other is 'pick a different SKU' -- so collapsing them into
+    'deployment failed' throws away the only useful part.
+
+    `InvalidPropertyValue` arrives with a list of "supported VM sizes" that is
+    old enough to omit `Standard_NC24ads_A100_v4`, the SKU this project trains
+    on every day. Repeating it would send the reader looking for a K80. The
+    honest summary is that the control plane refuses this SKU here regardless
+    of what the catalogue and the quota say.
+    """
+    if "ClusterMinNodesExceedCoreQuota" in message:
+        family = re.search(r"Standard\s+(\w+)\s+family", message)
+        quota = re.search(r"quota of (\d+)", message)
+        detail = (
+            f"dedicated quota for {family.group(1) if family else 'this family'} is "
+            f"{quota.group(1) if quota else '0'}. Managed online endpoints are always "
+            "dedicated, so no amount of retrying helps -- request a quota increase."
+        )
+        return "ClusterMinNodesExceedCoreQuota", detail
+    if "InvalidPropertyValue" in message:
+        sku = re.search(r"value (\S+) for property", message)
+        detail = (
+            f"{sku.group(1) if sku else 'this SKU'} cannot be created in this "
+            "workspace at either tier, however many cores the catalogue and the "
+            "usage APIs advertise. Choose a SKU that a real create call accepts."
+        )
+        return "InvalidPropertyValue", detail
+    return "Unknown", message.strip()[:300]
+
+
+def probe_sku(client, sku: str, tier: str, *, name: str = "ffsft-probe") -> SkuProbe:
+    """Ask the control plane to create the cluster, then take it straight back.
+
+    This is the only honest answer to 'can this SKU be deployed'. Quota says
+    yes for A10 v5 and the create call says no; the catalogue lists all sixteen
+    GPU SKUs and the create call still says no.
+
+    Free: a refusal returns in about two seconds having created nothing, and an
+    acceptance is a `min_instances=0` cluster that allocates no node before it
+    is deleted.
+    """
+    from azure.ai.ml.entities import AmlCompute
+
+    try:
+        client.compute.begin_create_or_update(
+            AmlCompute(
+                name=name, size=sku, min_instances=0, max_instances=1,
+                tier=tier, idle_time_before_scale_down=120,
+            )
+        ).result()
+    except Exception as exc:  # noqa: BLE001 - the message is the whole point
+        code, detail = classify_cluster_error(str(exc))
+        # A refused create still leaves a compute record in `Failed`. It holds no
+        # nodes and bills nothing, but it accumulates, and this project's whole
+        # teardown story is that nothing is left behind.
+        _discard_probe(client, name)
+        return SkuProbe(sku=sku, tier=tier, creatable=False, code=code, detail=detail)
+
+    _discard_probe(client, name)
+    return SkuProbe(sku=sku, tier=tier, creatable=True, code="", detail="")
+
+
+def _discard_probe(client, name: str) -> None:
+    try:
+        client.compute.begin_delete(name)
+    except Exception:  # noqa: BLE001 - a leaked min=0 cluster allocates nothing
+        log.warning("probe cluster %s could not be deleted; it holds no nodes", name)
 
 
 def check_pattern(
@@ -442,30 +532,52 @@ def deploy_batch(
 
 def cmd_check(args) -> int:
     """Report, per serving pattern, whether it can be deployed right now."""
-    from ffsft.azure_ml import AzureTarget
+    from ffsft.azure_ml import AzureTarget, get_ml_client
 
     target = AzureTarget.from_env()
     registry = get_serving_registry()
     print(f"subscription {target.subscription_id} / {target.location}\n")
 
+    client = get_ml_client(target) if args.probe else None
     width = max(len(s.key) for s in registry)
-    for spec in sorted(registry, key=lambda s: s.key):
+    for index, spec in enumerate(sorted(registry, key=lambda s: s.key)):
         if spec.surface is Surface.LOCAL:
             print(f"  {spec.key:<{width}}  n/a       (local, no Azure quota involved)")
             continue
         _, blocker = check_pattern(spec.key, target.subscription_id, target.location)
         if blocker:
             print(f"  {spec.key:<{width}}  BLOCKED   {blocker.split('. ')[1]}")
-        elif spec.allows_low_priority:
-            print(f"  {spec.key:<{width}}  ok        LowPriority pool ({spec.default_sku})")
+            continue
+
+        if client is not None:
+            tier = "LowPriority" if spec.allows_low_priority else "Dedicated"
+            # A distinct name per pattern: the delete is asynchronous, so reusing
+            # one name races the next create against the previous teardown.
+            probe = probe_sku(client, spec.default_sku, tier, name=f"ffsft-probe-{index}")
+            if probe.blocker:
+                print(f"  {spec.key:<{width}}  BLOCKED   {probe.blocker}")
+            else:
+                print(f"  {spec.key:<{width}}  ok        {tier} {spec.default_sku} "
+                      "(create accepted)")
+            continue
+
+        if spec.allows_low_priority:
+            print(f"  {spec.key:<{width}}  ok?       LowPriority pool ({spec.default_sku})")
         else:
             cores = read_dedicated_quota(
                 target.subscription_id, target.location, spec.quota_family
             )
             print(
-                f"  {spec.key:<{width}}  ok        dedicated {spec.quota_family}="
+                f"  {spec.key:<{width}}  ok?       dedicated {spec.quota_family}="
                 f"{cores} cores ({spec.default_sku})"
             )
+    if client is None:
+        print(
+            "\n  ok? means quota only. Quota is necessary and not sufficient: "
+            "StandardNVADSA10v5Family reports 72 cores here and every A10 v5 create "
+            "call is still refused.\n  Re-run with --probe to ask the control plane "
+            "itself (free -- a refusal creates nothing, an acceptance is deleted)."
+        )
     return 0
 
 
@@ -473,7 +585,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Deploy a tuned model to an Azure ML endpoint")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("check", help="Show which serving patterns are deployable right now.")
+    check = sub.add_parser("check", help="Show which serving patterns are deployable right now.")
+    check.add_argument(
+        "--probe", action="store_true",
+        help="Ask the control plane for real instead of trusting the quota number. "
+             "Free: refusals create nothing, acceptances are min=0 and deleted.",
+    )
 
     online = sub.add_parser(
         "deploy-online", help="Managed online endpoint (needs dedicated quota)."
