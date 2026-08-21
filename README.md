@@ -340,12 +340,25 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
       거부 (TDD, `tests/test_aml_job.py`)
 - [x] 라이브러리 rename 내성: transformers v5 의 `warmup_ratio` 제거 등을
       런타임에 해석 (TDD, `tests/test_qlora_config.py`, §18)
-- [ ] **온라인 배포 ⛔ 5회 전부 실패 — 남은 블로커는 GPU 노드 할당.**
-      `AcrPull` 문제는 해결됐고 CPU SKU 에서 이미지 pull 성공을 실증했지만
-      (§14), 같은 엔드포인트·같은 이미지로 SKU 만 A10 으로 바꾸면 65분간
-      `Creating` 에서 못 나온다(§15). 테넌트 정책이 **전용** N-series 를 막고
-      매니지드 엔드포인트에는 저우선순위 옵션이 없다는 것이 유력한 가설이다.
-      학습이 되는 이유도 같다 — 학습만 LowPriority 를 쓸 수 있다(§16.1).
+- [x] **평가 파이프라인 엔드투엔드 `Completed`** — `hungry_bell_lpf45kx8kv`,
+      학습 → 어댑터 → base 평가 → tuned 평가 → 델타가 **한 잡 안에서** 완주.
+      lm-eval 로더에서 3회 실패한 뒤, 모델을 우리 코드가 만들어 HFLM 에
+      객체로 넘기는 방식으로 해결했다 (§21). 같은 계열 실패는 이제
+      `docker/verify_stack.py` 가 **빌드 시점에** 잡는다.
+- [x] **서빙 블로커 원인 확정 — 전용 A100 쿼터가 `0`** (§22).
+      `ClusterMinNodesExceedCoreQuota` 가 API 응답에 그대로 적혀 있다.
+      매니지드 온라인 엔드포인트는 항상 전용이고, 이 구독에서 만들 수 있는
+      유일한 최신 GPU 패밀리의 전용 쿼터가 0 이다. 이전에 유력했던
+      "테넌트 정책이 막는다"는 가설은 **반증**됐다 — 그런 정책 할당은 없다.
+- [x] 배포 가능성 점검이 거짓말하지 않게 수정 — `ffsft-deploy check --probe`
+      가 쿼터 숫자 대신 **실제 create 호출**로 판정한다 (TDD,
+      `tests/test_sku_probe.py`). 거부는 2초 만에 아무것도 안 만들고 돌아오고,
+      승인은 `min_instances=0` 이라 노드를 띄우지 않는다.
+- [ ] **온라인 배포 ⛔ 이 구독에서는 불가능** — 5회 전부 실패했고 원인이
+      확정됐다(§22): 전용 GPU 쿼터 0. 코드로 넘을 수 있는 벽이 아니다.
+      `AcrPull` 문제는 해결됐고 CPU SKU 에서 이미지 pull 성공도 실증했다(§14).
+      **배치 엔드포인트는 오늘 당장 가능하다** — LowPriority 클러스터를 쓰므로
+      쿼터 문제가 없고, `ffsft-deploy check --probe` 가 `ok` 로 확인해준다.
 - [ ] 27B 실학습 · 튜닝 전후 벤치마크 비교
 
 ## 사전 요구사항
