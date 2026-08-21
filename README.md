@@ -320,7 +320,7 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
 - [x] 학습 경로: ACPT 커스텀 이미지 빌드 · A100 프리플라이트 통과
 - [x] 서빙 경로: vLLM 이미지 빌드 · 아키텍처 등록 검증
 - [x] 평가: 벤치마크 러너 + LLM-as-judge (TDD)
-- [x] 부하 테스트: TTFT / TPOT / knee 측정기 — **모의 서버로 측정 정확도 실검증**
+- [x] 부하 테스트: TTFT / TPOT / knee 측정기 — **실제 스트리밍 엔드포인트로 실검증 (§25)**
 - [x] 라이프사이클: `up` / `down` / `status` — **실제 테어다운 검증 완료**
 - [x] 비용 누수 탐지: 삭제된 VM 잔해 스캔 (TDD) — **실제 $41.66/월 발견·제거**
 - [x] 배포 프리플라이트: 엔드포인트 ID 권한 부족 시 2초 만에 거부 (TDD)
@@ -354,11 +354,25 @@ git subtree pull --prefix=notebooks/fabric fabric main --squash
       가 쿼터 숫자 대신 **실제 create 호출**로 판정한다 (TDD,
       `tests/test_sku_probe.py`). 거부는 2초 만에 아무것도 안 만들고 돌아오고,
       승인은 `min_instances=0` 이라 노드를 띄우지 않는다.
-- [ ] **온라인 배포 ⛔ 이 구독에서는 불가능** — 5회 전부 실패했고 원인이
-      확정됐다(§22): 전용 GPU 쿼터 0. 코드로 넘을 수 있는 벽이 아니다.
-      `AcrPull` 문제는 해결됐고 CPU SKU 에서 이미지 pull 성공도 실증했다(§14).
-      **배치 엔드포인트는 오늘 당장 가능하다** — LowPriority 클러스터를 쓰므로
-      쿼터 문제가 없고, `ffsft-deploy check --probe` 가 `ok` 로 확인해준다.
+- [ ] **Azure 서빙 ⛔ 이 구독에서는 불가능 — 벽이 둘이다**
+      1. **전용 GPU 쿼터 0** (§22) → 매니지드 온라인 엔드포인트 불가.
+         `ClusterMinNodesExceedCoreQuota` 가 API 응답에 그대로 적혀 있다.
+      2. **데이터스토어 도달 불가** (§24) → 배치·AKS 도 불가.
+         워크스페이스 스토리지가 `publicNetworkAccess=Disabled` + 프라이빗
+         엔드포인트 0개라 노드도 내 클라이언트도 세션을 열 수 없다.
+         완료된 런 3개 모두 `artifacts=0` 이고, 그래서 등록할 모델 자산이
+         없다. **AML 배포는 온라인이든 배치든 모델 자산을 입력으로 받는다.**
+      이전에 "배치는 오늘 당장 가능"이라고 적었던 것은 **틀렸다** — 쿼터만
+      보고 판단했기 때문이다. `check_pattern` 이 이제 데이터스토어까지
+      확인하고 네 패턴 모두 `BLOCKED` 로 보고한다 (TDD,
+      `tests/test_model_store.py`). `AcrPull` 문제는 해결됐고 CPU SKU 에서
+      이미지 pull 성공도 실증했다(§14).
+- [x] **서빙 + 부하 테스트 실검증 (로컬)** — Azure 서빙이 전부 막혀 있어
+      로컬 패턴에 CPU `transformers` 엔진을 추가했다(`ffsft-serve-local`).
+      첫 로드테스트가 **HTTP 200 을 12번 받고 12번 실패**로 기록했는데,
+      하네스가 옳았다 — TTFT 는 스트리밍 없이 측정할 수 없다. SSE 구현 후
+      **12/12 성공**, 동시성 1→2→4 에서 처리량 ×1.71 → ×1.21, TPOT +14% →
+      +62% 의 포화 곡선을 실측했다 (§25). 비용 $0.
 - [x] **27B 실학습 · 튜닝 전후 벤치마크 비교 `Completed`** —
       `heroic_fennel_085y2rwm3s`, 학습부터 base/tuned 채점까지 한 잡에서 완주.
       `train_loss 1.2638` 로 §20 의 `1.2637` 을 재현했다.
