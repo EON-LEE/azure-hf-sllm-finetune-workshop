@@ -74,6 +74,11 @@ class JobSpec:
     #: Run the node self-test instead of training. Cheap, and the only honest
     #: way to know a cluster works before committing to a long run.
     preflight: bool = False
+    #: Accept PEFT's per-architecture LoRA defaults for a model whose registry
+    #: entry declares no `lora_target_modules`. Off by default because on a
+    #: hybrid-attention model the defaults adapt a small minority of layers and
+    #: train without any error -- see `qlora.resolve_target_modules`.
+    allow_default_lora_targets: bool = False
     #: Mount `uri_folder` outputs on the node. Turning this off is not a
     #: micro-optimisation: the mount is performed by the node against
     #: `workspaceblobstore`, so on a workspace whose storage account has public
@@ -136,6 +141,8 @@ def build_command(job: JobSpec) -> str:
         parts.append(f"--max-steps {job.max_steps}")
     if job.max_samples:
         parts.append(f"--max-samples {job.max_samples}")
+    if job.allow_default_lora_targets:
+        parts.append("--allow-default-lora-targets")
     return " ".join(parts)
 
 
@@ -151,6 +158,19 @@ def submit(target: AzureTarget, job: JobSpec, wait: bool = False) -> dict:
         )
         if not ok:
             raise ValueError(f"refusing to submit: {why}")
+        # The same refusal `qlora.resolve_target_modules` makes on the node, made
+        # here instead. On the node it costs a node allocation, a 9 GB image pull
+        # and a model download before it fires; from the registry it is free.
+        if not spec.lora_target_modules and not job.allow_default_lora_targets:
+            raise ValueError(
+                f"refusing to submit: model '{spec.key}' declares no "
+                f"lora_target_modules, so the trainer would refuse on the node "
+                f"after the cluster has already been paid for. Either add the "
+                f"modules to configs/models.yaml (run "
+                f"`python scripts/probe_architecture.py {spec.key}` to discover "
+                f"them) or set JobSpec(allow_default_lora_targets=True) to "
+                f"accept PEFT's defaults."
+            )
 
     environment = ensure_environment(client)
 
