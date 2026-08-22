@@ -9,14 +9,23 @@
 # that returns a quota error after a 20-minute deployment. Measured on
 # 2026-08-21 for koreacentral (see docs/SERVING.md section 2):
 #
-#   standardNCADSA100v4Family    dedicated = 0    <- A100
-#   StandardNVADSA10v5Family     dedicated = 0    <- A10   (increase requested)
-#   standardNCADSH100v5Family    dedicated = 0    <- H100
-#   Standard NCASv3_T4 Family    dedicated = 0    <- T4
+#   standardNCADSA100v4Family    dedicated =  0    <- A100
+#   StandardNVADSA10v5Family     dedicated = 36    <- A10  (increase GRANTED)
+#   standardNCADSH100v5Family    dedicated =  0    <- H100
+#   Standard NCASv3_T4 Family    dedicated =  0    <- T4
 #
-# AML *managed online endpoints* bill against that dedicated pool and cannot use
-# LowPriority. AML *batch endpoints* run on an ordinary AmlCompute cluster, which
-# can, which is why `aml_batch` is the only GPU pattern that works right now.
+# A managed online endpoint bills against DOUBLE the instance cores, because it
+# reserves a second set to roll out a new version before retiring the old one.
+# So a 36-core grant buys a 12-core or 18-core SKU, not a 36-core one -- which
+# is why `aml_online_vllm` defaults to NV12 and not the NV36 it used to.
+# tests/test_serving_registry.py pins this so the file cannot drift back.
+#
+# AML *batch* endpoints run on an ordinary AmlCompute cluster, which can use
+# LowPriority and scale to zero, so they stay the cheapest GPU pattern here.
+#
+# AmlCompute and managed online endpoints do NOT share a SKU catalogue: the A10
+# v5 family is refused for clusters (`InvalidPropertyValue`) yet accepted for
+# online endpoints. Re-measure per surface; never generalise across them.
 
 defaults:
   pattern: aml_batch
@@ -30,7 +39,7 @@ patterns:
     streaming: true
     allows_low_priority: false
     quota_family: StandardNVADSA10v5Family
-    default_sku: Standard_NV36ads_A10_v5
+    default_sku: Standard_NV12ads_A10_v5
     scale_to_zero: false
     description: >-
       The default production answer. Azure ML owns the load balancer, TLS,
@@ -39,8 +48,12 @@ patterns:
       attention, so throughput under concurrency is an order of magnitude better
       than a naive HF `generate` loop.
     caveats: >-
-      Needs dedicated GPU quota (LowPriority is rejected). Instances bill 24/7 --
-      there is no scale-to-zero on managed online endpoints.
+      Needs dedicated GPU quota (LowPriority is rejected) and reserves 2x the
+      instance cores for rolling updates, so NV12 costs 24 of the 36 granted
+      cores. Instances bill 24/7 -- there is no scale-to-zero on managed online
+      endpoints. A granted quota is still not a promise of regional capacity:
+      a rollout can sit at percentComplete 0.0 indefinitely when the region has
+      none (see docs/VERIFIED.md section 26.8).
 
   - key: aml_batch_vllm
     display_name: AML Batch Endpoint + vLLM offline engine

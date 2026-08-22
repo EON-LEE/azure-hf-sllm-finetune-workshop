@@ -19,6 +19,7 @@ from ffsft.deploy import (
     get_serving,
     get_serving_registry,
 )
+from ffsft.deploy.spec import required_dedicated_cores
 
 
 def make_spec(**overrides) -> ServingSpec:
@@ -161,3 +162,49 @@ def test_filter_by_low_priority_excludes_online():
 def test_filter_by_engine():
     vllm = get_serving_registry().filter(engine=Engine.VLLM)
     assert {s.key for s in vllm} >= {"aml_online_vllm", "local_vllm"}
+
+
+# -- the shipped defaults must be deployable ----------------------------
+#
+# A default_sku that cannot fit the granted quota is not a default, it is a
+# 20-minute failure with a receipt. These pin `configs/serving.yaml` itself
+# against the quota measured on this subscription, so the file cannot drift
+# back to a value that only works on paper.
+
+
+#: Dedicated cores actually granted for the A10 family in koreacentral,
+#: measured 2026-08-21 via the Microsoft.Quota usages API. The request was for
+#: 36 and 36 is what arrived -- not the 72 an NV36 online endpoint needs.
+GRANTED_A10_DEDICATED_CORES = 36
+
+
+def test_online_pattern_default_sku_fits_the_granted_quota():
+    spec = get_serving("aml_online_vllm")
+    assert spec.blocked_reason(GRANTED_A10_DEDICATED_CORES) is None, (
+        "the shipped default_sku cannot deploy on the quota this subscription "
+        "has; shipping it means every `ffsft-deploy online` without an explicit "
+        "--sku fails after ~20 minutes"
+    )
+
+
+def test_every_online_default_sku_is_within_reach_of_its_quota_family():
+    for spec in get_serving_registry():
+        if spec.surface is not Surface.AML_ONLINE_ENDPOINT:
+            continue
+        needed = required_dedicated_cores(spec.default_sku)
+        assert needed <= GRANTED_A10_DEDICATED_CORES, (
+            f"pattern '{spec.key}' defaults to {spec.default_sku}, which asks "
+            f"Azure for {needed} dedicated cores against a "
+            f"{GRANTED_A10_DEDICATED_CORES}-core grant"
+        )
+
+
+def test_default_sku_leaves_room_for_a_second_instance_check():
+    # Two instances double again on top of the rolling-update multiplier. This
+    # is not a requirement -- it is documentation of what scaling out costs, so
+    # nobody discovers the arithmetic during an incident.
+    spec = get_serving("aml_online_vllm")
+    one = required_dedicated_cores(spec.default_sku, instances=1)
+    two = required_dedicated_cores(spec.default_sku, instances=2)
+    assert two == one * 2
+    assert two > GRANTED_A10_DEDICATED_CORES
