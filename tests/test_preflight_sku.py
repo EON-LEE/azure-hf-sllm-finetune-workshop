@@ -1,36 +1,36 @@
-"""Quota is permission to ask. `restrictions` is whether you may ask at all.
+"""`restrictions` describes purchase eligibility, not placement.
 
-Three managed online deployments were created in koreacentral and none ever got
-a node. The last two had everything measured correct -- 36 dedicated A10 cores
-granted, a SKU small enough to fit, AcrPull in place, no model asset to stage --
-and still sat in `Creating` for 50 and 85 minutes with no container logs, which
-is what Azure looks like when the scheduler cannot place the workload anywhere.
+An earlier version of this module raised on any `NotAvailableForSubscription`
+restriction, on the theory that it explained why three managed online
+deployments in koreacentral never got a node. Before trusting it, it was run
+against a SKU whose behaviour is not in doubt:
 
-The answer was in an API nobody had asked:
-
-    GET /subscriptions/{sub}/providers/Microsoft.Compute/skus
-        ?$filter=location eq 'koreacentral'
-
-    Standard_NV12ads_A10_v5
-      restrictions: [{ type: "Zone",
+    Standard_NC24ads_A100_v4, koreacentral
+      restrictions: [{ type: "Location",
                        reasonCode: "NotAvailableForSubscription",
-                       restrictionInfo: { zones: ["1","2","3"] } }]
+                       restrictionInfo: { locations: ["KoreaCentral"] } }]
 
-koreacentral has exactly three zones, so all three being restricted means there
-is nowhere to put it. The 36-core grant was real and completely worthless: we
-had permission to ask for something the subscription is not allowed to have in
-that region.
+That is the strongest restriction the API expresses -- the entire region, not
+a zone -- and that exact SKU in that exact region is the LowPriority AmlCompute
+cluster which fine-tuned a 27B model for 42 minutes at train_loss 1.2638.
 
-That is why this check reads `restrictions` and not quota, and why it runs
-before the endpoint is created rather than after -- it costs one ARM read and
-saves an hour of `Creating` per attempt.
+The check would therefore have refused the one GPU configuration this
+subscription is proven able to run. `restrictions` reflects on-demand dedicated
+eligibility; LowPriority/Spot allocates from a different pool and is unaffected.
+Five ordinary CPU SKUs in koreacentral carry the same restriction while the
+region happily runs CPU workloads.
+
+So these facts are reported and never enforced. A preflight with false
+negatives gets ignored; a preflight with false positives gets deleted, and
+takes the checks that did work with it.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from ffsft.deploy.preflight import SkuAvailability, sku_blocker
+from ffsft.deploy import preflight
+from ffsft.deploy.preflight import SkuAvailability, sku_advisory
 
 
 def avail(**overrides) -> SkuAvailability:
@@ -44,182 +44,127 @@ def avail(**overrides) -> SkuAvailability:
     return SkuAvailability(**base)
 
 
-# -- the case that cost three deployments -------------------------------
+LOCATION_RESTRICTION = [
+    {
+        "type": "Location",
+        "reasonCode": "NotAvailableForSubscription",
+        "restrictionInfo": {"locations": ["KoreaCentral"]},
+    }
+]
+
+ALL_ZONES_RESTRICTION = [
+    {
+        "type": "Zone",
+        "reasonCode": "NotAvailableForSubscription",
+        "restrictionInfo": {"locations": ["KoreaCentral"], "zones": ["1", "2", "3"]},
+    }
+]
 
 
-def test_all_zones_restricted_is_blocked():
-    state = avail(
-        region="koreacentral",
-        zones=["1", "2", "3"],
-        restrictions=[
-            {
-                "type": "Zone",
-                "reasonCode": "NotAvailableForSubscription",
-                "restrictionInfo": {"zones": ["1", "2", "3"]},
-            }
-        ],
-    )
-    reason = sku_blocker(state)
-    assert reason is not None
-    assert "koreacentral" in reason
-    assert "Standard_NV12ads_A10_v5" in reason
+# -- the falsification, pinned so it cannot be undone -------------------
 
 
-def test_the_blocked_message_says_quota_will_not_help():
-    """The whole point: stop the next person buying a useless quota increase."""
-    state = avail(
-        region="koreacentral",
-        restrictions=[
-            {
-                "type": "Zone",
-                "reasonCode": "NotAvailableForSubscription",
-                "restrictionInfo": {"zones": ["1", "2", "3"]},
-            }
-        ],
-    )
-    reason = sku_blocker(state)
-    assert "quota" in reason.lower()
+def test_the_training_cluster_sku_is_never_refused():
+    """Standard_NC24ads_A100_v4 is Location-restricted in koreacentral and runs.
 
-
-def test_location_restriction_is_blocked():
-    state = avail(
-        region="eastus",
-        restrictions=[
-            {
-                "type": "Location",
-                "reasonCode": "NotAvailableForSubscription",
-                "restrictionInfo": {"locations": ["eastus"]},
-            }
-        ],
-    )
-    assert sku_blocker(state) is not None
-
-
-# -- the cases that must stay deployable --------------------------------
-
-
-def test_unrestricted_sku_is_not_blocked():
-    assert sku_blocker(avail()) is None
-
-
-def test_partial_zone_restriction_still_leaves_somewhere_to_land():
-    """Two of three zones blocked is survivable -- zone 3 remains."""
-    state = avail(
-        zones=["1", "2", "3"],
-        restrictions=[
-            {
-                "type": "Zone",
-                "reasonCode": "NotAvailableForSubscription",
-                "restrictionInfo": {"zones": ["1", "2"]},
-            }
-        ],
-    )
-    assert sku_blocker(state) is None
-
-
-def test_non_availability_reason_codes_are_not_treated_as_blockers():
-    """`QuotaId` restrictions describe offer eligibility, not placement.
-
-    Blocking on every reasonCode would make the check refuse deployments that
-    actually work, which is worse than not having it.
+    If this test ever fails, the module has gone back to refusing the only GPU
+    this subscription can actually allocate.
     """
     state = avail(
-        restrictions=[
-            {
-                "type": "Location",
-                "reasonCode": "QuotaId",
-                "restrictionInfo": {"locations": ["westus2"]},
-            }
-        ],
+        sku="Standard_NC24ads_A100_v4",
+        region="koreacentral",
+        zones=["3"],
+        restrictions=LOCATION_RESTRICTION,
     )
-    assert sku_blocker(state) is None
+    note = sku_advisory(state)
+    assert note is not None, "the fact should still be reported"
+    assert "LowPriority" in note, "must say why this may be survivable"
 
 
-# -- "not measured" must never be confused with "blocked" ---------------
+def test_module_exposes_no_blocker_for_skus():
+    """Guards against reintroducing a hard block under the old name."""
+    assert not hasattr(preflight, "sku_blocker")
 
 
-def test_unknown_availability_does_not_block():
-    """`None` means the read did not happen, which is not evidence of a problem.
-
-    `read_storage_reachability` already established this convention and the
-    AcrPull precheck violated it, which is how it stayed silent in the only
-    case it existed to catch (VERIFIED 26.4).
-    """
-    assert sku_blocker(None) is None
+@pytest.mark.parametrize(
+    "restrictions",
+    [LOCATION_RESTRICTION, ALL_ZONES_RESTRICTION, [], None],
+)
+def test_advisory_never_raises(restrictions):
+    sku_advisory(avail(restrictions=restrictions))
 
 
-def test_restrictions_none_is_unknown_not_permissive():
-    """Distinguish "no restrictions" (`[]`) from "not read" (`None`)."""
-    state = avail(restrictions=None)
-    assert sku_blocker(state) is None
+# -- what the advisory has to say ---------------------------------------
 
 
-# -- shape of the record -------------------------------------------------
+def test_advisory_names_region_and_sku():
+    note = sku_advisory(
+        avail(sku="Standard_NV12ads_A10_v5", region="koreacentral",
+              restrictions=ALL_ZONES_RESTRICTION)
+    )
+    assert "koreacentral" in note and "Standard_NV12ads_A10_v5" in note
 
 
-def test_blocked_zones_lists_what_was_refused():
+def test_advisory_does_not_promise_quota_is_the_answer():
+    """The A10 rollouts failed with quota granted. Do not send anyone there."""
+    note = sku_advisory(avail(region="koreacentral", restrictions=ALL_ZONES_RESTRICTION))
+    assert "not conclusive" in note.lower()
+
+
+def test_unrestricted_sku_has_nothing_to_say():
+    assert sku_advisory(avail()) is None
+
+
+def test_unknown_reason_codes_are_ignored():
+    """`QuotaId` is offer eligibility and appears on SKUs that deploy fine."""
     state = avail(
         restrictions=[
-            {
-                "type": "Zone",
-                "reasonCode": "NotAvailableForSubscription",
-                "restrictionInfo": {"zones": ["2", "1"]},
-            }
+            {"type": "Location", "reasonCode": "QuotaId",
+             "restrictionInfo": {"locations": ["westus2"]}}
         ]
     )
-    assert state.blocked_zones == {"1", "2"}
+    assert sku_advisory(state) is None
 
 
-def test_usable_zones_is_what_is_left():
+# -- "not measured" is not a finding ------------------------------------
+
+
+def test_none_state_is_silent():
+    assert sku_advisory(None) is None
+
+
+def test_unread_restrictions_are_silent():
+    assert sku_advisory(avail(restrictions=None)) is None
+
+
+# -- the factual properties still hold ----------------------------------
+
+
+def test_blocked_zones_lists_what_was_named():
+    assert avail(restrictions=ALL_ZONES_RESTRICTION).blocked_zones == {"1", "2", "3"}
+
+
+def test_usable_zones_subtracts_rather_than_counts():
+    """koreacentral offers A10 in zones 2 and 3 but restricts 1, 2 and 3.
+
+    The restricted set is not a subset of the offered set, so comparing
+    lengths would be wrong.
+    """
+    state = avail(region="koreacentral", zones=["2", "3"],
+                  restrictions=ALL_ZONES_RESTRICTION)
+    assert state.usable_zones == set()
+
+
+def test_partial_zone_restriction_leaves_the_rest():
     state = avail(
-        zones=["1", "2", "3"],
         restrictions=[
-            {
-                "type": "Zone",
-                "reasonCode": "NotAvailableForSubscription",
-                "restrictionInfo": {"zones": ["1"]},
-            }
-        ],
+            {"type": "Zone", "reasonCode": "NotAvailableForSubscription",
+             "restrictionInfo": {"zones": ["1"]}}
+        ]
     )
     assert state.usable_zones == {"2", "3"}
 
 
-def test_region_wide_restriction_leaves_no_usable_zone():
-    state = avail(
-        zones=["1", "2", "3"],
-        restrictions=[
-            {
-                "type": "Location",
-                "reasonCode": "NotAvailableForSubscription",
-                "restrictionInfo": {"locations": ["westus2"]},
-            }
-        ],
-    )
-    assert state.usable_zones == set()
-
-
-@pytest.mark.parametrize(
-    "zones,restricted,expected_block",
-    [
-        (["1", "2", "3"], ["1", "2", "3"], True),
-        (["1", "2", "3"], ["1", "2"], False),
-        (["1", "3"], ["1", "3"], True),
-        ([], [], False),
-    ],
-)
-def test_zone_arithmetic(zones, restricted, expected_block):
-    state = avail(
-        zones=zones,
-        restrictions=(
-            [
-                {
-                    "type": "Zone",
-                    "reasonCode": "NotAvailableForSubscription",
-                    "restrictionInfo": {"zones": restricted},
-                }
-            ]
-            if restricted
-            else []
-        ),
-    )
-    assert (sku_blocker(state) is not None) is expected_block
+def test_region_restriction_leaves_no_zone():
+    assert avail(restrictions=LOCATION_RESTRICTION).usable_zones == set()
+    assert avail(restrictions=LOCATION_RESTRICTION).region_blocked is True

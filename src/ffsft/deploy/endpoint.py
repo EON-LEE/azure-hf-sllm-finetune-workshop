@@ -481,7 +481,7 @@ def deploy_online(
     from .preflight import (
         read_sku_availability,
         read_storage_reachability,
-        sku_blocker,
+        sku_advisory,
         storage_blocker,
     )
 
@@ -494,19 +494,17 @@ def deploy_online(
 
     instance_type = sku or spec.default_sku
 
-    # Quota said yes three times and the scheduler still had nowhere to put the
-    # workload, because the subscription is not permitted this SKU in any zone
-    # of the region. That is invisible on the quota page and costs 50-90 minutes
-    # of `Creating` with no container logs to discover. One ARM read, here,
-    # before anything is created.
+    # Reported, never enforced. Three A10 rollouts here stalled in `Creating`
+    # and this field is the only regional signal that distinguishes them -- but
+    # the A100 that trains on this same subscription carries a stricter
+    # restriction still, so it cannot decide a deployment. Surfacing it means
+    # the next stall has somewhere to start instead of an hour of silence.
     availability = read_sku_availability(
         target.subscription_id, target.location, instance_type
     )
-    sku_issue = sku_blocker(availability)
-    if sku_issue and not force:
-        raise RuntimeError(sku_issue)
-    if sku_issue:
-        log.warning("deploying despite: %s", sku_issue)
+    note = sku_advisory(availability)
+    if note:
+        log.warning("%s", note)
 
     client = get_ml_client(target)
 

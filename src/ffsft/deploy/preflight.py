@@ -273,40 +273,39 @@ class SkuAvailability:
         return {str(z) for z in self.zones} - self.blocked_zones
 
 
-def sku_blocker(state: SkuAvailability | None) -> str | None:
-    """Why this SKU cannot be placed in this region, or None if it can.
+def sku_advisory(state: SkuAvailability | None) -> str | None:
+    """Report what `restrictions` says, or None when it says nothing.
+
+    Deliberately not a blocker. `Standard_NC24ads_A100_v4` is restricted
+    `Location`/`NotAvailableForSubscription` across the whole of koreacentral,
+    and it is the cluster that fine-tuned a 27B model there. Enforcing this
+    field would refuse the only GPU configuration this subscription can run.
 
     Returns None when `state` is None or its restrictions were never read.
-    "Not measured" is not evidence of a problem, and a check that guesses
-    otherwise gets disabled by the first person it blocks wrongly.
+    "Not measured" is not a finding.
     """
     if state is None or state.restrictions is None:
         return None
 
-    advice = (
-        f"More quota will NOT fix this -- quota is permission to ask for "
-        f"something the subscription may not have here. Deploy to a region "
-        f"where '{state.sku}' is unrestricted, or use a LowPriority/Spot "
-        f"pattern, which is allocated from a separate pool and is why training "
-        f"runs on GPUs this same subscription cannot serve on."
-    )
-
     if state.region_blocked:
-        return (
-            f"'{state.sku}' is NotAvailableForSubscription across the whole of "
-            f"'{state.region}'. {advice}"
+        scope = f"across the whole of '{state.region}'"
+    elif state.blocked_zones and not state.usable_zones and state.zones:
+        scope = (
+            f"in every zone of '{state.region}' "
+            f"({', '.join(sorted(state.blocked_zones))})"
         )
+    else:
+        return None
 
-    blocked = state.blocked_zones
-    if blocked and not state.usable_zones and state.zones:
-        return (
-            f"'{state.sku}' is NotAvailableForSubscription in every zone of "
-            f"'{state.region}' ({', '.join(sorted(blocked))}), so there is "
-            f"nowhere to place it. The deployment will sit in 'Creating' "
-            f"without a node and without container logs until it is deleted. "
-            f"{advice}"
-        )
-    return None
+    return (
+        f"'{state.sku}' is marked NotAvailableForSubscription {scope}. "
+        f"This is not conclusive: the field describes on-demand dedicated "
+        f"eligibility, and LowPriority/Spot allocates from a separate pool "
+        f"that ignores it -- this subscription trains on an A100 carrying "
+        f"exactly this restriction. Treat it as one signal if the rollout "
+        f"stalls in 'Creating' with no container logs, alongside quota and "
+        f"regional capacity."
+    )
 
 
 def read_sku_availability(

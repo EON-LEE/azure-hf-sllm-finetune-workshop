@@ -2302,3 +2302,73 @@ is to ask for quota, and here that wastes days.
 Cost of not having this check: three deployments, roughly three hours of
 `Creating`, and two teardowns of 32 and 64 minutes. Cost of running it: one ARM
 read, about a second.
+---
+
+## 30. Correction: section 28's root cause was wrong (2026-08-22)
+
+**Sections 28 and 29.3 claim `restrictions` explains the serving failures. That
+claim is false and is retracted here.** The sections are left in place because
+the measurements in them are sound; only the conclusion drawn from them was not.
+
+### 30.1 The test that falsified it
+
+Before letting the new preflight refuse anything, it was pointed at a SKU whose
+behaviour is not in question -- the training cluster's own:
+
+```
+Standard_NC24ads_A100_v4   koreacentral
+  restrictions:
+    type=Location  reason=NotAvailableForSubscription  locations=[KoreaCentral]
+```
+
+That is a stricter restriction than the A10's: the whole region, not a zone.
+And `gpu-a100-lp` is that SKU, in that region, and it fine-tuned a 27B model
+for 42 minutes at `train_loss 1.2638` (section 23).
+
+Five ordinary CPU SKUs -- `Standard_F8s_v2`, `Standard_F4s_v2`,
+`Standard_DS3_v2`, `Standard_E4s_v3`, `Standard_D4as_v4` -- carry both a
+`Location` and an all-zone restriction in koreacentral, in a region that
+plainly runs CPU workloads (`cores 4/136` in use).
+
+**So `restrictions` does not predict placement.** It describes on-demand
+dedicated purchase eligibility. LowPriority/Spot allocates from a separate pool
+and ignores it, which is why training works. It is not the mechanism behind the
+A10 stalls; the correlation in section 28 was confounded by priority tier, and
+the sample was three failures of one family in one region.
+
+### 30.2 What the check does now
+
+`sku_blocker` is gone. `sku_advisory` reports the same facts, never enforces,
+and says in the message itself that the signal is not conclusive. Had the
+original shipped, `ffsft-deploy` would have refused `Standard_NC24ads_A100_v4`
+in koreacentral -- the one GPU configuration this subscription is proven able
+to run.
+
+`tests/test_preflight_sku.py::test_the_training_cluster_sku_is_never_refused`
+pins the falsifying case, and `test_module_exposes_no_blocker_for_skus` stops
+the hard block returning under its old name.
+
+### 30.3 What is still true
+
+- Section 29.1 stands: quota requests fail with `QuotaNotAvailableForResource`,
+  a capacity refusal, at 24 and at 12 cores.
+- Section 29.2 stands: the only non-zero dedicated GPU quota this subscription
+  has outside koreacentral is K80/M60 era, below vLLM's compute-capability
+  floor of 7.0.
+- Section 27.5 stands: the largest and smallest A10 stalled identically, so SKU
+  size is not the variable.
+
+**Honest status of the serving failure: still unexplained at the mechanism
+level.** Regional capacity for dedicated A10 remains the best hypothesis, and
+`QuotaNotAvailableForResource` is consistent with it, but nothing measured so
+far proves it. What is established is narrower and sufficient for planning: no
+managed online GPU endpoint has ever reached a node on this subscription, and
+the dedicated capacity such an endpoint requires cannot currently be obtained
+in any region -- while LowPriority, which online endpoints cannot use, works.
+
+### 30.4 The lesson worth keeping
+
+The preflight was verified against a case where the right answer was already
+known, and that is the only reason a false positive did not ship. A check is
+not validated by the failures it explains; it is validated by the successes it
+leaves alone.
