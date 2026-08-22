@@ -478,7 +478,12 @@ def deploy_online(
     # which is the one case where the grant is guaranteed to be missing. It now
     # runs after the endpoint is created, below. Creating an endpoint is free;
     # only a deployment allocates a GPU.
-    from .preflight import read_storage_reachability, storage_blocker
+    from .preflight import (
+        read_sku_availability,
+        read_storage_reachability,
+        sku_blocker,
+        storage_blocker,
+    )
 
     reachability = read_storage_reachability(target)
     storage_issue = storage_blocker(reachability) if reachability else None
@@ -488,6 +493,21 @@ def deploy_online(
         log.warning("deploying despite: %s", storage_issue)
 
     instance_type = sku or spec.default_sku
+
+    # Quota said yes three times and the scheduler still had nowhere to put the
+    # workload, because the subscription is not permitted this SKU in any zone
+    # of the region. That is invisible on the quota page and costs 50-90 minutes
+    # of `Creating` with no container logs to discover. One ARM read, here,
+    # before anything is created.
+    availability = read_sku_availability(
+        target.subscription_id, target.location, instance_type
+    )
+    sku_issue = sku_blocker(availability)
+    if sku_issue and not force:
+        raise RuntimeError(sku_issue)
+    if sku_issue:
+        log.warning("deploying despite: %s", sku_issue)
+
     client = get_ml_client(target)
 
     log.info("ensuring endpoint %s", endpoint_name)

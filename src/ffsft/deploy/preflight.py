@@ -203,3 +203,170 @@ def read_storage_reachability(target, *, credential=None) -> StorageReachability
     except Exception as exc:  # noqa: BLE001 - a preflight must never be the blocker
         log.debug("preflight could not read storage reachability: %s", exc)
         return None
+
+
+# -- SKU availability ----------------------------------------------------
+#
+# Quota answers "how much may I ask for". `restrictions` answers "may I ask at
+# all". They are separate gates and the second one is invisible in every place
+# a person naturally looks: the portal quota page, `az quota show`, and the
+# usages API all report the first.
+#
+# koreacentral granted 36 dedicated A10 cores to a subscription that is not
+# allowed to place an A10 in any of that region's three zones. Three
+# deployments were created against that grant. None got a node, none produced a
+# log, and each took 50-90 minutes to not happen. One ARM read predicts all of
+# it.
+
+#: Restriction reason codes that mean "the scheduler cannot place this here".
+#: `QuotaId` is deliberately excluded: it describes which offers may purchase
+#: the SKU, not whether this subscription can place one, and treating it as a
+#: blocker would refuse deployments that actually work.
+BLOCKING_REASON_CODES = {"NotAvailableForSubscription"}
+
+
+@dataclass
+class SkuAvailability:
+    """Whether a subscription may place `sku` in `region`, and where.
+
+    A plain record like `StorageReachability`, for the same reason: the
+    decision is pure, so the exact configuration that failed can be tested
+    without a subscription.
+    """
+
+    sku: str
+    region: str
+    #: Raw `restrictions` from Microsoft.Compute/skus. `None` means "not read",
+    #: which must never be treated as a blocker -- that mistake is what let the
+    #: AcrPull precheck stay silent for the only case it existed to catch.
+    restrictions: list[dict] | None = None
+    #: Zones the SKU is offered in at all, from `locationInfo[].zones`.
+    zones: list[str] = field(default_factory=list)
+
+    @property
+    def region_blocked(self) -> bool:
+        """True when the whole region is refused, zones irrelevant."""
+        for r in self.restrictions or []:
+            if r.get("reasonCode") not in BLOCKING_REASON_CODES:
+                continue
+            if str(r.get("type", "")).lower() == "location":
+                return True
+        return False
+
+    @property
+    def blocked_zones(self) -> set[str]:
+        blocked: set[str] = set()
+        for r in self.restrictions or []:
+            if r.get("reasonCode") not in BLOCKING_REASON_CODES:
+                continue
+            if str(r.get("type", "")).lower() != "zone":
+                continue
+            info = r.get("restrictionInfo") or {}
+            blocked |= {str(z) for z in (info.get("zones") or [])}
+        return blocked
+
+    @property
+    def usable_zones(self) -> set[str]:
+        """Zones left to land in. Empty with offered zones means nowhere."""
+        if self.region_blocked:
+            return set()
+        return {str(z) for z in self.zones} - self.blocked_zones
+
+
+def sku_blocker(state: SkuAvailability | None) -> str | None:
+    """Why this SKU cannot be placed in this region, or None if it can.
+
+    Returns None when `state` is None or its restrictions were never read.
+    "Not measured" is not evidence of a problem, and a check that guesses
+    otherwise gets disabled by the first person it blocks wrongly.
+    """
+    if state is None or state.restrictions is None:
+        return None
+
+    advice = (
+        f"More quota will NOT fix this -- quota is permission to ask for "
+        f"something the subscription may not have here. Deploy to a region "
+        f"where '{state.sku}' is unrestricted, or use a LowPriority/Spot "
+        f"pattern, which is allocated from a separate pool and is why training "
+        f"runs on GPUs this same subscription cannot serve on."
+    )
+
+    if state.region_blocked:
+        return (
+            f"'{state.sku}' is NotAvailableForSubscription across the whole of "
+            f"'{state.region}'. {advice}"
+        )
+
+    blocked = state.blocked_zones
+    if blocked and not state.usable_zones and state.zones:
+        return (
+            f"'{state.sku}' is NotAvailableForSubscription in every zone of "
+            f"'{state.region}' ({', '.join(sorted(blocked))}), so there is "
+            f"nowhere to place it. The deployment will sit in 'Creating' "
+            f"without a node and without container logs until it is deleted. "
+            f"{advice}"
+        )
+    return None
+
+
+def read_sku_availability(
+    subscription_id: str,
+    region: str,
+    sku: str,
+    *,
+    credential=None,
+) -> SkuAvailability | None:
+    """Read `restrictions` for one SKU in one region. None if unreadable.
+
+    Raw REST rather than azure-mgmt-compute: this repo already depends on
+    `requests` + `azure-identity` for every other ARM read, and adding an SDK
+    for one GET would make the check silently unavailable wherever that extra
+    is not installed -- which is exactly how this function first shipped, and
+    it returned None against a subscription it was supposed to catch.
+
+    Returning None on failure keeps a transient ARM error from blocking a
+    deployment that would have worked.
+    """
+    try:
+        import requests
+        from azure.identity import DefaultAzureCredential
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
+        log.debug("SKU preflight skipped, azure libraries missing: %s", exc)
+        return None
+
+    try:
+        cred = credential or DefaultAzureCredential()
+        token = cred.get_token("https://management.azure.com/.default").token
+        resp = requests.get(
+            f"https://management.azure.com/subscriptions/{subscription_id}"
+            f"/providers/Microsoft.Compute/skus",
+            params={"api-version": "2021-07-01", "$filter": f"location eq '{region}'"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=60,
+        )
+        resp.raise_for_status()
+
+        for entry in resp.json().get("value", []):
+            if entry.get("name") != sku:
+                continue
+            zones = sorted(
+                {
+                    str(z)
+                    for li in entry.get("locationInfo") or []
+                    for z in (li.get("zones") or [])
+                }
+            )
+            return SkuAvailability(
+                sku=sku,
+                region=region,
+                restrictions=entry.get("restrictions") or [],
+                zones=zones,
+            )
+
+        # Offered nowhere in this region is a different fact from restricted,
+        # and not one this check is entitled to turn into a blocker.
+        log.warning("SKU %s is not offered at all in %s", sku, region)
+        return SkuAvailability(sku=sku, region=region, restrictions=None, zones=[])
+    except Exception as exc:  # pragma: no cover - network path
+        log.debug("could not read SKU availability for %s in %s: %s", sku, region, exc)
+        return None

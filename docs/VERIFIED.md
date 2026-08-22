@@ -2098,3 +2098,207 @@ SKU 축은 소진됐다. 남은 축은 **리전**과 **호스팅 표면**이다.
    풀면 된다.
 
 `--sku` 를 계속 바꿔보는 것은 이제 근거가 없다. 두 번의 실측이 그 축을 닫았다.
+---
+
+## 28. 🔑 진짜 원인 — 쿼터가 아니라 `restrictions` 였다
+
+§27.5 는 "koreacentral 에 A10 물리 용량이 없다"로 결론냈다. **절반만 맞았다.**
+정확한 원인은 용량 부족이 아니라 **구독이 그 리전에서 그 SKU 를 쓸 수 없도록
+막혀 있었다**는 것이고, 이건 추측이 아니라 API 로 읽을 수 있는 값이다.
+
+### 28.1 우리가 한 번도 안 물어본 API
+
+```
+GET /subscriptions/{sub}/providers/Microsoft.Compute/skus?$filter=location eq '{region}'
+```
+
+각 SKU 마다 `restrictions` 배열이 있다. koreacentral 의 A10 은 이렇게 나온다:
+
+```json
+"name": "Standard_NV12ads_A10_v5",
+"restrictions": [
+  { "type": "Zone", "reasonCode": "NotAvailableForSubscription",
+    "restrictionInfo": { "zones": ["1","2","3"] } }
+]
+```
+
+**zone 1, 2, 3 전부 차단.** koreacentral 에는 zone 이 3개뿐이므로 이건
+"놓을 자리가 한 곳도 없다"는 뜻이다. 쿼터는 36코어 승인이었지만
+**승인받은 것을 놓을 곳이 없었다.**
+
+이것이 `Creating` 에서 50분·85분을 멈춘 이유다. 스케줄러는 배치할 존을
+찾지 못했고, Azure 는 그 상태를 `Creating` 이라는 낙관적인 문자열로 표현한다.
+
+### 28.2 쿼터와 restrictions 는 다른 것이다
+
+| | 쿼터 (`limit`) | 제한 (`restrictions`) |
+|---|---|---|
+| 뜻 | **얼마나** 요청해도 되는가 | **애초에** 요청이 가능한가 |
+| 얻는 법 | 티켓/Quota API 로 요청 | 요청 불가 — Azure 가 정한다 |
+| 우리 상태 | koreacentral A10 = **36** | koreacentral A10 = **전 zone 차단** |
+
+**쿼터를 먼저 확인한 것이 실수였다.** 순서가 거꾸로였다.
+`restrictions` 가 비어 있지 않으면 쿼터는 몇이든 의미가 없다.
+
+### 28.3 그래서 학습은 왜 됐나 — 이제 완전히 설명된다
+
+koreacentral 의 A100 도 `NotAvailableForSubscription` 이다(리전 레벨).
+그런데 `gpu-a100-lp` 클러스터는 A100 으로 **실제로 학습을 돌린다**(§23).
+
+`restrictions` 는 **전용(dedicated) 할당**에만 적용되고,
+**LowPriority/Spot 은 별도 풀**에서 배정되기 때문이다.
+
+```
+학습  = AmlCompute + LowPriority  → restrictions 우회 → 동작 ✅
+서빙  = 매니지드 온라인 엔드포인트 (LowPriority 불가) → restrictions 직격 → 불가 ❌
+```
+
+§22.5 가 "그래서 학습은 왜 되나"를 쿼터 종류(dedicated vs low-priority)로
+설명했는데, 진짜 층위는 하나 더 아래였다. **결론은 같지만 이유가 다르다.**
+
+### 28.4 실측 — 이 구독에서 제한 없는 GPU 계열 (2026-08-22)
+
+19개 리전을 훑었다. 값은 `restrictions == []` 인 SKU 만 센 것이다.
+
+| 리전 | 제한 없는 GPU 계열 |
+|---|---|
+| **koreacentral** | **없음** ← 현재 워크스페이스 |
+| koreasouth / japaneast / eastasia | 없음 |
+| eastus / centralus / australiaeast / uksouth | 없음 |
+| northeurope / canadacentral / centralindia | 없음 |
+| japanwest | T4 |
+| **westus2** | **A10** ← 이 자산의 기본 계열 |
+| southcentralus | A10 |
+| southeastasia / westus3 | A100 |
+| eastus2 | A100, H100 |
+| swedencentral | A100, T4 |
+| westeurope | H100 |
+
+**koreacentral 은 제한 없는 GPU 계열이 하나도 없다.** 이 구독으로
+koreacentral 에서 GPU 온라인 엔드포인트를 띄우는 것은 불가능하다.
+쿼터를 얼마를 받든, 어떤 SKU 를 고르든, 얼마를 기다리든 안 된다.
+
+### 28.5 측정 방법에 대한 경고 — 한 번 읽은 값을 믿지 마라
+
+이 표를 처음 만들었을 때 westus3 가 **A10·A100·H100·T4 전부 제한 없음**으로
+나왔다. 상세 조회로 교차 확인하니 westus3 의 A10 은 `Location` + `Zone`
+양쪽으로 차단돼 있었다. 같은 URL, 같은 필터인데 두 결과가 달랐다.
+
+그래서 **같은 SKU 를 3회 연속 재조회**했다:
+
+```
+westus3  read1/2/3: restricted=True  [Location, Zone]   ← 3회 모두 동일
+westus2  read1/2/3: restricted=False []                 ← 3회 모두 동일
+```
+
+API 는 결정적이었다. 즉 틀린 것은 첫 스캔 스크립트였다.
+**리전을 고르는 근거가 되는 측정은 반드시 교차 검증한다.** 이 표는
+리전별로 응답을 개별 파일에 저장한 뒤 각각 파싱해 다시 만든 것이다.
+
+### 28.6 다음 행동 — westus2 + A10
+
+`westus2` 를 골랐다. A10 전 계열이 제한 없고 **zone 1·2·3 모두** 사용 가능하다
+(southcentralus 는 A10 이 제한 없지만 zone 이 1·3 둘뿐이다).
+
+쿼터는 0 이므로 요청했다:
+
+```
+PUT .../locations/westus2/providers/Microsoft.Quota/quotas/StandardNVADSA10v5Family
+    { "properties": { "limit": { "limitObjectType": "LimitValue", "value": 24 } } }
+
+→ quotaRequests/c3e20a74-9d6c-46ac-902f-655837bed549
+  provisioningState: InProgress
+```
+
+24 코어 = `Standard_NV12ads_A10_v5`(12코어 x 2 롤링) 정확히 한 대.
+
+**이번에는 순서가 맞다:** 제한 없음을 먼저 확인했고, 그 다음에 쿼터를 요청했다.
+---
+
+## 29. The quota requests failed for a reason worth recording (2026-08-22)
+
+### 29.1 The error code, once asked for properly
+
+`quotaRequests` list returns only `"Request failed."` in `message`. The `error`
+object underneath carries the real thing:
+
+```json
+{"code": "QuotaNotAvailableForResource", "message": "Request failed."}
+```
+
+Both westus2 attempts (24 cores, then 12) and southcentralus (24) failed with
+this same code. `Request processing` was not progress -- it was the state
+before the failure landed.
+
+**This is a capacity refusal, not a policy refusal.** Azure is not saying "you
+may not have this"; it is saying "there is none here to give". No ticket
+changes that, and a smaller ask does not either -- 12 failed exactly like 24.
+
+Subscription context: `quotaId: Internal_2014-09-01`, spending limit Off.
+
+### 29.2 What quota this subscription actually has, everywhere
+
+Dedicated (non-LowPriority) GPU families with a non-zero limit, across all 8
+regions that have any unrestricted GPU family:
+
+| family | limit | generation |
+|---|---|---|
+| `standardNCFamily` | 48 | K80, Kepler, CC 3.7 |
+| `standardNCPromoFamily` | 48 | K80 |
+| `standardNVFamily` | 24 | M60, Maxwell, CC 5.2 |
+| `standardNVPromoFamily` | 24 | M60 |
+| `internalNDMSv1Family` | 100 | ND v1 |
+
+Identical in all 8 regions, which is the signature of an untouched default
+rather than anything granted.
+
+Every modern family -- `StandardNVADSA10v5Family`, `standardNCADSA100v4Family`,
+`standardNCadsH100v5Family` -- is **0 in every region except koreacentral**,
+and koreacentral is the region §28 proved is restricted in all zones.
+
+The legacy quota is not a workaround. vLLM requires compute capability 7.0+;
+K80 is 3.7 and M60 is 5.2, and neither has bf16. The quota that exists cannot
+run the workload, and the quota that could run it does not exist.
+
+### 29.3 So the managed online GPU endpoint is unreachable here
+
+Three independent proofs, each measured rather than argued:
+
+1. **Restrictions** (§28) -- koreacentral A10 is `NotAvailableForSubscription`
+   in zones 1, 2 and 3. The 36-core grant cannot be placed.
+2. **Behaviour** (§27) -- the largest and the smallest A10 stalled identically
+   in `Creating`, so SKU size was never the variable.
+3. **Capacity** (§29.1) -- every attempt to obtain modern GPU quota in an
+   unrestricted region is refused for lack of capacity.
+
+Managed online endpoints cannot use LowPriority. LowPriority is the only GPU
+tier this subscription can actually allocate. The two facts do not intersect,
+and no amount of retrying makes them.
+
+**This is a subscription limitation, not a defect in the asset.** The same code
+against a subscription with dedicated A10 capacity in an unrestricted region
+has no known blocker -- which is precisely why the preflight below reports the
+condition instead of the asset pretending it cannot happen.
+
+### 29.4 The finding now lives in code, not just in this file
+
+`ffsft.deploy.preflight.sku_blocker` (15 tests, `tests/test_preflight_sku.py`)
+reads `Microsoft.Compute/skus` and refuses a deployment that cannot be placed,
+before the endpoint is created. Verified live against real ARM:
+
+```
+koreacentral  Standard_NV12ads_A10_v5  zones offered ['2','3']  blocked ['1','2','3']  -> BLOCKED
+westus2       Standard_NV12ads_A10_v5  zones offered ['1','2','3']  blocked []          -> DEPLOYABLE
+```
+
+Note koreacentral offers the SKU in zones 2 and 3 yet restricts 1, 2 and 3;
+the restriction set is not a subset of the offered set, so the check subtracts
+rather than compares lengths.
+
+The message names the region, the SKU, the zones, and says plainly that more
+quota will not help -- because the obvious next move after a placement failure
+is to ask for quota, and here that wastes days.
+
+Cost of not having this check: three deployments, roughly three hours of
+`Creating`, and two teardowns of 32 and 64 minutes. Cost of running it: one ARM
+read, about a second.
