@@ -1956,3 +1956,145 @@ GPU 수치는 없다. **없는 것을 있는 것처럼 적지 않는다.**
 3. 같은 명령을 시간대를 바꿔서 — 용량 문제라면 시점 의존적이다
 
 명령은 `docs/RUNBOOK.md` §3 에 그대로 있다.
+
+---
+
+## 27. ✅ 기본 SKU 결함 + AcrPull 자동 부여 실증 — `ffsft-nv6`
+
+§26 은 A10 온라인 엔드포인트로 벽을 뚫었지만 롤아웃이 완료되지 않은 채 끝났다.
+이번에는 **§26.8 이 남긴 가설 1번(더 작은 SKU)** 을 실제로 시도했고, 그 과정에서
+자산 자체의 결함 하나를 더 찾아 고쳤다.
+
+### 27.1 ⛔ 출하된 기본값이 배포 불가능한 값이었다
+
+`configs/serving.yaml` 의 `aml_online_vllm.default_sku` 는
+`Standard_NV36ads_A10_v5` 였다.
+
+```
+NV36 = 36 코어
+온라인 엔드포인트는 롤링 업데이트분을 예약 → x2
+필요 = 72 코어      승인 = 36 코어
+```
+
+즉 **`--sku` 를 명시하지 않은 모든 `ffsft-deploy online` 은 반드시 실패한다.**
+약 20분을 쓴 뒤 `quota requested is 72` 를 받는다. 이건 환경 문제가 아니라
+**우리가 출하한 기본값이 우리 구독에서 동작하지 않는다**는 자산의 결함이다.
+
+§26.3 에서 이 산술을 이미 측정해놓고도 설정 파일에 반영하지 않았다.
+문서에만 적힌 발견은 다음 사람을 구해주지 못한다.
+
+**TDD 로 고쳤다.** 테스트 3개를 먼저 쓰고 RED 를 확인했다:
+
+```
+FAILED test_online_pattern_default_sku_fits_the_granted_quota
+FAILED test_every_online_default_sku_is_within_reach_of_its_quota_family
+  AssertionError: pattern 'aml_online_vllm' defaults to
+  Standard_NV36ads_A10_v5, which asks Azure for 72 dedicated cores
+  against a 36-core grant
+  assert 72 <= 36
+```
+
+기본값을 `Standard_NV12ads_A10_v5`(24 코어 필요, 12 여유)로 바꿔 GREEN.
+테스트가 **설정 파일 자체를 실측 쿼터에 고정**하므로 파일이 다시 종이 위에서만
+동작하는 값으로 되돌아갈 수 없다.
+
+### 27.2 ✅ AcrPull 자동 부여가 무인 실행으로 증명됐다
+
+§26.4 에서 첫 배포는 `Endpoint identity does not have pull permission` 으로
+죽었고, 그때는 **손으로** 역할을 부여해서 넘어갔다. 이번 실행에서는 아무것도
+손대지 않았는데 로그가 이렇게 남았다:
+
+```
+INFO ffsft.deploy.identity: granted AcrPull to
+     30b28994-8c16-4ab7-babb-0a785bd546b8 on acrffsftkc
+INFO ffsft.deploy.endpoint: granted AcrPull to the endpoint identity;
+     waiting 60s to propagate
+```
+
+principal id 가 §26.4 의 `fbd167d1-...` 과 다르다는 점이 중요하다. 엔드포인트를
+새로 만들면 시스템 할당 ID 도 새로 생기므로, 이건 **이전 수동 부여가 남아서**
+통과한 게 아니라 코드가 새 ID 를 보고 새로 부여한 것이다.
+
+§26.4 에서 고친 두 가지가 모두 실동작으로 확인됐다:
+
+| 고친 것 | 이번 실행에서의 증거 |
+|---|---|
+| 프리체크를 엔드포인트 생성 **이후**로 이동 | 신규 엔드포인트인데도 ID 를 읽어냈다 (404 로 침묵하지 않음) |
+| `ensure_acr_pull()` 로 직접 부여 | 새 principal 에 역할이 자동 생성됨 |
+
+### 27.3 `percentComplete` 는 진행률 신호가 아니다
+
+§26.8 은 85분간 `percentComplete: 0.0` 을 관측했다. 이번 롤아웃에서 같은 필드는
+아예 `None` 이었다.
+
+```
+10:39:01  Creating None Default
+```
+
+**같은 API 가 같은 상태에서 두 가지 다른 값을 준다.** 이 필드로 "얼마나 남았나"를
+판단하면 안 된다. 판단 가능한 것은 `provisioningState` 의 전이뿐이다.
+### 27.4 ⛔ 가장 작은 A10 SKU 도 똑같이 정지했다 — 용량 가설 확정
+
+§26.8 이 남긴 1번 가설, **"더 작은 SKU 면 용량을 잡을 수 있다"** 를 실제로 시험했다.
+`Standard_NV6ads_A10_v5` 는 A10 계열 중 가장 작다.
+
+```
+2026-08-22 10:38  ffsft-nv6 / blue / Standard_NV6ads_A10_v5 생성 시작
+                  6 코어 x 2(롤링) = 12 코어 필요, 승인 36 코어 → 여유 24
+```
+
+배포 리소스는 전부 정상이었다:
+
+```
+provisioningState  : Creating
+instanceType       : Standard_NV6ads_A10_v5     <- 최소 SKU
+model              : None                       <- Hub 경로, 스토리지 미사용
+MODEL_PATH         : Qwen/Qwen3.5-0.8B
+readinessProbe     : initialDelay PT2M20S, period PT30S, failureThreshold 10
+egress             : Enabled
+provisioningDetails: null
+```
+
+**50분간 `Creating` 에서 한 번도 움직이지 않았다.** 컨테이너 로그는 끝까지
+`Deployment is in deleting or creating state so logs can't be retrieved.`
+
+readiness probe 는 최대 `2분20초 + 30초x10 = 7분20초` 만에 판정이 난다.
+**컨테이너가 떴다면 늦어도 ~8분 안에 `Failed` 나 `Succeeded` 중 하나가 나와야 한다.**
+50분째 `Creating` 이고 로그가 없다는 것은 컨테이너가 뜬 적이 없다는 뜻이고,
+컨테이너가 뜨려면 노드가 먼저 있어야 하므로 — **노드가 배정되지 않았다.**
+
+### 27.5 실험 결과: SKU 크기는 변수가 아니었다
+
+| 시도 | SKU | 코어(필요) | 결과 | 정지 시간 |
+|---|---|---|---|---|
+| §26.8 | `Standard_NV12ads_A10_v5` | 12 (24) | `Creating` 고착 | 85분 |
+| §27.4 | `Standard_NV6ads_A10_v5` | 6 (**12**) | `Creating` 고착 | 50분 |
+
+필요 코어를 **24 → 12 로 절반**으로 줄였는데 신호가 완전히 동일했다.
+바꾼 변수가 결과를 전혀 바꾸지 못했으므로 **원인은 SKU 크기가 아니다.**
+
+남는 설명은 하나다: **koreacentral 에 managed online endpoint 용 A10 물리 용량이
+없다.** 그리고 이것이 이 자산 전체에서 가장 값비싼 교훈이다:
+
+> **쿼터 승인은 용량 보장이 아니다.**
+> 쿼터는 "이만큼까지 요청해도 된다"는 *허가*이고,
+> 용량은 "지금 그 리전에 실제 GPU 가 놀고 있는가"라는 *사실*이다.
+> 전자는 티켓으로 얻지만 후자는 얻을 수 없다.
+
+Azure 는 이 구분을 API 로 알려주지 않는다. `Creating` 은 "곧 됩니다"와
+"영원히 안 됩니다"를 같은 문자열로 표현한다.
+
+### 27.6 다음에 시도할 것 — 순서를 바꾼다
+
+SKU 축은 소진됐다. 남은 축은 **리전**과 **호스팅 표면**이다.
+
+1. **다른 리전** — `japaneast`, `southeastasia` 등에 A10/T4 쿼터를 요청.
+   워크스페이스가 리전에 묶이므로 새 워크스페이스가 필요하다.
+2. **AKS + Spot (`aks_vllm` 패턴)** — 노드 풀은 관리형 엔드포인트와 다른
+   용량 풀에서 할당된다. §26.2 에서 AmlCompute 와 온라인 엔드포인트가 서로 다른
+   SKU 카탈로그를 갖는 것을 이미 봤으므로, 표면을 바꾸면 결과가 달라질 수 있다.
+3. **배치 엔드포인트 + LowPriority A100** — 이 구독에서 **학습이 실제로 도는**
+   경로다(§23). 대화형은 아니지만 GPU 추론 자체는 가능하다. 스토리지 벽(§24)만
+   풀면 된다.
+
+`--sku` 를 계속 바꿔보는 것은 이제 근거가 없다. 두 번의 실측이 그 축을 닫았다.
