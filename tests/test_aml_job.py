@@ -70,15 +70,18 @@ def test_unset_step_and_sample_caps_are_omitted_not_passed_as_sentinels():
 
 
 def test_output_dir_follows_whether_the_output_is_mounted():
-    """`${{outputs.model_dir}}` only resolves when the output actually exists.
+    """`${{outputs.model_dir}}` resolves under either mode, because it is declared.
 
-    With no mounted output Azure ML leaves the literal token in the command, and
-    the adapter is written to a directory named `${{outputs.model_dir}}`.
+    The token is substituted for any declared output, mounted or not; what the
+    mode changes is only whether the bytes stream out during the run or are
+    copied up at the end.
     """
     assert "--output-dir ${{outputs.model_dir}}" in build_command(
         JobSpec(mount_outputs=True)
     )
-    assert "--output-dir ./outputs" in build_command(JobSpec(mount_outputs=False))
+    assert "--output-dir ${{outputs.model_dir}}" in build_command(
+        JobSpec(mount_outputs=False)
+    )
 
 
 def test_outputs_are_not_mounted_by_default():
@@ -91,14 +94,18 @@ def test_outputs_are_not_mounted_by_default():
     with `data-capability.AssetMountOutputSession.Exception`, and it fails in
     the lifecycler *before* the user command starts -- so a 27B run dies after
     paying for node allocation and the image pull, having trained nothing.
+    Verified on green_kettle_w1zpbvd64q, which failed this way in about five
+    minutes.
 
-    Writing to `./outputs` instead costs nothing: Azure ML uploads that
-    directory through the run-history artifact service, which is a different
-    code path with its own auth and does not mount anything. Verified on
-    green_kettle_w1zpbvd64q, which failed this way in about five minutes.
+    The fix for that was to stop mounting, and the mistake was to stop
+    *declaring*: the adapter went to `./outputs` on the assumption that the
+    run-history artifact service uploads it. It does not, and two completed 27B
+    runs left nothing but logs. `upload` mode declares the output without
+    opening a session, which avoids the failure without losing the model.
     """
     assert JobSpec().mount_outputs is False
-    assert "--output-dir ./outputs" in build_command(JobSpec())
+    assert JobSpec().output_mode == "upload"
+    assert "--output-dir ${{outputs.model_dir}}" in build_command(JobSpec())
 
 
 def test_default_lora_targets_opt_in_reaches_the_node():
@@ -234,8 +241,8 @@ def test_eval_reads_the_adapter_the_trainer_just_wrote():
     job = aml_job.JobSpec(model_key="qwen3.8-27b", eval_suite="ko_fast")
     cmd = aml_job.build_command(job)
     train, _, evaluate = cmd.partition("&&")
-    assert "--output-dir ./outputs" in train
-    assert "--adapter ./outputs" in evaluate
+    assert "--output-dir ${{outputs.model_dir}}" in train
+    assert "--adapter ${{outputs.model_dir}}" in evaluate
 
 
 def test_eval_limit_is_passed_through():
@@ -254,3 +261,69 @@ def test_eval_limit_alone_does_nothing():
 def test_preflight_never_chains_an_eval():
     cmd = aml_job.build_command(aml_job.JobSpec(preflight=True, eval_suite="ko_fast"))
     assert cmd == "python -m ffsft.train.preflight"
+
+
+# ---------------------------------------------------------------------------
+# The trained adapter has to survive the node.
+#
+# Two 27B runs completed here -- `heroic_fennel_085y2rwm3s` at train_loss
+# 1.2638 and `olden_bean_302vkc7nbz` -- and neither left a model behind. The
+# artifact store holds six files for each, all of them logs:
+#
+#     system_logs/...  (5)
+#     user_logs/std_log.txt
+#
+# No `outputs/`. The adapter was written to the node's local disk and went away
+# with the LowPriority node. That is why the workspace has zero registered
+# models and why no endpoint ever had anything to serve.
+#
+# The cause was a comment, not a bug: `mount_outputs=False` was chosen to dodge
+# a real FUSE-mount failure against a storage account with public network
+# access disabled, and justified with "writing to `./outputs` instead is
+# uploaded by the run-history artifact service". That claim was never measured.
+# It is false for v2 command jobs, which capture logs and *declared* outputs
+# and nothing else.
+#
+# `upload` mode is the way out: the output is an ordinary local directory for
+# the duration of the run and is copied up at the end, so there is no mount
+# session for the storage rules to refuse.
+# ---------------------------------------------------------------------------
+
+
+def test_training_never_writes_the_adapter_to_a_path_that_is_not_collected():
+    """`./outputs` is local disk on a node that is about to be deleted."""
+    cmd = build_command(JobSpec(model_key="qwen3.8-27b", mix="ko_smoke"))
+    assert "--output-dir ./outputs" not in cmd
+
+
+def test_the_adapter_goes_to_a_declared_output():
+    cmd = build_command(JobSpec())
+    assert "--output-dir ${{outputs.model_dir}}" in cmd
+
+
+def test_upload_is_the_default_output_mode():
+    """Mounting is what failed; uploading is what this workspace can do."""
+    assert JobSpec().output_mode == "upload"
+
+
+def test_outputs_are_declared_even_without_mounting():
+    """The regression in one line: outputs used to be None unless mounted."""
+    assert JobSpec().mount_outputs is False
+    assert JobSpec().declared_outputs() == {"model_dir", "report"}
+
+
+def test_mount_mode_is_still_reachable():
+    """A workspace without the storage restriction should still be able to."""
+    assert JobSpec(mount_outputs=True).output_mode == "rw_mount"
+
+
+def test_eval_reads_the_adapter_back_from_the_same_place():
+    """A path mismatch here scores the base model and calls it tuned."""
+    cmd = build_command(JobSpec(eval_suite="ko_fast", eval_limit=25))
+    assert "--adapter ${{outputs.model_dir}}" in cmd
+    assert "--output-dir ${{outputs.model_dir}}/eval" in cmd
+
+
+def test_preflight_declares_nothing():
+    """The self-test produces no model, so it needs no output to lose."""
+    assert build_command(JobSpec(preflight=True)) == "python -m ffsft.train.preflight"

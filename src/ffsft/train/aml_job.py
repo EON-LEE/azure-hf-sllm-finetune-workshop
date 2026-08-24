@@ -87,9 +87,14 @@ class JobSpec:
     #: public network access disabled and no private endpoint it fails with
     #: `data-capability.AssetMountOutputSession.Exception`, inside the
     #: lifecycler, *before* the user command starts -- so the run pays for node
-    #: allocation and a 9 GB image pull and then trains nothing. Writing to
-    #: `./outputs` instead is uploaded by the run-history artifact service,
-    #: which is a separate code path that mounts nothing.
+    #: allocation and a 9 GB image pull and then trains nothing.
+    #:
+    #: What this flag must NOT do is stop the output being declared. It used to,
+    #: on the assumption that `./outputs` is "uploaded by the run-history
+    #: artifact service". That was never measured and it is false: a v2 command
+    #: job collects logs and *declared* outputs, nothing else. Two completed 27B
+    #: runs left six artifacts each, all logs, and their adapters died with the
+    #: node. See `output_mode`.
     mount_outputs: bool = False
     #: Benchmark suite to score *in the same job*, right after training. Empty
     #: means train only. This is chained rather than submitted as a second job
@@ -102,6 +107,31 @@ class JobSpec:
     #: of GPU; a limit turns that into minutes while still comparing base vs
     #: tuned on identical items.
     eval_limit: int | None = None
+
+    @property
+    def output_mode(self) -> str:
+        """How `model_dir` and `report` get off the node.
+
+        `upload` keeps the output an ordinary local directory for the whole run
+        and copies it up once the command exits, so nothing opens a FUSE session
+        and the storage account's network rules never enter the picture. It is
+        the default because it is the only one measured to work on a workspace
+        whose storage has public network access disabled.
+
+        `rw_mount` streams writes as they happen, which is better for very large
+        checkpoints and for resuming, and is available wherever the node can
+        actually reach the datastore.
+        """
+        return "rw_mount" if self.mount_outputs else "upload"
+
+    def declared_outputs(self) -> set[str]:
+        """Outputs the job promises to produce. Empty only for the self-test.
+
+        Declaring these is what makes the run collect them at all -- a v2
+        command job uploads its logs and its declared outputs, and treats
+        everything else the script wrote as scratch on a disposable disk.
+        """
+        return set() if self.preflight else {"model_dir", "report"}
 
 
 def ensure_environment(client: MLClient) -> str:
@@ -140,7 +170,7 @@ def build_command(job: JobSpec) -> str:
     if job.preflight:
         return "python -m ffsft.train.preflight"
 
-    output_dir = "${{outputs.model_dir}}" if job.mount_outputs else "./outputs"
+    output_dir = "${{outputs.model_dir}}"
     parts = [
         "python -m ffsft.train.qlora",
         f"--model {job.model_key}",
@@ -150,7 +180,8 @@ def build_command(job: JobSpec) -> str:
         f"--batch-size {job.batch_size}",
         f"--grad-accum {job.grad_accum}",
     ]
-    # `${{outputs.model_dir}}` only resolves to a path when the output is mounted.
+    # `${{outputs.model_dir}}` resolves to a local path under `upload` mode just
+    # as it does under `rw_mount`; the difference is only when the bytes move.
     parts.append(f"--output-dir {output_dir}")
     if job.max_steps > 0:
         parts.append(f"--max-steps {job.max_steps}")
@@ -205,11 +236,11 @@ def submit(target: AzureTarget, job: JobSpec, wait: bool = False) -> dict:
 
     environment = ensure_environment(client)
 
-    outputs = (
-        {"model_dir": Output(type="uri_folder"), "report": Output(type="uri_folder")}
-        if job.mount_outputs
-        else None
-    )
+
+    outputs = {
+        name: Output(type="uri_folder", mode=job.output_mode)
+        for name in sorted(job.declared_outputs())
+    } or None
 
     node = command(
         # Deliberately no `code=`: see the module docstring.
