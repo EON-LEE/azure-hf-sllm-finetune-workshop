@@ -33,7 +33,9 @@ from .registry import BenchmarkSpec, get_benchmark_registry
 log = logging.getLogger("ffsft.eval")
 
 
-def model_load_kwargs(*, load_in_4bit: bool, dtype: str) -> dict:
+def model_load_kwargs(
+    *, load_in_4bit: bool, dtype: str, trust_remote_code: bool = False
+) -> dict:
     """Everything `AutoModelForCausalLM.from_pretrained` needs, as primitives.
 
     The model is built here rather than by lm-eval because lm-eval's loader
@@ -62,11 +64,16 @@ def model_load_kwargs(*, load_in_4bit: bool, dtype: str) -> dict:
     in is deliberate: a bf16 evaluation of a QLoRA adapter measures a
     configuration that will never be served, and the quantization error is on
     the same order as the fine-tuning delta we are trying to detect.
+
+    `trust_remote_code` has to match what training used. A model whose
+    architecture only exists inside its own repo cannot be scored without it,
+    and scoring a differently-loaded model is not scoring the trained one.
     """
     kwargs: dict = {
         "dtype": dtype,
         "device_map": {"": 0},
         "attn_implementation": "sdpa",
+        "trust_remote_code": trust_remote_code,
     }
     if load_in_4bit:
         kwargs["quantization_config"] = {
@@ -139,12 +146,17 @@ def build_model_args(
     dtype: str,
     max_length: int,
     batch_size: str | int,
+    trust_remote_code: bool = False,
 ) -> str:
     """One log line describing the model actually being scored."""
     described: dict = {"pretrained": hf_id}
     if adapter:
         described["peft"] = adapter
-    described.update(model_load_kwargs(load_in_4bit=load_in_4bit, dtype=dtype))
+    described.update(
+        model_load_kwargs(
+            load_in_4bit=load_in_4bit, dtype=dtype, trust_remote_code=trust_remote_code
+        )
+    )
     described.update(harness_kwargs(max_length=max_length, batch_size=batch_size))
     return describe_model_args(described)
 
@@ -155,6 +167,7 @@ def load_for_eval(
     *,
     load_in_4bit: bool,
     dtype: str,
+    trust_remote_code: bool = False,
 ):
     """Build the model and tokenizer to hand HFLM, adapter already applied.
 
@@ -165,7 +178,9 @@ def load_for_eval(
     import torch
     import transformers
 
-    kwargs = model_load_kwargs(load_in_4bit=load_in_4bit, dtype=dtype)
+    kwargs = model_load_kwargs(
+        load_in_4bit=load_in_4bit, dtype=dtype, trust_remote_code=trust_remote_code
+    )
     # The dicts carry dtype *names* so the mapping stays importable without
     # torch; only here is there a torch to resolve them against.
     kwargs["dtype"] = getattr(torch, kwargs["dtype"])
@@ -181,7 +196,9 @@ def load_for_eval(
 
         model = PeftModel.from_pretrained(model, adapter)
     model.eval()
-    tokenizer = transformers.AutoTokenizer.from_pretrained(hf_id)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        hf_id, trust_remote_code=trust_remote_code
+    )
     return model, tokenizer
 
 
@@ -196,6 +213,7 @@ def run_harness(
     dtype: str = "bfloat16",
     max_length: int = 4096,
     batch_size: str | int = "auto",
+    trust_remote_code: bool = False,
 ) -> dict:
     """Invoke lm-evaluation-harness in-process and return its results dict."""
     import torch
@@ -209,11 +227,13 @@ def run_harness(
             hf_id, adapter,
             load_in_4bit=load_in_4bit, dtype=dtype,
             max_length=max_length, batch_size=batch_size,
+            trust_remote_code=trust_remote_code,
         ),
     )
 
     model, tokenizer = load_for_eval(
-        hf_id, adapter, load_in_4bit=load_in_4bit, dtype=dtype
+        hf_id, adapter, load_in_4bit=load_in_4bit, dtype=dtype,
+        trust_remote_code=trust_remote_code,
     )
     lm = HFLM(
         pretrained=model,

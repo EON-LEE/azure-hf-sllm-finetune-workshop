@@ -318,6 +318,9 @@ models:
     commercial_use: null
     korean_tier: native
     korean_notes: Ultra-light Korean-native model.
+    # Ships its own modelling code; without this the load raises
+    # `ValueError: ... contains custom code` (job frank_cushion_b725dqgkyf).
+    trust_remote_code: true
     vram_gb:
       qlora: 4
       lora: 7

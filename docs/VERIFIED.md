@@ -2372,3 +2372,138 @@ The preflight was verified against a case where the right answer was already
 known, and that is the only reason a false positive did not ship. A check is
 not validated by the failures it explains; it is validated by the successes it
 leaves alone.
+---
+
+## 31. The storage wall came down — managed VNet, not public access (2026-08-24)
+
+Every previous attempt to get bytes out of a training node failed, and the
+working theory was that the workspace storage account had been locked in a way
+nothing could work around. That theory was half right. The lock is real and
+permanent; the conclusion drawn from it was wrong.
+
+### 31.1 The lock cannot be lifted, and that is now proven twice over
+
+`az storage account update` and a direct ARM `PATCH` both return success and
+leave `publicNetworkAccess: Disabled`. That was already known. What settles it
+is the second measurement: a **brand-new storage account**, created with
+`publicNetworkAccess: Enabled` and `allowSharedKeyAccess: true` explicitly in
+the request body, came back
+
+```
+publicNetworkAccess  = Disabled
+allowSharedKeyAccess = False
+```
+
+A management-group `Modify` policy rewrites every storage account in this
+subscription at write time. Creating a fresh workspace in a fresh resource
+group would have produced exactly the same locked account, so that plan --
+which looked like the obvious escape -- was never going to work.
+
+### 31.2 What actually fixed it
+
+`managedNetwork.isolationMode` was `Disabled`. The compute cluster therefore
+sat outside any network that had a private route to the storage account, and a
+storage account with public access disabled has no other route. Logs still
+arrived because the run-history service uploads those and is covered by
+`bypass: AzureServices`; the node's own writes had nowhere to go.
+
+Setting `isolationMode: AllowInternetOutbound` and provisioning the network
+gives the workspace a managed VNet with private endpoints into its own
+storage. The storage account now shows two **Approved** private endpoint
+connections, and none of them live in this resource group -- they are managed
+by the service, which is why `Microsoft.Network/privateEndpoints` in the RG
+still lists zero.
+
+The policy was never an obstacle to this. It locks public access; it has no
+objection to the private path, which is the path it exists to force.
+
+Two operational notes, both learned the hard way:
+
+- Managed VNet cannot be enabled while any compute exists
+  (`Managed network cannot be enabled when active computes exist`), so the
+  cluster has to be deleted first and recreated afterwards.
+- `provisionManagedNetwork` requires a body. With none it returns
+  `Request body could not be read`; `{"includeSpark": false}` works.
+
+### 31.3 Recreating the cluster silently revoked its permissions
+
+The first job after the rebuild failed in under two minutes:
+
+```
+Failed to pull Docker image `acrffsftkc.azurecr.io/ffsft-train:9`
+  401 error from registry: authentication required
+```
+
+A cluster's system-assigned identity is new every time the cluster is created.
+The old principal had `AcrPull`; the new one, `61683516-…`, had nothing. This
+has nothing to do with networking and would have been misread as another
+storage failure if the error had not been legible. `AcrPull` on the registry
+and `Storage Blob Data Contributor` on the account, granted to the new
+principal, cleared it.
+
+**Any teardown that deletes the cluster must re-grant both roles on rebuild.**
+
+### 31.4 `jobs.stream()` reads what the artifact API will not
+
+Section 15 recorded that job logs could not be read: `/contentinfo` returns
+`{"value": []}`, there is no `contentUri`, and `jobs.download()` fails with
+`AuthorizationFailure` because it goes to blob directly.
+
+`MLClient.jobs.stream()` does not. It routes through the service and prints the
+`Execution Summary`, which carries the real error text. Three earlier probe
+failures were written off as unreadable; all three were readable this whole
+time. The ACR 401 above was found this way in one call.
+
+The log *body* still fails to stream, with the same `AuthorizationFailure`, and
+that is expected -- the body does come from blob, and this workstation has no
+private route. The summary is what matters.
+
+### 31.5 End-to-end proof, entirely inside Azure
+
+Two jobs, no local filesystem involved at any point.
+
+A writer declaring `model_dir` as an ordinary `upload` output:
+
+```
+mkdir -p ${{outputs.model_dir}}
+echo persisted-by-managed-vnet > ${{outputs.model_dir}}/proof.txt
+dd if=/dev/urandom of=${{outputs.model_dir}}/blob.bin bs=1M count=8
+```
+
+`gray_feijoa_zlqglq32xh` — **Completed**.
+
+A reader mounting that folder back out of blob, with the exit code as the
+verdict because the log body is unreadable from here:
+
+```
+test -f ${{inputs.prev}}/proof.txt
+grep -q persisted-by-managed-vnet ${{inputs.prev}}/proof.txt
+test "$(stat -c%s ${{inputs.prev}}/blob.bin)" = "8388608"
+```
+
+reading
+`azureml://datastores/workspaceblobstore/paths/azureml/gray_feijoa_zlqglq32xh/model_dir/`
+at `ro_mount`. `sad_foot_spqk91m47n` — **Completed**. Any missing file, wrong
+content or wrong size exits non-zero and fails the job.
+
+Note what the reader did: it opened a **FUSE mount session against the locked
+storage account** and it worked. That is the exact operation whose failure
+forced `mount_outputs=False`, and the constraint behind that default no longer
+holds.
+
+### 31.6 What this changes
+
+- Section 9's storage finding stands as a description of the lock, but its
+  conclusion -- that no route exists -- is retracted. The private route exists.
+- `mount_outputs=False` is no longer load-bearing. `upload` remains a
+  reasonable default, but `rw_mount` is now available rather than impossible.
+- The reason for chaining evaluation into the training job (JobSpec.eval_suite:
+  "a second job would have to read the adapter back … and the node cannot open
+  a session against that account at all") is obsolete. A second job can.
+- `azureml://jobs/{name}/outputs/{output}` is **not** accepted as an input URI.
+  The service requires `azureml://datastores/{store}/paths/…`; a declared
+  output with no explicit path lands at
+  `azureml://datastores/workspaceblobstore/paths/azureml/{job}/{output}/`.
+
+None of this touches the GPU capacity finding in section 29. Training persists
+now; dedicated GPU for online serving is still unobtainable.

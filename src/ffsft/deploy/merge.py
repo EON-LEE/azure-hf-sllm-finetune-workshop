@@ -101,6 +101,7 @@ def merge_adapter(
         dtype=torch_dtype,
         device_map=device_map,
         low_cpu_mem_usage=True,
+        trust_remote_code=spec.trust_remote_code,
     )
 
     log.info("applying adapter from %s", adapter_dir)
@@ -121,7 +122,9 @@ def merge_adapter(
         if os.path.isfile(os.path.join(adapter_dir, "tokenizer_config.json"))
         else spec.hf_id
     )
-    tokenizer = AutoTokenizer.from_pretrained(tok_src)
+    tokenizer = AutoTokenizer.from_pretrained(
+        tok_src, trust_remote_code=spec.trust_remote_code
+    )
     tokenizer.save_pretrained(output_dir)
     log.info("tokenizer taken from %s", tok_src)
 

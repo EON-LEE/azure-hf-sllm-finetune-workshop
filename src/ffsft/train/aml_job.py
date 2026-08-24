@@ -46,7 +46,7 @@ from ..models import TuningMethod, get_model
 #: Built by `az acr build` from docker/Dockerfile.train. Bump the tag whenever the
 #: image is rebuilt -- the code lives inside it, so a code change is an image
 #: change, and reusing a tag would silently run the old training script.
-TRAIN_IMAGE = "acrffsftkc.azurecr.io/ffsft-train:9"
+TRAIN_IMAGE = "acrffsftkc.azurecr.io/ffsft-train:10"
 
 #: Azure ML environments are immutable per version, so this has to move with the
 #: image tag or `create_or_update` returns the stale registration.

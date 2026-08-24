@@ -116,6 +116,18 @@ class ModelSpec(BaseModel):
     #: e.g. {"enable_thinking": false} for Qwen3 hybrid-reasoning models.
     chat_template_kwargs: dict[str, object] = Field(default_factory=dict)
 
+    #: Let `from_pretrained` execute modelling code shipped inside the model
+    #: repo. Required by any checkpoint whose architecture is not yet in
+    #: transformers -- Kanana 2 is one, and without this the load raises
+    #: `ValueError: ... contains custom code` after the node, the image pull and
+    #: part of the download have already been paid for.
+    #:
+    #: Off by default and set per model rather than globally, because it runs
+    #: arbitrary Python from a third-party repo at load time. Keeping it in
+    #: `configs/models.yaml` puts that decision next to the license, in a diff
+    #: someone can review.
+    trust_remote_code: bool = False
+
     #: Modules PEFT wraps with LoRA adapters. Empty means "fall back to PEFT's
     #: per-architecture default", which is only safe for plain transformer stacks.
     #: It is actively wrong for hybrid attention models: on Qwen3.5/3.6/3.8 the

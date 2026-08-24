@@ -108,21 +108,41 @@ def resolve_target_modules(
     )
 
 
+def base_load_kwargs(spec: ModelSpec, cfg: QLoRAConfig) -> dict[str, Any]:
+    """Everything `AutoModelForCausalLM.from_pretrained` needs, as primitives.
+
+    Kept separate from the call so the mapping is testable without transformers
+    or a GPU, which is the same reason `eval.run.model_load_kwargs` exists. The
+    dtype stays a name here and is resolved against torch by the caller.
+
+    `device_map` and `attn_implementation` are the pair that ran 27B at a
+    28.19 GB peak; evaluation mirrors them exactly, so neither should be changed
+    on one side alone.
+    """
+    return {
+        "quantization_config": build_quantization_config(cfg),
+        "dtype": "bfloat16" if cfg.bf16 else "float16",
+        "device_map": {"": 0},
+        "attn_implementation": "sdpa",
+        "trust_remote_code": spec.trust_remote_code,
+    }
+
+
 def load_model_and_tokenizer(spec: ModelSpec, cfg: QLoRAConfig):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     log.info("loading %s in NF4 ...", spec.hf_id)
-    model = AutoModelForCausalLM.from_pretrained(
-        spec.hf_id,
-        quantization_config=build_quantization_config(cfg),
-        dtype=torch.bfloat16 if cfg.bf16 else torch.float16,
-        device_map={"": 0},
-        attn_implementation="sdpa",
-    )
+    kwargs = base_load_kwargs(spec, cfg)
+    kwargs["dtype"] = getattr(torch, kwargs["dtype"])
+    model = AutoModelForCausalLM.from_pretrained(spec.hf_id, **kwargs)
     model.config.use_cache = False
 
-    tokenizer = AutoTokenizer.from_pretrained(spec.hf_id)
+    # The tokenizer needs the same consent: on a repo that ships custom code the
+    # tokenizer class is usually custom too, and refusing here fails just as hard.
+    tokenizer = AutoTokenizer.from_pretrained(
+        spec.hf_id, trust_remote_code=spec.trust_remote_code
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     return model, tokenizer
