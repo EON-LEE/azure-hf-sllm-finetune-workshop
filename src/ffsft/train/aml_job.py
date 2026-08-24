@@ -105,15 +105,25 @@ class JobSpec:
     #: hybrid-attention model the defaults adapt a small minority of layers and
     #: train without any error -- see `qlora.resolve_target_modules`.
     allow_default_lora_targets: bool = False
-    #: Mount `uri_folder` outputs on the node. OFF by default, and that default
-    #: is load-bearing rather than a preference: the mount is a FUSE session the
-    #: *node* opens against `workspaceblobstore`, and it is not covered by the
-    #: `AzureServices` trusted-service bypass that lets the Azure ML control
-    #: plane reach the same account. On a workspace whose storage account has
-    #: public network access disabled and no private endpoint it fails with
-    #: `data-capability.AssetMountOutputSession.Exception`, inside the
-    #: lifecycler, *before* the user command starts -- so the run pays for node
-    #: allocation and a 9 GB image pull and then trains nothing.
+    #: Mount `uri_folder` outputs on the node instead of uploading them once at
+    #: the end. Still off by default, but no longer because the mount is
+    #: impossible -- that was true and has been fixed.
+    #:
+    #: The mount is a FUSE session the *node* opens against `workspaceblobstore`,
+    #: and it is not covered by the `AzureServices` trusted-service bypass that
+    #: lets the Azure ML control plane reach the same account. While the storage
+    #: account had public access disabled and no private endpoint, it failed with
+    #: `data-capability.AssetMountOutputSession.Exception` inside the lifecycler,
+    #: *before* the user command started -- the run paid for node allocation and a
+    #: 9 GB image pull and trained nothing.
+    #:
+    #: Enabling the workspace's managed VNet gave the account two approved private
+    #: endpoint connections and the mount now works: job `sad_foot_spqk91m47n`
+    #: RO_MOUNTed the folder `gray_feijoa_zlqglq32xh` had written and asserted
+    #: both its contents and its exact byte count. `rw_mount` is therefore a real
+    #: option today. `upload` stays the default because it is the cheaper
+    #: behaviour for a small adapter and it survives the VNet being turned off
+    #: again, not because it is the only thing that works.
     #:
     #: What this flag must NOT do is stop the output being declared. It used to,
     #: on the assumption that `./outputs` is "uploaded by the run-history
@@ -123,11 +133,19 @@ class JobSpec:
     #: node. See `output_mode`.
     mount_outputs: bool = False
     #: Benchmark suite to score *in the same job*, right after training. Empty
-    #: means train only. This is chained rather than submitted as a second job
-    #: because a second job would have to read the adapter back out of
-    #: `workspaceblobstore`, and the node cannot open a session against that
-    #: account at all -- the same finding that forced `mount_outputs=False`.
-    #: Chained, the adapter never leaves the local disk it was written to.
+    #: means train only.
+    #:
+    #: Chaining was originally forced: a second job would have to read the adapter
+    #: back out of `workspaceblobstore`, and the node could not open a session
+    #: against that account at all. That constraint is gone -- a later job can now
+    #: mount a previous job's output, which is what makes registration and batch
+    #: deployment possible.
+    #:
+    #: It is kept as the default anyway because it is still the better shape for
+    #: scoring a model you just trained: one node allocation and one image pull
+    #: instead of two, and the adapter never leaves the local disk it was written
+    #: to. Splitting it into a second job is now a supported choice rather than an
+    #: impossible one.
     eval_suite: str | None = None
     #: Examples per benchmark task. A 27B model scored on a full suite is hours
     #: of GPU; a limit turns that into minutes while still comparing base vs
@@ -140,13 +158,16 @@ class JobSpec:
 
         `upload` keeps the output an ordinary local directory for the whole run
         and copies it up once the command exits, so nothing opens a FUSE session
-        and the storage account's network rules never enter the picture. It is
-        the default because it is the only one measured to work on a workspace
-        whose storage has public network access disabled.
+        and the storage account's network rules never enter the picture.
 
         `rw_mount` streams writes as they happen, which is better for very large
-        checkpoints and for resuming, and is available wherever the node can
-        actually reach the datastore.
+        checkpoints and for resuming. It requires the node to be able to open a
+        session against the datastore, which on this workspace means the managed
+        VNet must be provisioned -- see `mount_outputs`.
+
+        `upload` is the default because a LoRA adapter is small enough that
+        streaming buys nothing, and because it keeps working if the VNet is torn
+        down to stop paying for the private endpoints.
         """
         return "rw_mount" if self.mount_outputs else "upload"
 
