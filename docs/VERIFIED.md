@@ -2507,3 +2507,74 @@ holds.
 
 None of this touches the GPU capacity finding in section 29. Training persists
 now; dedicated GPU for online serving is still unobtainable.
+
+## 32. Reading a job's log without leaving Azure (2026-08-24)
+
+Section 31.4 established that `jobs.stream()` surfaces the *Execution Summary*.
+That is enough to identify an infrastructure failure and not enough for
+anything else: a user command that exits non-zero reports
+
+```
+ExecutionFailed: [REDACTED]
+	exit_codes: 1
+```
+
+and the traceback lives only in `user_logs/std_log.txt`, which is in blob.
+
+Once mounts worked, the log became reachable the same way any other blob is —
+from inside a job. A diagnostic job mounts the failed run's artifact folder,
+reads the log, and writes the tail back as MLflow tags, which are served by the
+tracking service rather than blob and so are readable from anywhere:
+
+```python
+Input(path=f"azureml://datastores/workspaceartifactstore/paths/ExperimentRun/dcid.{run}/",
+      mode=InputOutputModes.RO_MOUNT)
+...
+[mlflow.set_tag("diag_%02d" % i, tail[j:j+1800]) for ...]
+```
+
+Read back with `client.jobs.get(name).tags`. This recovered the full traceback
+for `frank_cushion_b725dqgkyf` in a single four-minute job, and it works for
+any failed run on this workspace.
+
+The general shape is worth remembering: **anything unreachable from the
+workstation is reachable from a job, and MLflow is the return channel.**
+
+## 33. `trust_remote_code` — the registry's promise was narrower than it looked
+
+`frank_cushion_b725dqgkyf` died before the first training step:
+
+```
+ValueError: The repository kakaocorp/kanana-2-1.3b-instruct contains custom
+code which must be executed to correctly load the model.
+Please pass the argument `trust_remote_code=True` to allow custom code to be run.
+```
+
+The traceback arrives doubled, and the first half is misleading:
+
+```
+Do you wish to run the custom code? [y/N]
+  File ".../dynamic_module_utils.py", line 764, in resolve_trust_remote_code
+    answer = input(
+EOFError: EOF when reading a line
+```
+
+transformers tries to *ask*, stdin on a compute node is closed, and the
+`EOFError` is what a reader sees first.
+
+`configs/models.yaml` advertises every entry as a swappable target, and
+`ffsft train --model <key>` as the whole interface. That held only for
+architectures already merged into transformers. Kanana 2, Mi:dm, HyperCLOVA X
+and EXAONE are all recent Korean-native releases and several ship their own
+modelling code — which is to say the models this asset exists for were the
+ones most likely to be unloadable.
+
+The fix is a per-model `trust_remote_code`, default false, read identically by
+training, evaluation and merge. Not a global default: the flag executes
+arbitrary Python from a third-party repo at load time, and putting the decision
+in the registry means enabling it for a model is a reviewable line in a diff
+rather than an invisible property of the loader. 11 tests, written first.
+
+Only `kanana2-1.3b` is marked so far, because it is the only one measured. The
+others are unverified either way; the honest state is "not yet run", not "does
+not need it".
