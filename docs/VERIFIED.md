@@ -2578,3 +2578,126 @@ rather than an invisible property of the loader. 11 tests, written first.
 Only `kanana2-1.3b` is marked so far, because it is the only one measured. The
 others are unverified either way; the honest state is "not yet run", not "does
 not need it".
+
+---
+
+## 34. The chain closed — train → persist → register → verify (2026-08-24)
+
+The asset finally produced a registered model. It had never done so before, and
+the reason it could not was three independent faults that each looked like the
+whole problem while the other two were hidden behind it.
+
+### 34.1 The last fault: the image was never the one running
+
+`TRAIN_IMAGE` was bumped to `ffsft-train:10` carrying the `trust_remote_code`
+fix from §33, and the job failed with the *identical* `ValueError` that fix had
+already repaired. The fix was correct. It simply never reached the node.
+
+```
+version 9 -> acrffsftkc.azurecr.io/ffsft-train:9      <- what actually ran
+version 8 -> acrffsftkc.azurecr.io/ffsft-train:8
+```
+
+`ENVIRONMENT_VERSION` was still `"9"`. An Azure ML environment is **immutable
+per version**, so `ensure_environment` found version 9 registered, returned it,
+and submitted against the pre-fix image. `create_or_update` over an existing
+version is a silent no-op, not a correction.
+
+Cost: `plum_station_dxwtzlz94q` allocated an A100, pulled nine gigabytes, and
+proved nothing.
+
+Two constants that must move together were coupled only by a comment saying so.
+Now `image_tag()` derives the version from the tag, and `ensure_environment()`
+compares the image inside an existing registration before reusing it — a
+mismatch raises where it is free instead of after a node is allocated.
+
+**And an image can be inspected without a GPU at all.** This costs cents and
+takes four minutes:
+
+```bash
+az acr run --registry acrffsftkc -g rg-ffsft-kc --cmd \
+  "acrffsftkc.azurecr.io/ffsft-train:10 python -c '...'" /dev/null
+# HAS_BASE_LOAD_KWARGS True
+# HAS_TRC_FIELD True
+```
+
+That check ran *before* resubmitting, and is the reason the next run was worth
+paying for. Verify the artifact, then spend the GPU — not the reverse.
+
+### 34.2 Training completed
+
+`helpful_sand_971pqxtj0l` — `kanana2-1.3b`, `ko_smoke`, 30 steps, A100
+LowPriority, `environment: ffsft-train:10`. Queued 06:02, running 06:10,
+Completed 06:15.
+
+### 34.3 Registration — two shapes the service insists on
+
+Asset names allow alphanumerics, dashes and underscores. Nothing else:
+
+```
+(RequestInvalid) Resource name is invalid. Resource name can only contain
+alphanumeric characters, dashes, and underscores, with a limit of 255 characters.
+```
+
+Almost every registry key has a dot in it — `kanana2-1.3b`, `qwen3.8-27b`,
+`qwen3.5-0.8b` — so this is the default case, not an edge case. `asset_name()`
+sanitises, and because that is lossy (`kanana2-1_3b` cannot be looked up in
+`configs/models.yaml`) the original key is preserved in a `model_key` tag.
+
+The path must be a datastore URI. The intuitive spelling is rejected:
+
+```
+azureml://jobs/{job}/outputs/{name}      -> NoMatchingArtifactsFoundFromJob
+azureml://datastores/workspaceblobstore/paths/azureml/{job}/model_dir/   -> works
+```
+
+`job.outputs[name].path` reports `null` even for an upload that demonstrably
+succeeded, so it cannot be used to discover this and must not be read as
+evidence of failure.
+
+### 34.4 Registration is not evidence — the mount is
+
+The service accepts a URI pointing at a folder that does not exist. A successful
+`create_or_update` therefore says nothing about whether a model was trained.
+
+`hungry_apple_n455nrpngf` mounted `kanana2-1_3b-ko-lora:2` read-only and counted
+what was actually there:
+
+| | |
+|---|---|
+| files | 19 |
+| total | 133,476,918 bytes |
+| `adapter_model.safetensors` | 37,415,384 bytes |
+| `adapter_config.json` | 1,165 bytes |
+| `checkpoint-30/` | present, with optimizer + scheduler state |
+| `run_summary.json` | present |
+
+`checkpoint-30` matches the 30 steps requested, which is what makes this a
+trained adapter rather than a folder of the right shape.
+
+### 34.5 What this retracts
+
+§24 and the `mount_outputs` docstring both recorded the node's inability to open
+a session against `workspaceblobstore` as a permanent property of this
+subscription. §31 fixed it; this section is the proof that the fix carries all
+the way through to a registered, mountable, verified model asset.
+
+`test_model_store.py` still opens by describing an unreachable datastore. Its
+assertions are about `classify_store`, which was written correctly and handles
+the private-endpoint case — the live probe now returns:
+
+```
+mlwffsftstorage8cb451dd1: public access off, reached over 2 private endpoint(s)
+```
+
+and all five serving patterns report deployable. The code did not need changing.
+The world did.
+
+### 34.6 An adapter is not servable
+
+The registered folder has no `config.json` and no base weights — 37 MB of
+low-rank deltas and a pointer. vLLM cannot open it. Serving requires either
+`ffsft.deploy.merge` to fold the adapter into the base and register *that*, or
+the `runtime_adapter` mode where vLLM loads the adapter beside a shared base.
+Merged is the default for the reason `merge.py` documents: it is engine-agnostic
+and carries no assumption about which modules the adapter targets.

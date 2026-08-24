@@ -129,6 +129,12 @@ class AzureTarget:
     #: both the only tier with usable quota and the only one the tenant policy
     #: permits for N-series. Nodes can be preempted, so training must checkpoint.
     vm_priority: str = "LowPriority"
+    #: Which Entra directory to authenticate against. `None` means "whatever the
+    #: Azure CLI has selected", which is correct until a workstation is signed in
+    #: to more than one directory -- then the CLI's default can move underneath a
+    #: run and every call fails with `InvalidAuthenticationTokenTenant`, an error
+    #: that looks like a permissions problem and is not.
+    tenant_id: str | None = None
 
     @classmethod
     def from_env(cls) -> AzureTarget:
@@ -146,6 +152,7 @@ class AzureTarget:
                 "set FFSFT_SUBSCRIPTION_ID (or AZURE_SUBSCRIPTION_ID) to the target "
                 "Azure subscription id"
             )
+        tenant = os.environ.get("FFSFT_TENANT_ID") or os.environ.get("AZURE_TENANT_ID")
         return cls(
             subscription_id=subscription,
             resource_group=os.environ.get("FFSFT_RESOURCE_GROUP", "rg-ffsft-kc"),
@@ -154,6 +161,7 @@ class AzureTarget:
             compute_name=os.environ.get("FFSFT_COMPUTE", "gpu-a100-lp"),
             compute_sku=os.environ.get("FFSFT_SKU", "Standard_NC24ads_A100_v4"),
             vm_priority=os.environ.get("FFSFT_VM_PRIORITY", "LowPriority"),
+            tenant_id=(tenant or "").strip() or None,
         )
 
 
@@ -211,12 +219,48 @@ def check_sku_fits(
     )
 
 
-def get_ml_client(target: AzureTarget) -> MLClient:
-    from azure.ai.ml import MLClient
+def _credential_class():
+    """Indirection so tests can substitute a fake without touching the network."""
     from azure.identity import DefaultAzureCredential
 
-    return MLClient(
-        credential=DefaultAzureCredential(),
+    return DefaultAzureCredential
+
+
+def _ml_client_class():
+    from azure.ai.ml import MLClient
+
+    return MLClient
+
+
+def build_credential(target: AzureTarget):
+    """The one credential every caller in this package uses.
+
+    When `target.tenant_id` is set the directory is stated rather than inferred.
+    Inferring it means taking whatever the Azure CLI currently has selected,
+    which on a multi-directory workstation can change between two calls in the
+    same session and produces:
+
+        (InvalidAuthenticationTokenTenant) The access token is from the wrong
+        issuer '...' It must match one of the tenants '...'
+
+    `additionally_allowed_tenants=["*"]` goes with it. Without it the credential
+    declines to reuse a cached CLI login for any tenant but its own default, so
+    pinning alone would swap one authentication failure for another.
+
+    When no tenant is known the argument is omitted entirely -- an explicit
+    `None` is a different request from silence, and the CLI's own default is the
+    right answer for a workstation with nothing to disambiguate.
+    """
+    kwargs: dict[str, object] = {}
+    if target.tenant_id:
+        kwargs["tenant_id"] = target.tenant_id
+        kwargs["additionally_allowed_tenants"] = ["*"]
+    return _credential_class()(**kwargs)
+
+
+def get_ml_client(target: AzureTarget) -> MLClient:
+    return _ml_client_class()(
+        credential=build_credential(target),
         subscription_id=target.subscription_id,
         resource_group_name=target.resource_group,
         workspace_name=target.workspace_name,
@@ -228,10 +272,9 @@ def ensure_workspace(target: AzureTarget) -> str:
     from azure.ai.ml import MLClient
     from azure.ai.ml.entities import Workspace
     from azure.core.exceptions import ResourceNotFoundError
-    from azure.identity import DefaultAzureCredential
 
     client = MLClient(
-        credential=DefaultAzureCredential(),
+        credential=build_credential(target),
         subscription_id=target.subscription_id,
         resource_group_name=target.resource_group,
     )
