@@ -48,10 +48,36 @@ from ..models import TuningMethod, get_model
 #: change, and reusing a tag would silently run the old training script.
 TRAIN_IMAGE = "acrffsftkc.azurecr.io/ffsft-train:10"
 
-#: Azure ML environments are immutable per version, so this has to move with the
-#: image tag or `create_or_update` returns the stale registration.
 ENVIRONMENT_NAME = "ffsft-train"
-ENVIRONMENT_VERSION = "9"
+
+
+def image_tag(image: str) -> str:
+    """The tag of a container reference, which is also its environment version.
+
+    Azure ML environments are immutable per version, so the version and the
+    image tag have to agree. They used to be two hand-maintained constants held
+    together by a comment; deriving one from the other is what stops them
+    drifting, and `plum_station_dxwtzlz94q` is what drifting costs.
+
+    Splits on the *last* colon because a registry host may carry a port
+    (`localhost:5000/img:3`), and rejects anything untagged or digest-pinned:
+    `:latest` is mutable, which is the same bug wearing a different hat, and a
+    `sha256:` digest is not a legal Azure ML version string.
+    """
+    host, _, rest = image.rpartition("/")
+    name, sep, tag = rest.rpartition(":")
+    if not sep or not name or "@" in rest:
+        raise ValueError(
+            f"training image '{image}' carries no tag. An Azure ML environment "
+            f"version is derived from the tag, and an untagged or digest-pinned "
+            f"reference cannot supply one -- use an explicit tag such as "
+            f"'{image.split('@')[0]}:11'."
+        )
+    return tag
+
+
+#: Derived, never typed by hand -- see `image_tag`.
+ENVIRONMENT_VERSION = image_tag(TRAIN_IMAGE)
 
 #: Where the code sits inside the image (see the COPY in docker/Dockerfile.train).
 IMAGE_CODE_ROOT = "/opt/ffsft"
@@ -140,23 +166,42 @@ def ensure_environment(client: MLClient) -> str:
     This only wraps an image reference; Azure ML does not build anything. The
     build already happened in ACR, which keeps a multi-gigabyte context off the
     client's uplink and away from the workspace storage account.
+
+    An existing registration is reused only after its image is checked. That
+    check is the whole point of this function: an environment version is
+    immutable, so `create_or_update` over a stale version returns the stored
+    entity instead of correcting it, and the job would then run an image the
+    caller never asked for. It is free to notice here and costs an A100 run to
+    notice on the node.
     """
     from azure.ai.ml.entities import Environment
     from azure.core.exceptions import ResourceNotFoundError
 
-    try:
-        env = client.environments.get(ENVIRONMENT_NAME, version=ENVIRONMENT_VERSION)
-        return f"{env.name}:{env.version}"
-    except ResourceNotFoundError:
-        pass
+    name, version, image = ENVIRONMENT_NAME, ENVIRONMENT_VERSION, TRAIN_IMAGE
 
-    env = Environment(
-        name=ENVIRONMENT_NAME,
-        version=ENVIRONMENT_VERSION,
-        description="ACPT + Hugging Face QLoRA stack for Qwen3.x hybrid-attention models",
-        image=TRAIN_IMAGE,
+    try:
+        env = client.environments.get(name, version=version)
+    except ResourceNotFoundError:
+        env = None
+
+    if env is not None:
+        if env.image != image:
+            raise RuntimeError(
+                f"environment '{name}:{version}' is already registered against "
+                f"'{env.image}', not '{image}'. An Azure ML environment version is "
+                f"immutable, so this cannot be re-pointed -- build a new tag and "
+                f"bump TRAIN_IMAGE, which moves the version with it."
+            )
+        return f"{env.name}:{env.version}"
+
+    created = client.environments.create_or_update(
+        Environment(
+            name=name,
+            version=version,
+            description="ACPT + Hugging Face QLoRA stack for Qwen3.x hybrid-attention models",
+            image=image,
+        )
     )
-    created = client.environments.create_or_update(env)
     return f"{created.name}:{created.version}"
 
 

@@ -139,8 +139,19 @@ class _FakeJobs:
 
 
 class _FakeEnvironments:
+    """A registration always carries an image, so the fake must too.
+
+    `ensure_environment` reuses an existing version only when its image matches
+    `TRAIN_IMAGE`; a fake that omitted the field made every `submit` test fail on
+    an AttributeError that no real client could produce.
+    """
+
     def get(self, name, version):
-        return type("Env", (), {"name": name, "version": version})()
+        return type(
+            "Env",
+            (),
+            {"name": name, "version": version, "image": aml_job.TRAIN_IMAGE},
+        )()
 
 
 class _FakeClient:
