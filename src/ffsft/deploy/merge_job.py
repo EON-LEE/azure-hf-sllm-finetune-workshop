@@ -29,6 +29,12 @@ if TYPE_CHECKING:
 
 from ..azure_ml import AzureTarget, get_ml_client
 from ..models import get_model
+
+# The one place the serving side reaches into the training side, and it is
+# deliberate: merging a LoRA adapter into base weights needs torch and peft,
+# which live in the training image and nowhere else. Building a second image
+# with the same dependencies to avoid one import would be the worse trade.
+# Every other train/serve crossing was removed -- see `ffsft.mlflow_report`.
 from ..train.aml_job import TRAIN_IMAGE, ensure_environment
 
 #: Kept distinct from `ffsft-qlora` so the studio's experiment list separates

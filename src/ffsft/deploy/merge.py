@@ -322,7 +322,7 @@ def merge_adapter(
     # succeeded and one that wrote nothing look identical from the submitter's
     # side. `qlora.py` already learned this; the merge path had not, and
     # recovering `architectures` from a completed run cost a second job.
-    from ..train.report import publish
+    from ..mlflow_report import publish
 
     publish(summary, prefix="merge.")
     return summary

@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from azure.ai.ml import MLClient
 
-from ..azure_ml import AzureTarget, check_sku_fits, get_ml_client
+from ..azure_ml import AzureTarget, check_sku_fits, get_ml_client, image_tag
 from ..models import TuningMethod, get_model
 
 #: Built by `az acr build` from docker/Dockerfile.train. Bump the tag whenever the
@@ -49,31 +49,6 @@ from ..models import TuningMethod, get_model
 TRAIN_IMAGE = "acrffsftkc.azurecr.io/ffsft-train:12"
 
 ENVIRONMENT_NAME = "ffsft-train"
-
-
-def image_tag(image: str) -> str:
-    """The tag of a container reference, which is also its environment version.
-
-    Azure ML environments are immutable per version, so the version and the
-    image tag have to agree. They used to be two hand-maintained constants held
-    together by a comment; deriving one from the other is what stops them
-    drifting, and `plum_station_dxwtzlz94q` is what drifting costs.
-
-    Splits on the *last* colon because a registry host may carry a port
-    (`localhost:5000/img:3`), and rejects anything untagged or digest-pinned:
-    `:latest` is mutable, which is the same bug wearing a different hat, and a
-    `sha256:` digest is not a legal Azure ML version string.
-    """
-    host, _, rest = image.rpartition("/")
-    name, sep, tag = rest.rpartition(":")
-    if not sep or not name or "@" in rest:
-        raise ValueError(
-            f"training image '{image}' carries no tag. An Azure ML environment "
-            f"version is derived from the tag, and an untagged or digest-pinned "
-            f"reference cannot supply one -- use an explicit tag such as "
-            f"'{image.split('@')[0]}:11'."
-        )
-    return tag
 
 
 #: Derived, never typed by hand -- see `image_tag`.

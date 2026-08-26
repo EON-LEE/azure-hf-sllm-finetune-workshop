@@ -57,11 +57,10 @@ if TYPE_CHECKING:
 
     from ..models.spec import ModelSpec
 
-from ..azure_ml import GPU_SKUS, AzureTarget, get_ml_client
+from ..azure_ml import GPU_SKUS, AzureTarget, get_ml_client, image_tag
 from ..deploy.endpoint import serving_env
 from ..deploy.merge_job import split_asset_ref
 from ..models import get_model
-from ..train.aml_job import image_tag
 
 #: Built by `az acr build` from docker/Dockerfile.bench, which is FROM the serve
 #: image -- so this tag moves when either the serving stack or `ffsft` changes.
@@ -108,7 +107,7 @@ BENCH_IMAGE = "acrffsftkc.azurecr.io/ffsft-bench:9"
 
 BENCH_ENVIRONMENT_NAME = "ffsft-bench"
 
-#: Derived from the tag, never typed by hand -- see `train.aml_job.image_tag`.
+#: Derived from the tag, never typed by hand -- see `azure_ml.image_tag`.
 BENCH_ENVIRONMENT_VERSION = image_tag(BENCH_IMAGE)
 
 #: Bytes per parameter at bf16. The whole reason this job exists on an 80 GB

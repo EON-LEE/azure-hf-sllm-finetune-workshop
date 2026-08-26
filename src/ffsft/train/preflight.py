@@ -188,7 +188,7 @@ def publish(report: dict) -> None:
     instead, which is reachable with an ordinary ARM token, so that is the
     channel a self-test should report through.
     """
-    from ffsft.train.report import publish as _publish
+    from ffsft.mlflow_report import publish as _publish
 
     if _publish(report, prefix="preflight."):
         _publish({"passed": True}, prefix="preflight.")

@@ -19,7 +19,7 @@ import sys
 
 import pytest
 
-from ffsft.train.report import publish, split_metrics_and_tags
+from ffsft.mlflow_report import publish, split_metrics_and_tags
 
 
 class _FakeMlflow:

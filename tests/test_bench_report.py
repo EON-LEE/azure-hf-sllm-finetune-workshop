@@ -137,7 +137,7 @@ def test_a_malformed_smoke_reply_does_not_take_the_usage_numbers_with_it():
 
 
 def test_tags_are_truncated_because_one_long_value_drops_the_rest():
-    """`ffsft.train.report.publish` sends every tag inside one try block, so a
+    """`ffsft.mlflow_report.publish` sends every tag inside one try block, so a
     value the store rejects for length does not fail loudly -- it silently
     discards each tag queued behind it."""
     tags: dict[str, str] = {}
@@ -204,7 +204,7 @@ def test_what_reaches_mlflow_is_classified_and_truncated_at_this_boundary(
 ):
     """The shaping has to happen before the handoff, because `publish` sends
     every tag in one try block and the store's length limit is enforced there."""
-    import ffsft.train.report as report_mod
+    import ffsft.mlflow_report as report_mod
 
     sent: dict[str, object] = {}
 
@@ -233,7 +233,7 @@ def test_a_reporter_that_trips_over_a_bad_artefact_returns_false_not_a_raise(
     monkeypatch, tmp_path
 ):
     """Reporting must not be what fails a run that measured correctly."""
-    import ffsft.train.report as report_mod
+    import ffsft.mlflow_report as report_mod
 
     def explode(report, prefix=""):
         raise RuntimeError("tracking store unreachable")

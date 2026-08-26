@@ -11,7 +11,7 @@ Completed and its stream delivered three lines: RunId, Web View, Execution
 Summary. So a bench job that only writes files and prints to stdout produces
 measurements nobody can read, which is the same as not measuring.
 
-MLflow is the exception, for the reason `ffsft.train.report` gives at length:
+MLflow is the exception, for the reason `ffsft.mlflow_report` gives at length:
 metrics and tags go to the tracking service over its own endpoint, authorised by
 an ordinary token, with no blob anywhere in the path. That module is already the
 training job's only usable reporting channel; this one reshapes a sweep report
@@ -202,7 +202,7 @@ def error_excerpt(lines: list[str], window: int = 28, head: int = 6) -> str:
 def flatten(report: dict, prefix: str = "bench.") -> dict[str, object]:
     """Turn one sweep report into flat `name -> value` pairs.
 
-    The caller hands the result to `ffsft.train.report.split_metrics_and_tags`,
+    The caller hands the result to `ffsft.mlflow_report.split_metrics_and_tags`,
     which sorts numbers into metrics and everything else into tags, so this
     function only has to choose names and leave values in their natural type.
     """
@@ -340,7 +340,7 @@ def publish_report(flat: dict[str, object]) -> bool:
 
 
 def _publish_report(flat: dict[str, object]) -> bool:
-    from ffsft.train.report import publish, split_metrics_and_tags
+    from ffsft.mlflow_report import publish, split_metrics_and_tags
 
     tail = flat.pop("_vllm_tail", None)
     cause = flat.pop("_vllm_cause", None)

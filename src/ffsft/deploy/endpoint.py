@@ -30,7 +30,7 @@ import time
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from ..train.aml_job import image_tag
+from ..azure_ml import image_tag
 from .registry import get_serving_registry
 from .spec import ServingSpec, Surface
 

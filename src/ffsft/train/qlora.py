@@ -316,8 +316,8 @@ def train(cfg: QLoRAConfig, allow_default_targets: bool = False) -> dict:
     from trl import SFTConfig, SFTTrainer
 
     from ffsft.data.korean import load_sft_dataset
+    from ffsft.mlflow_report import publish
     from ffsft.models import get_model
-    from ffsft.train.report import publish
 
     spec = get_model(cfg.model_key)
     if not spec.hf_id:
