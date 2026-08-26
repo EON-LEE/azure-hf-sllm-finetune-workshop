@@ -32,7 +32,7 @@ uv run pytest -q
 기대 출력:
 
 ```
-680 passed in 8.34s
+700 passed in 9.06s
 ```
 
 테스트는 **네트워크도 Azure 도 건드리지 않습니다.** 여기서 실패하면 Azure 문제가 아닙니다.
@@ -41,6 +41,21 @@ uv run pytest -q
 uv run ffsft models list --commercial-only     # 상용 가능한 17개
 uv run ffsft models show qwen3.8-27b
 ```
+
+### `ffsft --help` 이 이 워크샵의 지도입니다
+
+```bash
+uv run ffsft --help
+```
+
+Lab 순서대로 나옵니다 — `models`/`serving`/`bench`(Lab 0) → `train`(2) →
+`eval`(3) → `deploy`(5) → `lifecycle`(5,7) → `loadtest`(6) → `merge`(8).
+
+- 서브커맨드는 **기존 console script 를 그대로 부릅니다.** `ffsft loadtest` 와
+  `ffsft-loadtest` 는 같은 코드입니다. Lab 문서는 짧은 옛 이름을 씁니다.
+- `ffsft <cmd> --help` 는 **위임 대상의 도움말**을 보여줍니다.
+- 무거운 의존성은 함수 안에서만 import 합니다 — `--extra dev` 만 깔린 노트북에서도
+  `ffsft models list` 는 돕니다. 필요한 extra 가 없으면 **설치 명령을 알려줍니다.**
 
 ## 2. 로그인 — 프로필을 격리하세요
 

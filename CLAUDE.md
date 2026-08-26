@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 uv sync --extra dev          # dev extra is enough for the whole test suite
-uv run pytest                # 500 tests, ~6s, no network and no Azure calls
+uv run pytest                # 700 tests, ~9s, no network and no Azure calls
 uv run pytest tests/test_aml_job.py::test_preflight_runs_the_self_test_and_nothing_else
 uv run pytest -k lora        # substring selection
 uv run ruff check .          # line-length 100, target py310, rules E/F/I/UP/B
@@ -22,7 +22,9 @@ ACPT images, which ship 3.10; do not use 3.11+ syntax.
 
 ### Entry points
 
-`ffsft` is registry inspection only — it must stay importable with no heavyweight deps:
+`ffsft` is the single entry point. Two kinds of command live under it.
+
+**Registry inspection** — reads `configs/*.yaml`, no heavyweight deps:
 
 ```bash
 uv run ffsft models list --commercial-only
@@ -31,7 +33,15 @@ uv run ffsft serving list / serving show / serving adapter-modes
 uv run ffsft bench list / bench suites
 ```
 
-The work lives behind separate console scripts, each of which pulls its own extra:
+**Delegates** — `ffsft train submit | merge submit | merge local | eval | deploy |
+lifecycle | loadtest | serve-local` swap `sys.argv` and call the same `main()` the
+console script calls, so the two names cannot drift (`tests/test_cli_delegates.py`
+reads `[project.scripts]` and fails if a script appears with no `ffsft` command
+reaching it). **`cli.py` must import with only the registry deps present** — every
+delegating import is function-local, pinned by an ast walk over the module body.
+`_COMMAND_ORDER` sorts `--help` by lab, not by Click's collection order.
+
+The console scripts all still work, and the labs use the short names:
 
 ```bash
 python -m ffsft.train.preflight                  # node self-test, cheapest way to prove a cluster
@@ -155,6 +165,11 @@ wrong root causes (§0, §30). Read it before "fixing" anything below.
   numbered section; when a section turns out wrong, retract it in place rather than editing history.
   `docs/RUNBOOK.md` is the manual up/down procedure, `docs/SERVING.md` the serving patterns,
   `docs/design/PLAN.md` the original design research.
+- **`docs/labs/lab0..lab8.md` are the workshop**, `docs/GOTCHAS.md` the failures a participant
+  actually hits, and `docs/RESULTS.md` the reference run's measured numbers with the raw
+  `--output` JSONs in `docs/results/`. A lab's "기대 출력" must be cut from `RESULTS.md`, not
+  retyped: every number in the labs traces to a measurement or a JOURNAL section, never to an
+  estimate. Bump the test count in `lab0.md` when the suite grows.
 - **Tests never touch Azure or the network.** The SDK is imported lazily inside functions, so tests
   inject fakes by monkeypatching the module attribute the function reaches for (see the docstring
   of `tests/test_aml_job.py`). Keep new Azure imports function-local for this reason.
