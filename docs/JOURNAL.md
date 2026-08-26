@@ -1,11 +1,29 @@
-# 검증 기록 (Verified Findings)
+# 실험 저널 (Journal)
 
-이 문서는 **실제로 실행해서 확인한 것만** 기록한다. 추정·문서·블로그 근거는
-`docs/PLAN.md`에 있고, 여기에는 라이브 Azure 구독과 라이브 Hugging Face에 대해
-직접 호출한 결과만 남긴다.
+> ## ⚠️ 이것은 워크샵 교재가 아니다
+>
+> - 성격: 몇 주간의 **실험 노트**. 라이브 Azure 구독에 실제로 호출한 결과만 시간순으로 쌓았다.
+> - **철회된 절이 일부러 살아 있다.** §0 은 "스토리지 권한 문제"라고 단정했다가 뒤집혔고,
+>   §24 는 과잉 주장이었고, §43 은 §51 이 정정한다. 지우지 않는 이유는 §0.4 에 있다.
+> - 따라서 **grep 해서 나온 문장이 현재의 정답이라는 보장이 없다.** 같은 주제에 대해
+>   맞는 답과 틀린 답이 나란히 들어 있다.
+>
+> ### 무엇을 읽어야 하나
+>
+> | 원하는 것 | 볼 곳 |
+> |---|---|
+> | 지금 실습에서 밟게 될 함정과 그 대처 | **`docs/GOTCHAS.md`** ← 여기부터 |
+> | 실습 절차 | `docs/labs/lab0.md` ~ `lab8.md` |
+> | 운영 절차 (올리고 내리기) | `docs/RUNBOOK.md` |
+> | 왜 그렇게 설계했나 | `docs/design/PLAN.md` |
+> | **어떤 숫자를 무엇으로 재서 얻었나** | 이 문서 |
+>
+> 이 문서의 값어치는 근거에 있다. 코드 주석의 `JOURNAL §N` 은 전부 여기를 가리키며,
+> 어떤 제약이 왜 제약인지 되짚을 때 읽는다. 처음 배우는 사람이 읽을 문서는 아니다.
 
-- 구독: `ME-MngEnvMCAP277524-eonlee-1` (`cb370f4f-…`), 테넌트 `4510ec63-…`
-- 검증일: **2026-08-20**
+- 추정·문서·블로그 근거는 `docs/design/PLAN.md`, 여기에는 직접 호출한 결과만
+- 구독/테넌트: `$FFSFT_SUBSCRIPTION_ID` / `$FFSFT_TENANT_ID` (실제 GUID 는 커밋하지 않는다)
+- 최초 검증일: **2026-08-20**, 이후 절마다 표기
 - 재현 도구: `scripts/probe_architecture.py`, `scripts/verify_hf_ids.py`
 
 ---
@@ -2945,11 +2963,11 @@ Mid-session, every Azure SDK call started failing:
 ```
 ClientAuthenticationError: ChainedTokenCredential failed ...
 AADSTS90072: User account '{EUII Hidden}' from identity provider
-'https://sts.windows.net/2573db8c-.../' does not exist in tenant 'Contoso'
+'https://sts.windows.net/<tenant-B>/' does not exist in tenant 'Contoso'
 ```
 
 The Azure CLI's default subscription had moved underneath the session to a second
-directory (`ME-M365CPI74210306-eonlee-1`, tenant `2573db8c-…`, a different signed-in
+directory (`ME-M365CPI74210306-...`, tenant `<tenant-B>`, a different signed-in
 user). `az account list --all` showed both.
 
 This is the exact drift `build_credential`'s docstring describes, and pinning
@@ -3107,8 +3125,8 @@ unexplained (§36.4). The third came with timestamps that identified it:
 
 The workstation is signed in to two directories at once:
 
-    ME-MngEnvMCAP277524-eonlee-1  4510ec63-...  eonlee@MngEnvMCAP277524
-    ME-M365CPI74210306-eonlee-1   2573db8c-...  admin@m365cpi74210306
+    ME-MngEnvMCAP277524-...  <tenant-A>  eonlee@...      <- the one that works
+    ME-M365CPI74210306-...   <tenant-B>  admin@...       <- the one az defaulted to
 
 The Azure CLI keeps the active account in a single global file,
 `$AZURE_CONFIG_DIR/azureProfile.json`, defaulting to `~/.azure`. Any `az`
@@ -3123,7 +3141,7 @@ writer.
 correct as far as it goes -- it decides *which directory a token is requested
 for*. It does not decide *which user asks*. That comes from the CLI's active
 account, and when that account is the m365cpi user, requesting a token for tenant
-`4510ec63` produces exactly this error: an identity from one directory asking for
+`<tenant-A>` produces exactly this error: an identity from one directory asking for
 another it has no guest entry in. The error names a tenant, so it reads as a
 tenant problem, and the tenant was already pinned -- which is why it survived two
 repairs.
@@ -4118,7 +4136,7 @@ AmlCompute 가 목록에 없다. 그러므로:
 `probe_sku` 의 원래 docstring 은 "이것이 배포 가능한지에 대한 유일하게
 정직한 답"이라고 적고 있었다. 그 문장이 재확인을 막았다 — 리포지터리 자신의
 주석이 검증을 대신하는 자리에 앉으면, 그 주석의 스코프가 틀렸을 때 틀린
-결론이 근거를 갖춘 것처럼 보인다. **VERIFIED 의 항목은 무엇을 쟀는지와 함께
+결론이 근거를 갖춘 것처럼 보인다. **JOURNAL 의 항목은 무엇을 쟀는지와 함께
 무엇을 재지 않았는지도 말해야 한다.**
 
 ### 51.4 여전히 열려 있는 것
@@ -5473,7 +5491,7 @@ adapter present    exit=0  COUNT 1 BYTES 1234 ADAPTER True
 
 ```
 MCAPSGovDeployPolicies
-  scope: /providers/Microsoft.Management/managementGroups/4510ec63-...-2dc7de6cecec
+  scope: /providers/Microsoft.Management/managementGroups/<tenant-id>
 ```
 
 스토리지 계정에 걸리는 정책 셋:
@@ -6236,3 +6254,116 @@ inference does"*), 로드테스트도 스펙에서 받아 그대로 보내므로
 - **max_tokens 사용 카드** — 청크 수가 아니라 `usage.completion_tokens`
   (`stream_options.include_usage`). 청크는 토큰이 아니다. `finish_reason=length`
   면 빨갛게 칠한다 — 68.6 이 바로 그 카드가 잡아야 할 상태다.
+
+---
+
+> **이 절은 `README.md` 에서 옮겨왔다.** 랜딩 문서에 개발 진행 체크리스트가 있으면
+> 워크샵 참가자가 처음 읽는 문장이 개발자용 진행 상황이 된다. 기록으로서의 값은
+> 그대로이므로 여기 저널에 둔다. 각 항목의 `§N` 은 위 절들을 가리킨다.
+>
+> 아래 미완료 항목 중 일부는 **이후 절에서 완료됐다** — 특히
+> "GPU 엔드포인트가 실제로 서빙된 적은 아직 없다" 는 §57 / §66 에서 뒤집혔다.
+> 체크박스가 아니라 절 번호를 믿을 것.
+
+## 69. 개발 체크리스트 — 무엇이 언제 실증됐나 (이관)
+
+- [x] 리서치 (Qwen 계열 / 한국어 데이터셋·벤치마크 / Fabric·Foundry / MAI)
+- [x] 모든 HF ID 실제 API 검증
+- [x] 모델 추상화 레이어 + 레지스트리 + CLI
+- [x] 3종 설정 레지스트리 (모델·데이터셋·벤치마크)
+- [x] 설계 문서 `docs/design/PLAN.md`
+- [x] Fabric Spark 데이터 준비 노트북 + `fabric_prep` 순수 함수 (TDD)
+- [x] 학습 경로: ACPT 커스텀 이미지 빌드 · A100 프리플라이트 통과
+- [x] 서빙 경로: vLLM 이미지 빌드 · 아키텍처 등록 검증
+- [x] 평가: 벤치마크 러너 + LLM-as-judge (TDD)
+- [x] 부하 테스트: TTFT / TPOT / knee 측정기 — **실제 스트리밍 엔드포인트로 실검증 (§25)**
+- [x] 라이프사이클: `up` / `down` / `status` — **실제 테어다운 검증 완료**
+- [x] 비용 누수 탐지: 삭제된 VM 잔해 스캔 (TDD) — **실제 $41.66/월 발견·제거**
+- [x] 배포 프리플라이트: 엔드포인트 ID 권한 부족 시 2초 만에 거부 (TDD)
+- [x] **학습 경로 실검증** — A100 LowPriority 에서 preflight 잡 2회 `Completed`,
+      노드 실측 `nf4_matmul_ok: True` / `transformers 5.15.1` / A100 80GB,
+      QLoRA 실제 학습 스텝 성공 (`docs/JOURNAL.md` §16)
+- [x] **QLoRA 학습 엔드투엔드 `Completed`** — `olive_machine_58qllrq6y9`,
+      `train_loss 1.601` / 10 스텝 / 276초 / 학습 파라미터 **1.06%** /
+      VRAM 피크 2.79 GB (§19). 성공 런의 stdout 은 블롭 권한 때문에 읽을 수
+      없으므로 수치는 전부 `ffsft/mlflow_report.py` → MLflow 로 회수했다.
+- [x] **Qwen3.8-27B 실학습 `Completed`** — `olden_bean_302vkc7nbz`,
+      `ko_commercial_safe` 340건 / 30 스텝 / **41.6분** / `train_loss 1.2637` /
+      **VRAM 피크 28.19 GB** / 학습 파라미터 **116.73M (0.79%)** (§20).
+      하이브리드 Gated-DeltaNet 48개 층에도 NF4 QLoRA 가 동작함을 실증했고,
+      **40 GB GPU 면 충분하다**는 실측 근거를 얻었다(20 GB 는 불가).
+- [x] 잡 제출 가드: 모델이 `lora_target_modules` 를 선언 안 하면 **GPU 를 빌리기 전에**
+      거부 (TDD, `tests/test_aml_job.py`)
+- [x] 라이브러리 rename 내성: transformers v5 의 `warmup_ratio` 제거 등을
+      런타임에 해석 (TDD, `tests/test_qlora_config.py`, §18)
+- [x] **평가 파이프라인 엔드투엔드 `Completed`** — `hungry_bell_lpf45kx8kv`,
+      학습 → 어댑터 → base 평가 → tuned 평가 → 델타가 **한 잡 안에서** 완주.
+      lm-eval 로더에서 3회 실패한 뒤, 모델을 우리 코드가 만들어 HFLM 에
+      객체로 넘기는 방식으로 해결했다 (§21). 같은 계열 실패는 이제
+      `docker/verify_stack.py` 가 **빌드 시점에** 잡는다.
+- [x] **서빙 블로커 원인 확정 — 전용 A100 쿼터가 `0`** (§22).
+      `ClusterMinNodesExceedCoreQuota` 가 API 응답에 그대로 적혀 있다.
+      매니지드 온라인 엔드포인트는 항상 전용이고, 이 구독에서 만들 수 있는
+      유일한 최신 GPU 패밀리의 전용 쿼터가 0 이다. 이전에 유력했던
+      "테넌트 정책이 막는다"는 가설은 **반증**됐다 — 그런 정책 할당은 없다.
+- [x] 배포 가능성 점검이 거짓말하지 않게 수정 — `ffsft-deploy check --probe`
+      가 쿼터 숫자 대신 **실제 create 호출**로 판정한다 (TDD,
+      `tests/test_sku_probe.py`). 거부는 2초 만에 아무것도 안 만들고 돌아오고,
+      승인은 `min_instances=0` 이라 노드를 띄우지 않는다.
+- [x] **Azure 서빙 벽 두 개 중 하나가 뚫렸다 — 그런데 롤아웃은 완료 못 했다** (§26)
+      1. **전용 GPU 쿼터**: A100 은 여전히 0 이지만 **A10 은 36 코어로 승인**됐다.
+         그리고 매니지드 온라인 엔드포인트는 `Standard_NV12ads_A10_v5` 를
+         **수락한다** — AmlCompute 가 같은 계열을 `InvalidPropertyValue` 로
+         거부하는데도 그렇다. **두 표면은 SKU 카탈로그를 공유하지 않는다.**
+         주의: 기본 SKU 는 NV36 이고 온라인은 롤링 업데이트분까지 2배를
+         요구하므로 72 코어가 필요해 승인된 36 으로는 못 올린다. NV12 로 바꿔야 한다.
+      2. **데이터스토어 도달 불가** (§24) → 배치·모델 자산 등록은 여전히 불가.
+         하지만 **온라인 vLLM 은 우회한다**: `--hf-model` 을 주면 컨테이너가
+         Hub 에서 직접 가중치를 받아 데이터스토어를 아예 안 탄다. §24 의
+         "모든 호스팅 패턴이 막혔다"는 **과잉 주장이었고 정정했다** —
+         정확히는 **모델 자산을 요구하는 패턴만** 막힌다.
+      실측 결과: 엔드포인트 `Succeeded`, 배포는 첫 시도에서 10분 뒤
+      `Endpoint identity does not have pull permission` 으로 죽었고(§26.4),
+      AcrPull 부여 후 재시도에서는 **80분 넘게 `Creating` / `percentComplete: 0`**
+      에 머물러 완료되지 않았다. 설정·권한·SKU 는 모두 정상으로 측정됐다.
+      비용 때문에 내렸고, `docs/RUNBOOK.md` 에 그대로 재시도할 수 있는
+      명령을 남겼다.
+- [x] **출하된 기본 SKU 가 배포 불가능한 값이었다 — 고쳤다** (§27.1) —
+      `aml_online_vllm.default_sku` 가 NV36(=72 코어 요구)이라 **`--sku` 를
+      명시하지 않은 모든 배포가 반드시 실패**했다. §26.3 에서 이 산술을 이미
+      측정해놓고 설정 파일에 반영하지 않은 것이 원인이다. NV12 로 바꾸고,
+      설정 파일 자체를 실측 쿼터에 고정하는 테스트 3개를 붙였다
+      (TDD, `tests/test_serving_registry.py`).
+- [x] **AcrPull 자동 부여가 무인 실행으로 증명됐다** (§27.2) —
+      새 엔드포인트의 새 principal 에 대해 손대지 않고 역할이 부여됐다.
+      §26.4 의 수정 두 가지(검사 시점 이동 + 직접 부여)가 실동작으로 확인됐다.
+- [ ] **GPU 엔드포인트가 실제로 서빙된 적은 아직 없다 — 원인은 리전 용량** (§27.5) —
+      가장 작은 `Standard_NV6ads_A10_v5`(12 코어 요구, 여유 24)로 재시도했으나
+      **50분간 `Creating` 고착**, 컨테이너 로그 없음. 직전 NV12 는 85분.
+      필요 코어를 절반으로 줄여도 신호가 동일했으므로 **SKU 크기는 변수가 아니다.**
+      readiness probe 가 최대 7분 20초면 판정하므로, 로그 없이 `Creating` 이
+      계속된다는 것은 **노드가 배정되지 않았다**는 뜻이다.
+      → **쿼터 승인은 용량 보장이 아니다.** 다음 축은 리전 또는 AKS/배치 표면
+      이지 SKU 가 아니다(§27.6). GPU TTFT/TPOT 수치는 여전히 없고, 있는 것은
+      §25 의 로컬 CPU 측정치뿐이다.
+- [x] **프리플라이트가 구조적으로 눈멀어 있던 것을 고쳤다** (§26.4) —
+      AcrPull 검사가 **엔드포인트 생성보다 먼저** 돌아서 신규 엔드포인트에서는
+      항상 404 → 항상 통과였다. 권한이 없는 게 확실한 유일한 경우에 침묵했다.
+      이제 생성 직후에 검사하고 `ensure_acr_pull()` 이 **직접 부여**한다
+      (TDD, `tests/test_acr_pull_grant.py`).
+- [x] **스토리지를 안 타는 경로를 CLI 에서 쓸 수 있게 했다** (§26.5) —
+      `deploy_online()` 은 `hf_model=` 을 진작 받고 있었는데 파서가
+      `--model-uri` 를 필수로 강제해 유일한 열린 경로가 명령줄에서 막혀 있었다
+      (TDD, `tests/test_deploy_cli.py`).
+- [x] **서빙 + 부하 테스트 실검증 (로컬)** — Azure 서빙이 전부 막혀 있어
+      로컬 패턴에 CPU `transformers` 엔진을 추가했다(`ffsft-serve-local`).
+      첫 로드테스트가 **HTTP 200 을 12번 받고 12번 실패**로 기록했는데,
+      하네스가 옳았다 — TTFT 는 스트리밍 없이 측정할 수 없다. SSE 구현 후
+      **12/12 성공**, 동시성 1→2→4 에서 처리량 ×1.71 → ×1.21, TPOT +14% →
+      +62% 의 포화 곡선을 실측했다 (§25). 비용 $0.
+- [x] **27B 실학습 · 튜닝 전후 벤치마크 비교 `Completed`** —
+      `heroic_fennel_085y2rwm3s`, 학습부터 base/tuned 채점까지 한 잡에서 완주.
+      `train_loss 1.2638` 로 §20 의 `1.2637` 을 재현했다.
+      델타는 `kobest_boolq +0.16`, `kobest_sentineg +0.04` 가 나왔지만
+      **`eval_limit=25` 라 노이즈와 구분되지 않는다** — 이 잡이 증명하는 것은
+      점수가 아니라 측정 장치다(§23.3).

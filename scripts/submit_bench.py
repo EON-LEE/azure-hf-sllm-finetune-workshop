@@ -3,7 +3,7 @@
     python scripts/submit_bench.py --model-asset qwen3_8-27b-ko-merged:1 --wait
 
 This is the load test. It is not an endpoint benchmark: there is no managed
-online endpoint in this subscription to point one at (docs/VERIFIED.md §40), so
+online endpoint in this subscription to point one at (docs/JOURNAL.md §40), so
 the server and the client run in one command job on the A100 cluster that
 training already proved works. See `ffsft.serve.bench_job` for what that keeps
 and what it gives up.

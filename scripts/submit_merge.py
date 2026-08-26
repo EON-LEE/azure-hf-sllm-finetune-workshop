@@ -79,7 +79,7 @@ def main() -> int:
     # writes the merged weights back, so a storage account that refuses its own
     # datastores' credential kills it -- and kills it as a bare "Failed to mount
     # URI ... at mount point ...", with the real reason nowhere in the message.
-    # That cost three jobs and an A/B before the axis was found (docs/VERIFIED.md
+    # That cost three jobs and an A/B before the axis was found (docs/JOURNAL.md
     # S63). `submit_training.py` already ran this check; this path did not, which
     # is exactly why the check did not fire.
     from ffsft.deploy.preflight import read_storage_reachability, storage_blocker

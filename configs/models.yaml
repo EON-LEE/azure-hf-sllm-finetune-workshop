@@ -49,7 +49,7 @@ models:
       - gate_proj
       - up_proj
       - down_proj
-    # Serving flags, measured from the real config.json (see docs/VERIFIED.md).
+    # Serving flags, measured from the real config.json (see docs/JOURNAL.md).
     multimodal: true          # vision_config / image_token_id / video_token_id
     mamba_cache_mode: align   # 48 of 64 layers are Gated DeltaNet
     reasoning_parser: qwen3

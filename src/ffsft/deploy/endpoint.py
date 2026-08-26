@@ -53,7 +53,7 @@ log = logging.getLogger("ffsft.deploy.endpoint")
 #: purple_wolf_g3hhc4q5qj). The bench path moved to :4 when `ffsft-bench:8` was
 #: built; this constant did not, so a managed deployment of the very model this
 #: project produces would still have hit that error the moment a node was
-#: allocated. See docs/VERIFIED.md 51.5.
+#: allocated. See docs/JOURNAL.md 51.5.
 SERVE_IMAGE = "acrffsftkc.azurecr.io/ffsft-serve:5"
 
 SERVE_ENVIRONMENT_NAME = "ffsft-serve"
@@ -213,8 +213,8 @@ def probe_sku(client, sku: str, tier: str, *, name: str = "ffsft-probe") -> SkuP
     Reading it as a deployment probe inverts its answer. In koreacentral all six
     A10 v5 SKUs are MIR-only -- their `supportedComputeTypes` lists MIR and not
     AmlCompute -- so this call refuses precisely the SKUs a managed endpoint
-    accepts. VERIFIED 43 concluded "every GPU SKU is NotAvailableForSubscription"
-    from exactly that inversion; VERIFIED 51 retracts it, having created an
+    accepts. JOURNAL 43 concluded "every GPU SKU is NotAvailableForSubscription"
+    from exactly that inversion; JOURNAL 51 retracts it, having created an
     endpoint in 69 seconds. For the deployment question, attempt a
     `ManagedOnlineDeployment` -- nothing else is evidence.
 
@@ -500,7 +500,7 @@ def check_pattern(
 #: Seconds before the first probe fires. Small and fixed on purpose.
 #:
 #: This constant used to be the whole startup budget, and that was the wrong
-#: knob -- see VERIFIED §38. A probe that fails costs nothing; Azure simply
+#: knob -- see JOURNAL §38. A probe that fails costs nothing; Azure simply
 #: tries again `period` seconds later. So every second spent here is a second
 #: the deployment cannot go healthy in *even when the container is already
 #: serving*, while `failure_threshold` buys the same patience for free in the
@@ -536,7 +536,7 @@ AZURE_DEFAULT_FAILURE_THRESHOLD = 30
 #: "less than 120" means 119 is the largest accepted value. Cheap failure --
 #: a 400 before any node was allocated -- but only because it is validated at
 #: request time; the same mistake in a field validated later would have cost
-#: another rollout. See VERIFIED §38.6.
+#: another rollout. See JOURNAL §38.6.
 AZURE_MAX_FAILURE_THRESHOLD = 119
 
 
@@ -738,7 +738,7 @@ def egress_for(explicit: str | None, reachability: object | None) -> str | None:
     `None` reachability means the workspace could not be read, and the safe
     answer there is the same one: leave it unset.
 
-    See docs/VERIFIED.md S64.
+    See docs/JOURNAL.md S64.
     """
     if getattr(reachability, "workspace_is_isolated", False):
         # The managed VNet already places the container on the network that
@@ -772,7 +772,7 @@ def ensure_endpoint(client, endpoint_name: str) -> None:
     promises not to take the endpoint down, then logs the `{}` this step created
     as if it had found it that way.
 
-    See docs/VERIFIED.md S65.
+    See docs/JOURNAL.md S65.
     """
     from azure.ai.ml.entities import ManagedOnlineEndpoint
     from azure.core.exceptions import ResourceNotFoundError
@@ -1272,7 +1272,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="A Hugging Face repo id, e.g. Qwen/Qwen3.5-0.8B. vLLM downloads the "
         "weights at container start, so this path needs no model asset and "
-        "no reachable workspace storage account (see VERIFIED.md section 24).",
+        "no reachable workspace storage account (see JOURNAL.md section 24).",
     )
     online.add_argument(
         "--model-blob-uri",

@@ -193,7 +193,7 @@ class ServingSpec(BaseModel):
         cannot: the model asset is named in the deployment resource and mounted
         by the platform before any of our code runs.
 
-        This is the escape hatch from the storage wall in VERIFIED.md section 24,
+        This is the escape hatch from the storage wall in JOURNAL.md section 24,
         and it is the reason `requires_model_asset` alone over-reports blockage.
         """
         return self.openai_compatible and self.surface in {

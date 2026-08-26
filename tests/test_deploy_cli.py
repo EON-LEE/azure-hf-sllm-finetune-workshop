@@ -2,7 +2,7 @@
 
 `deploy_online()` grew an `hf_model=` parameter so vLLM can pull weights straight
 from the Hugging Face Hub, bypassing the network-isolated workspace storage
-account documented in VERIFIED.md section 24.  The argument parser never caught
+account documented in JOURNAL.md section 24.  The argument parser never caught
 up: it forced `--model-uri`, so the only unblocked path was unreachable from the
 command line.  These tests pin the contract.
 """

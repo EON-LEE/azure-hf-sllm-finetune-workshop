@@ -18,7 +18,7 @@ default storage account:
 There is no public path and no private path. An Azure ML managed online
 deployment stages its artifacts through that account, so the rollout retries
 until it times out. The same root cause already blocked code-snapshot upload for
-training jobs (docs/VERIFIED.md 2.2); it was not recognised as the same problem
+training jobs (docs/JOURNAL.md 2.2); it was not recognised as the same problem
 because the two symptoms look nothing alike.
 
 It is also not fixable in place: `az storage account update
@@ -249,7 +249,7 @@ def test_unread_bypass_does_not_manufacture_a_pass():
 # own datastores present. No private endpoint and no role assignment reaches
 # that, because the key is refused before either is consulted -- and the
 # symptom, artifacts=0 on a finished run, is the one the network check already
-# claims to explain. See docs/VERIFIED.md 58.
+# claims to explain. See docs/JOURNAL.md 58.
 
 KEYED = ["workspaceblobstore", "workspaceartifactstore"]
 

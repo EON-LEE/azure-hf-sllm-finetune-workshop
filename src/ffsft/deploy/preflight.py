@@ -168,7 +168,7 @@ def _credential_blocker(state: StorageReachability) -> str | None:
     Orthogonal to `_network_blocker`, which is the whole point. A key is refused
     on the public endpoint and over a private link alike, so none of the three
     arrangements that satisfy the network check say anything about this one.
-    Measured on `mlw-ffsft-plc` (docs/VERIFIED.md S58): two healthy private
+    Measured on `mlw-ffsft-plc` (docs/JOURNAL.md S58): two healthy private
     endpoints, an isolated workspace, the network check green -- and every write
     still returned `KeyBasedAuthenticationNotPermitted`.
     """
@@ -195,7 +195,7 @@ def _credential_blocker(state: StorageReachability) -> str | None:
             "PUTing them one by one just loses to the workspace setting the next time it",
             "is applied. Use a PREVIEW api-version: the stable one does not return this",
             "field, so a stable-version GET reads 'None' forever and every check of the",
-            "change looks like it did not take (docs/VERIFIED.md S62.7, S63).",
+            "change looks like it did not take (docs/JOURNAL.md S62.7, S63).",
             "",
             "Then grant the workspace MSI, the cluster identity and yourself Storage Blob",
             "Data Contributor on the account. A cluster created later gets a new identity",

@@ -109,7 +109,7 @@ heredoc is silently a no-op under the classic builder).
 
 ## Invariants that cost real money to rediscover
 
-Each of these is a measured constraint, not a preference. `docs/VERIFIED.md` is the evidence log —
+Each of these is a measured constraint, not a preference. `docs/JOURNAL.md` is the evidence log —
 sections are cited by number from code comments, and it contains explicit retractions of earlier
 wrong root causes (§0, §30). Read it before "fixing" anything below.
 
@@ -151,10 +151,10 @@ wrong root causes (§0, §30). Read it before "fixing" anything below.
 
 ## Conventions
 
-- **`docs/VERIFIED.md` is append-only evidence.** When you measure something on Azure, add a
+- **`docs/JOURNAL.md` is append-only evidence.** When you measure something on Azure, add a
   numbered section; when a section turns out wrong, retract it in place rather than editing history.
   `docs/RUNBOOK.md` is the manual up/down procedure, `docs/SERVING.md` the serving patterns,
-  `docs/PLAN.md` the original design research.
+  `docs/design/PLAN.md` the original design research.
 - **Tests never touch Azure or the network.** The SDK is imported lazily inside functions, so tests
   inject fakes by monkeypatching the module attribute the function reaches for (see the docstring
   of `tests/test_aml_job.py`). Keep new Azure imports function-local for this reason.

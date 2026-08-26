@@ -182,7 +182,7 @@ async def _one_request(
                     # `max_tokens` as "no tokens streamed" -- 40 of 64 at every
                     # concurrency level in `plum_wall_318nsvlvt6`, identical at
                     # concurrency 1 and 32 because it is a property of the
-                    # prompt, not of the queue. See VERIFIED 55.
+                    # prompt, not of the queue. See JOURNAL 55.
                     # ...and so does `reasoning`. The image serving this
                     # endpoint streams the thinking block under `reasoning`,
                     # NOT `reasoning_content`: 4920 of 4921 SSE frames from
@@ -190,7 +190,7 @@ async def _one_request(
                     # carried `delta.reasoning_content`. The bundled mock emits
                     # `reasoning_content`, so every test here passed while the
                     # real server was scoring 0 -- the same shape of mistake as
-                    # VERIFIED 55, one field name later. See VERIFIED 68.
+                    # JOURNAL 55, one field name later. See JOURNAL 68.
                     if (
                         delta.get("content")
                         or delta.get("reasoning_content")

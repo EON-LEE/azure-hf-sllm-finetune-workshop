@@ -309,7 +309,7 @@ def build_credential(target: AzureTarget):
     as a tenant problem even when the tenant is already pinned. `az account set`
     does not hold, because it is a write to shared state and the next writer
     wins. Point `AZURE_CONFIG_DIR` at a private copy, or supply a service
-    principal so the CLI is out of the path entirely. See VERIFIED §39.
+    principal so the CLI is out of the path entirely. See JOURNAL §39.
 
     `DefaultAzureCredential` stays behind it in the chain so the same code still
     authenticates where there is no Azure CLI. On a compute node the CLI

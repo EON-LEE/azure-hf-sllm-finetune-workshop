@@ -1,12 +1,12 @@
 # RUNBOOK — 직접 올리고 내리기
 
 이 문서는 **사람이 손으로 실행하는 순서**입니다. 모든 명령은 실제로 이 구독에서
-실행해 결과를 확인한 것만 적었습니다. 검증 근거는 `docs/VERIFIED.md`에 있습니다.
+실행해 결과를 확인한 것만 적었습니다. 검증 근거는 `docs/JOURNAL.md`에 있습니다.
 
 ## 0. 환경
 
 ```bash
-export FFSFT_SUBSCRIPTION_ID=cb370f4f-5f39-479b-8911-96ec487998b1
+export FFSFT_SUBSCRIPTION_ID=<your-subscription-id>   # az account show --query id -o tsv
 export FFSFT_RESOURCE_GROUP=rg-ffsft-kc
 export FFSFT_WORKSPACE=mlw-ffsft
 az login          # 또는 az login --use-device-code
@@ -14,7 +14,8 @@ az login          # 또는 az login --use-device-code
 # 계정이 여러 테넌트에 걸쳐 있으면 반드시 고정하세요
 az account set --subscription $FFSFT_SUBSCRIPTION_ID
 az account show --query "{id:id,tenant:tenantId}" -o tsv
-# -> cb370f4f-...   4510ec63-0634-4550-9f93-2dc7de6cecec
+# -> <your-subscription-id>   <your-tenant-id>
+#    두 값이 나오면 됩니다. 아래 오류는 이 둘이 어긋났을 때 납니다.
 ```
 
 > **`InvalidAuthenticationTokenTenant` 이 뜨면 코드 문제가 아닙니다.**
@@ -216,7 +217,7 @@ az rest --method get --url \
 | `NoMatchingArtifactsFoundFromJob` | 학습 산출물이 스토리지에 안 올라감 (§24) | `--hf-model` 경로 사용 |
 | 배포가 `Failed` 후 업데이트 거부 | Azure는 초기 프로비저닝 실패한 배포를 수정 못 함 | 코드가 자동 삭제 후 재생성. 수동이면 `az ml online-deployment delete` |
 | 컨테이너 로그가 아예 없음 | 이미지 pull 자체가 거부됨 | §3.3 — 로그가 없는 것이 곧 단서입니다 |
-| **15분 넘게 `Creating`, 로그 없음, `Failed` 도 안 뜸** | **리전에 물리 GPU 용량이 없음.** 쿼터가 있어도 발생합니다 | 기다려도 안 됩니다. §6.1로 내리고 리전 또는 호스팅 표면을 바꾸세요 (VERIFIED §27.6) |
+| **15분 넘게 `Creating`, 로그 없음, `Failed` 도 안 뜸** | **리전에 물리 GPU 용량이 없음.** 쿼터가 있어도 발생합니다 | 기다려도 안 됩니다. §6.1로 내리고 리전 또는 호스팅 표면을 바꾸세요 (JOURNAL §27.6) |
 | `down` 이 배포를 못 지움 | `Creating` 중인 배포는 삭제 거부 | §6.1 — 엔드포인트를 통째로 ARM DELETE |
 | 코드를 고쳤는데 노드에서 **예전 에러가 그대로** 재현됨 | `TRAIN_IMAGE` 는 올렸는데 환경 버전이 그대로여서 옛 이미지가 실행됨 | §8.3 — 이제 버전은 태그에서 자동 파생됩니다 |
 | `Failed to pull ... 401 authentication required` | 클러스터를 재생성해서 시스템 ID가 바뀜 → AcrPull 소멸 | §8.2 |

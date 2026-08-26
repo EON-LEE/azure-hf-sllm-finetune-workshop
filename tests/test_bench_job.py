@@ -8,7 +8,7 @@ a job that looks like it ran.
 
 The load test lives in a job rather than behind an endpoint because this
 subscription cannot create a GPU online deployment at all -- see
-`bench_job`'s module docstring and docs/VERIFIED.md §40.
+`bench_job`'s module docstring and docs/JOURNAL.md §40.
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ def test_the_entrypoint_refuses_to_start_without_the_two_bound_paths():
 
 
 def test_the_model_path_is_an_argument_and_never_an_environment_prefix():
-    """Regression for job `sharp_date_dcg59pbtt5` (docs/VERIFIED.md §42).
+    """Regression for job `sharp_date_dcg59pbtt5` (docs/JOURNAL.md §42).
 
     The command used to read `MODEL_PATH="${{inputs.model}}" bash ...`. The
     bench image is FROM the serve image, which bakes

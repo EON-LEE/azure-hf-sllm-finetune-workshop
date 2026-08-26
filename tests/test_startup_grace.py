@@ -127,7 +127,7 @@ def test_failure_threshold_never_reaches_the_value_azure_rejects():
 
 def test_a_budget_past_the_ceiling_is_absorbed_by_the_period_not_the_delay():
     """The overflow has to go somewhere. Putting it in `initial_delay` would
-    make every start slower by the worst case, which is the mistake VERIFIED §38
+    make every start slower by the worst case, which is the mistake JOURNAL §38
     is about; putting it in `period` only delays *noticing* a readiness that has
     already happened.
     """

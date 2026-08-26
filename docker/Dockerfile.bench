@@ -6,7 +6,7 @@
 # SKU koreacentral offers is marked NotAvailableForSubscription, and an online
 # deployment has no LowPriority pool to fall back to, so five rollouts sat at
 # `percentComplete: 0.0` for 50-113 minutes each and never got a node
-# (docs/VERIFIED.md §40). AmlCompute LowPriority *does* get A100s here -- that
+# (docs/JOURNAL.md §40). AmlCompute LowPriority *does* get A100s here -- that
 # is what trained the adapter -- so the load test moves to where the hardware
 # actually is: server and client inside one command job on gpu-a100-lp.
 #

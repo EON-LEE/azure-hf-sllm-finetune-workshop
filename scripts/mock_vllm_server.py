@@ -3,9 +3,10 @@
 Used to exercise ffsft.serve.loadtest end-to-end without a GPU, so that a live
 run against a real endpoint is testing the endpoint rather than the client.
 
-It also reproduces the one behaviour that cost a whole bench run (VERIFIED 55):
+It also reproduces the one behaviour that cost a whole bench run (JOURNAL 55):
 the server this stands in for runs with `--reasoning-parser qwen3`, so a Qwen3
-<think> block leaves as `delta.reasoning_content`, not `delta.content`. Thinking
+<think> block leaves as `delta.reasoning`, not `delta.content` -- see
+`THINK_FIELD` below, and JOURNAL 68 for the measurement that named it. Thinking
 is ON unless the request sends `chat_template_kwargs: {"enable_thinking": false}`
 -- the same default the real server has, and the reason a client that sends
 nothing measures a different mode than training used. A mock that only ever
@@ -39,7 +40,7 @@ N_TOKENS = 32
 THINK_TOKENS = int(os.environ.get("MOCK_THINK_TOKENS", "12"))
 #: Which field name the thinking block leaves under. The image behind
 #: `ffsft-plc/green` streams `reasoning`: 4920 of 4921 SSE frames carried
-#: `delta.reasoning` and none carried `delta.reasoning_content` (VERIFIED 68).
+#: `delta.reasoning` and none carried `delta.reasoning_content` (JOURNAL 68).
 #: This mock emitted only the older spelling, so a client that handled just that
 #: one looked correct here and counted zero against the deployment. Default to
 #: what the deployment actually sends; the old name stays reachable so both

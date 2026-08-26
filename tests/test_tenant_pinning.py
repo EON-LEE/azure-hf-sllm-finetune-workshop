@@ -7,8 +7,11 @@ directory the two can drift apart -- and they did, twice in one session, in the
 middle of a run:
 
     (InvalidAuthenticationTokenTenant) The access token is from the wrong issuer
-    'https://sts.windows.net/2573db8c-.../'. It must match one of the tenants
-    '...4510ec63-0634-4550-9f93-2dc7de6cecec/' associated with this subscription.
+    'https://sts.windows.net/<tenant-B>/'. It must match one of the tenants
+    '...<tenant-A>/' associated with this subscription.
+
+(Real GUIDs redacted; the shape is what matters. Tenant A is the directory
+the subscription lives in, tenant B the one the CLI had selected.)
 
 Nothing in the code changed between the call that worked and the call that
 failed. The default subscription moved underneath it.
@@ -30,7 +33,9 @@ import pytest
 
 from ffsft.azure_ml import AzureTarget, build_credential
 
-TENANT = "4510ec63-0634-4550-9f93-2dc7de6cecec"
+# An opaque fixture. These tests care that the value is carried through
+# unchanged, never what it is, so a real directory id has no business here.
+TENANT = "00000000-0000-0000-0000-0000000000aa"
 
 
 # --------------------------------------------------------------------------

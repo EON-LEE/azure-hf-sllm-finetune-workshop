@@ -53,7 +53,7 @@ patterns:
       updates, so a single NV12 costs 24 cores and three cost 48. Instances bill 24/7 -- there is no scale-to-zero on managed online
       endpoints. A granted quota is still not a promise of regional capacity:
       a rollout can sit at percentComplete 0.0 indefinitely when the region has
-      none (see docs/VERIFIED.md section 26.8).
+      none (see docs/JOURNAL.md section 26.8).
 
   - key: aml_batch_vllm
     display_name: AML Batch Endpoint + vLLM offline engine

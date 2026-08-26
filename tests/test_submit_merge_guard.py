@@ -11,7 +11,7 @@ workspace sat at `systemDatastoresAuthMode=accesskey` died seven times over on
 
 with the real reason -- the account refuses the account key its own datastore
 presents -- nowhere in the message. The state that produced it was fully visible
-in the two reads this guard already makes (docs/VERIFIED.md S63).
+in the two reads this guard already makes (docs/JOURNAL.md S63).
 
 These tests drive `scripts/submit_merge.py::main` directly, and exist mostly to
 prove the guard can *fire*. A preflight that always passes is indistinguishable

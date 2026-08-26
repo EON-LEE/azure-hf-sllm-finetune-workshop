@@ -6,7 +6,7 @@ It was supposed to. `ffsft.deploy.endpoint` builds a managed online deployment
 and `loadtest.py` was written to point at its scoring URI. That path is closed
 in this subscription, but it is worth being exact about *which* part is closed,
 because an earlier version of this note was not and the imprecision cost a
-round of wrong conclusions (VERIFIED 51).
+round of wrong conclusions (JOURNAL 51).
 
 Working: the endpoint resource itself. `ffsft-ep-probe` was created in 69
 seconds. Nothing about Azure Policy, RBAC or the endpoint feature is blocked,
@@ -21,7 +21,7 @@ and 3, while the SKU is offered in zones 2 and 3 -- so no zone survives. The
 quota is real and unusable. A managed endpoint rejects LowPriority, so unlike
 an AmlCompute cluster it has no separate pool that ignores the restriction, and
 five rollouts sat at `percentComplete: 0.0` for 50 to 113 minutes each without
-ever getting a node (VERIFIED 40). `preflight.online_endpoint_blocker` reads
+ever getting a node (JOURNAL 40). `preflight.online_endpoint_blocker` reads
 that same restriction field and refuses the spend up front.
 
 Not a way out: other regions. A10 ML quota measured 0 in koreasouth, japaneast,
@@ -78,7 +78,7 @@ from ..models import get_model
 #: `:2` ran on a real A100 and failed in five minutes: the entrypoint took its
 #: paths from a `VAR=value` command prefix, which the serve image's own
 #: `ENV MODEL_PATH` shadowed, so vLLM was launched against a path that does not
-#: exist on a job node (docs/VERIFIED.md §42). `:4` takes them as arguments and
+#: exist on a job node (docs/JOURNAL.md §42). `:4` takes them as arguments and
 #: resolves the model directory itself before starting the server.
 #:
 #: `:3` was cancelled mid-build and never pushed. Its context had already been
@@ -102,7 +102,7 @@ from ..models import get_model
 #: `:8` is `:7` plus `ffsft-serve:4`, which stops handing a text-only merge the
 #: multimodal flag. purple_wolf_g3hhc4q5qj named the failure exactly:
 #: "ValueError: There is no module or parameter named 'language_model' in
-#: Qwen3_5Model" -- see docs/VERIFIED.md 46.
+#: Qwen3_5Model" -- see docs/JOURNAL.md 46.
 BENCH_IMAGE = "acrffsftkc.azurecr.io/ffsft-bench:9"
 
 BENCH_ENVIRONMENT_NAME = "ffsft-bench"
@@ -134,7 +134,7 @@ class BenchSpec:
     gpu_memory_utilization: float = 0.90
 
     #: GDN state is allocated per sequence slot up front, not on demand
-    #: (docs/VERIFIED.md §35.3), so this is a fixed VRAM cost rather than a
+    #: (docs/JOURNAL.md §35.3), so this is a fixed VRAM cost rather than a
     #: ceiling. 16 slots is what the headroom above pays for comfortably.
     max_num_seqs: int = 16
 
@@ -267,7 +267,7 @@ def build_command(spec: BenchSpec) -> str:
     prefix loses to the image. `docker/Dockerfile.serve:45` bakes
     `ENV MODEL_PATH=/var/azureml-app/azureml-models`, this image is FROM that
     one, and job `sharp_date_dcg59pbtt5` reached vLLM with exactly that path
-    (docs/VERIFIED.md §42). An always-set inherited value also makes the
+    (docs/JOURNAL.md §42). An always-set inherited value also makes the
     entrypoint's `:?` guard unfireable, converting "nobody bound the model"
     from an error into a server that loads the wrong thing.
     """
@@ -310,7 +310,7 @@ def bench_env(spec: BenchSpec, model: ModelSpec | None) -> dict[str, str]:
             # Every cache vLLM and torch would open lives under `$HOME/.cache`
             # by default, and `$HOME` on an Azure ML node is inside
             # `AZ_BATCH_NODE_ROOT_DIR` -- which measured 64197 MB on this SKU,
-            # not the ~1 TB the SKU advertises (VERIFIED 50). The bench image
+            # not the ~1 TB the SKU advertises (JOURNAL 50). The bench image
             # is 9.2 GB and the downloaded 27B is 54 GB, so that root has
             # ~1.3 GB free by the time vLLM starts. A CUDA-graph capture and an
             # inductor compile of a 64-layer model do not fit in 1.3 GB, and
@@ -329,7 +329,7 @@ def bench_env(spec: BenchSpec, model: ModelSpec | None) -> dict[str, str]:
     # so a client that does not ask for the registry's mode measures a thinking
     # model while the training prompts were rendered with thinking off
     # (`train/qlora.py`). In `plum_wall_318nsvlvt6` that cost 40 of 64 requests
-    # per level -- see VERIFIED 55. Absent rather than "{}" when the registry
+    # per level -- see JOURNAL 55. Absent rather than "{}" when the registry
     # declares nothing, because "{}" and "unset" reach the server differently.
     if model is not None and model.chat_template_kwargs:
         env["BENCH_CHAT_TEMPLATE_KWARGS"] = json.dumps(
@@ -346,7 +346,7 @@ def ensure_bench_environment(client: MLClient) -> str:
     environment version is immutable and `create_or_update` over a stale one
     silently returns the stored entity. Duplicated rather than shared because
     the third caller (`deploy.endpoint`) registers without an explicit version
-    at all and needs fixing first (docs/VERIFIED.md §37.1); converging two of
+    at all and needs fixing first (docs/JOURNAL.md §37.1); converging two of
     three now would leave a helper shaped around the wrong pair.
     """
     from azure.ai.ml.entities import Environment
@@ -431,7 +431,7 @@ def submit(target: AzureTarget, spec: BenchSpec, wait: bool = False) -> dict:
                 # 54 GB download left 1332 MB, and a second 54 GB artefact had
                 # nowhere to go. So exactly one downloaded model fits, and
                 # anything a job produces at that scale must go to a
-                # `rw_mount` output rather than local disk. See VERIFIED 50.
+                # `rw_mount` output rather than local disk. See JOURNAL 50.
                 mode="download",
             )
         },

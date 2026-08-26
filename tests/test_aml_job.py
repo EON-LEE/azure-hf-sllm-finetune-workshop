@@ -224,7 +224,7 @@ def test_submit_passes_the_declared_target_model_through_unblocked(
 # Evaluating in a *separate* job would mean the adapter has to travel
 # training node -> workspaceblobstore -> eval node. That round trip is not
 # hypothetically risky here, it is the exact path that fails: the node cannot
-# open a FUSE session against the storage account (docs/VERIFIED.md 17), which
+# open a FUSE session against the storage account (docs/JOURNAL.md 17), which
 # is why `mount_outputs` defaults to False. Chaining keeps the adapter on the
 # node's local disk, where it was just written.
 # ---------------------------------------------------------------------------

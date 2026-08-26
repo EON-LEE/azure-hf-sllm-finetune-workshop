@@ -4,7 +4,7 @@ Why this exists
 ---------------
 `ffsft-loadtest` reduces a stream to numbers -- TTFT, TPOT, percentiles. That is
 the right shape for a sweep and the wrong shape for the question "what is
-actually coming down the wire". VERIFIED 55 is what happens when nobody looks:
+actually coming down the wire". JOURNAL 55 is what happens when nobody looks:
 the server routed a Qwen3 <think> block into `delta.reasoning` (older vLLM:
 `delta.reasoning_content`), the
 client counted only `delta.content`, and 40 of every 64 fully-decoded responses
@@ -119,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
         #       only path on which the reasoning tokens are visible at all: the
         #       parser buffers them until `</think>` and drops the buffer if the
         #       tag never arrives, which is measured to be the common case here
-        #       (700 tokens billed, both fields empty -- VERIFIED S68).
+        #       (700 tokens billed, both fields empty -- JOURNAL S68).
         if self.path.endswith("/chat/completions"):
             route = "/chat/completions"
         elif self.path.endswith("/completions"):

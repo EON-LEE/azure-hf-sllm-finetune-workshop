@@ -19,7 +19,7 @@ The trap these tests exist to hold shut: ARM reports `egressPublicNetworkAccess:
 Enabled` for a deployment that never set it. The live `blue` deployment reads
 `Enabled` and is `Succeeded`, which makes "Enabled" look like a working value to
 copy. It is a default-on-read; only an explicitly sent value reaches the
-validator. See docs/VERIFIED.md S64.
+validator. See docs/JOURNAL.md S64.
 """
 
 from ffsft.deploy.endpoint import egress_for

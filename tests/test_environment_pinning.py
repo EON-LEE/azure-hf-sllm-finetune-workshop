@@ -202,7 +202,7 @@ def test_the_refusal_names_the_way_out(monkeypatch):
 # `--language-model-only` guard, so a managed deployment of the merged 27B
 # would have reproduced `purple_wolf_g3hhc4q5qj` -- "There is no module or
 # parameter named 'language_model' in Qwen3_5Model" -- the moment a node was
-# allocated. docs/VERIFIED.md 51.5.
+# allocated. docs/JOURNAL.md 51.5.
 
 
 def test_serve_environment_version_tracks_the_image_tag():

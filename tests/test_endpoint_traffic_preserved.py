@@ -20,7 +20,7 @@ later read back `traffic: {}` with deploys the only writes in between.
 It also falsified the promise `deploy_online` makes in its `--traffic 0` branch
 -- "leave the traffic map alone, so a bad rollout cannot take the endpoint
 down" -- which then logged the `{}` the ensure-step had just created as though
-it had found it that way. See docs/VERIFIED.md S65.
+it had found it that way. See docs/JOURNAL.md S65.
 """
 
 from __future__ import annotations

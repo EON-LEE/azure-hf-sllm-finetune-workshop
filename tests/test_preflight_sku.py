@@ -32,7 +32,7 @@ field for that one caller only; `sku_advisory` still merely reports it for
 everyone else, and a test below pins the A100 case above so this split cannot
 quietly become a blanket refusal again. Cost of the missing distinction: two
 further rollouts at `percentComplete: 0.0`, 108 and 113 minutes, no container
-ever created. See VERIFIED §40.
+ever created. See JOURNAL §40.
 """
 
 from __future__ import annotations

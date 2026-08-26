@@ -2,7 +2,7 @@
 
 A 27B merge that saves the wrong names is only discovered on a LowPriority
 A100, forty minutes and 54 GB later, as a vLLM `ValueError` that reads like a
-model problem (docs/VERIFIED.md 49).
+model problem (docs/JOURNAL.md 49).
 
 `text_only_state_dict` was written to prevent that and does not: `from_pretrained`
 records the checkpoint->runtime renaming and `save_pretrained` replays it in
