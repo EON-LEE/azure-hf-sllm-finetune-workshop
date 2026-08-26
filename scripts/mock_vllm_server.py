@@ -33,7 +33,7 @@ def _env_float(name: str, default: float) -> float:
 TTFT_S = _env_float("MOCK_TTFT_S", 0.20)
 ITL_S = _env_float("MOCK_ITL_S", 0.010)  # inter-token latency
 N_TOKENS = 32
-#: How many of the streamed tokens land in `reasoning_content` before the answer
+#: How many of the streamed tokens land in the thinking field before the answer
 #: starts. Deliberately larger than a short `max_tokens`: a request that is cut
 #: off mid-thought is the case that scored as "no tokens streamed" for a client
 #: counting only `content`, and it has to be reachable here to be demonstrable.
