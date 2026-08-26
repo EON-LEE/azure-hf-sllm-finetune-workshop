@@ -34,7 +34,11 @@ from __future__ import annotations
 
 import pytest
 
-from ffsft.deploy.preflight import StorageReachability, storage_blocker
+from ffsft.deploy.preflight import (
+    StorageReachability,
+    _network_blocker,
+    storage_blocker,
+)
 
 
 def make(
@@ -44,6 +48,8 @@ def make(
     vnet_rules=(),
     private_endpoints=(),
     isolation_mode="Disabled",
+    allow_shared_key=None,
+    key_based_datastores=(),
 ) -> StorageReachability:
     return StorageReachability(
         account_name="mlwffsftstorage8cb451dd1",
@@ -52,6 +58,8 @@ def make(
         vnet_rules=list(vnet_rules),
         private_endpoints=list(private_endpoints),
         workspace_isolation_mode=isolation_mode,
+        allow_shared_key=allow_shared_key,
+        key_based_datastores=list(key_based_datastores),
     )
 
 
@@ -224,3 +232,93 @@ def test_unread_bypass_does_not_manufacture_a_pass():
         bypass=None,
     )
     assert storage_blocker(state) is not None
+
+
+# --- The credential axis ----------------------------------------------------
+#
+# Everything above decides whether the account can be *reached*. polandcentral
+# showed that is only half the question. `mlw-ffsft-plc` had two private
+# endpoints and an isolated workspace -- the third arrangement `storage_blocker`
+# calls fine, and it was right about the network -- while every write returned:
+#
+#     (KeyBasedAuthenticationNotPermitted) Key based authentication is not
+#     permitted on this storage account.
+#
+# All four of its datastores carried `credentialsType: AccountKey` against an
+# account with `allowSharedKeyAccess: false`. The account refuses the key its
+# own datastores present. No private endpoint and no role assignment reaches
+# that, because the key is refused before either is consulted -- and the
+# symptom, artifacts=0 on a finished run, is the one the network check already
+# claims to explain. See docs/VERIFIED.md 58.
+
+KEYED = ["workspaceblobstore", "workspaceartifactstore"]
+
+
+def test_key_based_datastore_on_a_no_key_account_is_blocked():
+    """A green network answer says nothing about this axis."""
+    state = make(
+        public_access="Disabled",
+        private_endpoints=["pe-blob"],
+        isolation_mode="AllowInternetOutbound",
+        allow_shared_key=False,
+        key_based_datastores=KEYED,
+    )
+    assert _network_blocker(state) is None
+    blocker = storage_blocker(state)
+    assert blocker is not None
+    assert "credentialsType=AccountKey" in blocker
+
+
+def test_key_mismatch_blocks_even_when_public_access_is_on():
+    state = make(
+        public_access="Enabled",
+        allow_shared_key=False,
+        key_based_datastores=KEYED,
+    )
+    assert _network_blocker(state) is None
+    assert storage_blocker(state) is not None
+
+
+def test_a_hardened_account_with_identity_datastores_is_fine():
+    """`allowSharedKeyAccess: false` on its own is the designed posture."""
+    state = make(
+        public_access="Disabled",
+        private_endpoints=["pe-blob"],
+        isolation_mode="AllowInternetOutbound",
+        allow_shared_key=False,
+        key_based_datastores=[],
+    )
+    assert storage_blocker(state) is None
+
+
+def test_key_based_datastores_are_fine_when_the_account_allows_keys():
+    state = make(
+        public_access="Enabled",
+        allow_shared_key=True,
+        key_based_datastores=KEYED,
+    )
+    assert storage_blocker(state) is None
+
+
+def test_an_unread_key_policy_is_never_a_blocker():
+    """`None` means not read, and an unread property must not stop a deployment."""
+    state = make(
+        public_access="Enabled",
+        allow_shared_key=None,
+        key_based_datastores=KEYED,
+    )
+    assert state.key_auth_refused is False
+    assert storage_blocker(state) is None
+
+
+def test_both_blockers_are_reported_together():
+    """`mlw-ffsft-jpe`: 0 private endpoints AND four AccountKey datastores."""
+    state = make(
+        public_access="Disabled",
+        private_endpoints=[],
+        allow_shared_key=False,
+        key_based_datastores=KEYED,
+    )
+    blocker = storage_blocker(state)
+    assert "credentialsType=AccountKey" in blocker
+    assert "no private endpoint and no public path" in blocker

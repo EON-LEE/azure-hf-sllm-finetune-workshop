@@ -57,10 +57,20 @@ ENV MODEL_PATH=/var/azureml-app/azureml-models \
     MAX_LORA_RANK=16 \
     EXTRA_ARGS="" \
     HF_HOME=/tmp/hf \
-    HF_HUB_ENABLE_HF_TRANSFER=1
+    HF_HUB_ENABLE_HF_TRANSFER=1 \
+    MODEL_BLOB_URI="" \
+    MODEL_CACHE_DIR=/tmp/ffsft-model \
+    MODEL_FETCH_WORKERS=16
+
+# AAD-only blob access for the fetch stage. These two packages are the whole
+# reason this image is not just the upstream vLLM image plus a shell script:
+# tenant policy forbids account keys, so the container authenticates to
+# storage as itself. See docker/fetch_model.py for why registration is closed.
+RUN python3 -m pip install --no-cache-dir "azure-identity>=1.19" "azure-storage-blob>=12.24"
 
 COPY docker/serve_entrypoint.sh /usr/local/bin/serve_entrypoint.sh
-RUN chmod +x /usr/local/bin/serve_entrypoint.sh
+COPY docker/fetch_model.py /usr/local/bin/fetch_model.py
+RUN chmod +x /usr/local/bin/serve_entrypoint.sh /usr/local/bin/fetch_model.py
 
 EXPOSE 8000
 

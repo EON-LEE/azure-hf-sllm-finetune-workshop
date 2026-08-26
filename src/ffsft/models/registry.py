@@ -75,6 +75,23 @@ class ModelRegistry:
                 f"unknown model key '{key}'. Available: {', '.join(sorted(self._specs))}"
             ) from None
 
+    def by_hf_id(self, hf_id: str) -> ModelSpec | None:
+        """Spec whose `hf_id` matches `hf_id`, or None if the registry has none.
+
+        Deploying with `--hf-model` names a Hub repo, not a registry key, so the
+        serving flags this registry *measured* for that exact checkpoint --
+        `mamba_cache_mode`, `reasoning_parser` -- were silently dropped for the
+        one model they were measured on. Returns None rather than raising:
+        pointing the server at an arbitrary Hub id is a legitimate deployment.
+        """
+        if not hf_id:
+            return None
+        wanted = hf_id.strip().lower()
+        for spec in self._specs.values():
+            if spec.hf_id and spec.hf_id.strip().lower() == wanted:
+                return spec
+        return None
+
     def filter(
         self,
         *,

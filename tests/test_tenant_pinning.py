@@ -99,53 +99,107 @@ class FakeCredential:
         self.kwargs = kwargs
 
 
-def test_credential_passes_the_tenant_when_one_is_known(monkeypatch):
-    import ffsft.azure_ml as mod
-
-    monkeypatch.setattr(mod, "_credential_class", lambda: FakeCredential)
-    target = AzureTarget("sub", "rg", "ws", tenant_id=TENANT)
-
-    assert build_credential(target).kwargs["tenant_id"] == TENANT
+class FakeChained:
+    def __init__(self, *credentials):
+        self.credentials = credentials
 
 
-def test_credential_omits_the_tenant_when_none_is_known(monkeypatch):
-    """`tenant_id=None` is not the same as not passing it.
+@pytest.fixture
+def fake_identity(monkeypatch):
+    """Replace all three credential classes at once.
 
-    DefaultAzureCredential inspects which keyword arguments were supplied, so
-    handing it an explicit None is a different request from staying quiet.
+    Returns the module so a test can assert on what was constructed without any
+    of it touching Entra.
     """
     import ffsft.azure_ml as mod
 
     monkeypatch.setattr(mod, "_credential_class", lambda: FakeCredential)
-    target = AzureTarget("sub", "rg", "ws")
+    monkeypatch.setattr(mod, "_cli_credential_class", lambda: FakeCredential)
+    monkeypatch.setattr(mod, "_chained_credential_class", lambda: FakeChained)
+    return mod
 
-    assert "tenant_id" not in build_credential(target).kwargs
 
+def test_default_credential_never_receives_a_tenant_id(fake_identity):
+    """The discovery that shaped this function.
 
-def test_credential_allows_the_cli_to_authenticate_for_other_tenants(monkeypatch):
-    """Pinning must not lock out the CLI credential that does the real work.
+    `DefaultAzureCredential(tenant_id=...)` is not merely ineffective, it raises:
 
-    `DefaultAzureCredential` refuses to use a cached CLI login for a tenant
-    other than its default unless additionally allowed, which would turn this
-    fix into a different failure with the same symptom.
+        TypeError: 'tenant_id' is not supported in DefaultAzureCredential.
+
+    It only accepts per-credential variants (`shared_cache_tenant_id` and
+    friends), none of which reach `AzureCliCredential` -- which is precisely the
+    credential doing the work on a developer workstation. So the tenant has to
+    be pinned on the CLI credential directly.
     """
-    import ffsft.azure_ml as mod
+    chained = fake_identity.build_credential(AzureTarget("sub", "rg", "ws", tenant_id=TENANT))
 
-    monkeypatch.setattr(mod, "_credential_class", lambda: FakeCredential)
-    target = AzureTarget("sub", "rg", "ws", tenant_id=TENANT)
+    default = chained.credentials[-1]
+    assert "tenant_id" not in default.kwargs
 
-    assert build_credential(target).kwargs["additionally_allowed_tenants"] == ["*"]
+
+def test_credential_pins_the_tenant_on_the_cli_credential(fake_identity):
+    chained = fake_identity.build_credential(AzureTarget("sub", "rg", "ws", tenant_id=TENANT))
+
+    assert chained.credentials[0].kwargs["tenant_id"] == TENANT
+
+
+def test_the_pinned_cli_credential_is_tried_first(fake_identity):
+    """Order is the whole mechanism.
+
+    Behind the CLI credential, `DefaultAzureCredential` would once again resolve
+    the tenant from ambient state -- the exact behaviour being corrected.
+    """
+    chained = fake_identity.build_credential(AzureTarget("sub", "rg", "ws", tenant_id=TENANT))
+
+    assert len(chained.credentials) == 2
+    assert chained.credentials[0].kwargs.get("tenant_id") == TENANT
+
+
+def test_the_default_credential_remains_as_a_fallback(fake_identity):
+    """Pinning must not break authentication where there is no Azure CLI.
+
+    The same code runs on a compute node, where the CLI does not exist and a
+    managed identity does. Dropping `DefaultAzureCredential` to pin a tenant
+    would fix the workstation by breaking the cluster.
+    """
+    chained = fake_identity.build_credential(AzureTarget("sub", "rg", "ws", tenant_id=TENANT))
+
+    assert isinstance(chained.credentials[-1], FakeCredential)
+
+
+def test_credential_allows_the_cli_to_authenticate_for_other_tenants(fake_identity):
+    """Pinning must not lock out the cached login that does the real work.
+
+    `AzureCliCredential` declines to serve a tenant other than the CLI's active
+    one unless additionally allowed -- which would turn this fix into a
+    different failure wearing the same symptom.
+    """
+    chained = fake_identity.build_credential(AzureTarget("sub", "rg", "ws", tenant_id=TENANT))
+
+    assert chained.credentials[0].kwargs["additionally_allowed_tenants"] == ["*"]
+
+
+def test_no_chain_is_built_when_no_tenant_is_known(fake_identity):
+    """Unpinned callers keep exactly the behaviour they had.
+
+    A plain `DefaultAzureCredential`, no chain, no extra failure modes -- the
+    ambiguity being solved here does not exist on a single-directory machine.
+    """
+    credential = fake_identity.build_credential(AzureTarget("sub", "rg", "ws"))
+
+    assert isinstance(credential, FakeCredential)
+    assert credential.kwargs == {}
 
 
 @pytest.mark.parametrize("tenant", [None, TENANT])
-def test_get_ml_client_builds_its_client_from_the_same_credential(monkeypatch, tenant):
+def test_get_ml_client_builds_its_client_from_the_same_credential(
+    fake_identity, monkeypatch, tenant
+):
     """One credential path, so a fix here reaches every caller.
 
     `get_ml_client` used to construct `DefaultAzureCredential()` inline, which
     is why pinning the tenant anywhere else would have had no effect on it.
     """
-    import ffsft.azure_ml as mod
-
     seen = {}
 
     class FakeMLClient:
@@ -153,13 +207,23 @@ def test_get_ml_client_builds_its_client_from_the_same_credential(monkeypatch, t
             seen["credential"] = credential
             seen["subscription_id"] = subscription_id
 
-    monkeypatch.setattr(mod, "_credential_class", lambda: FakeCredential)
-    monkeypatch.setattr(mod, "_ml_client_class", lambda: FakeMLClient)
+    monkeypatch.setattr(fake_identity, "_ml_client_class", lambda: FakeMLClient)
 
-    target = AzureTarget("sub", "rg", "ws", tenant_id=tenant)
-    mod.get_ml_client(target)
+    fake_identity.get_ml_client(AzureTarget("sub", "rg", "ws", tenant_id=tenant))
 
-    assert isinstance(seen["credential"], FakeCredential)
     assert seen["subscription_id"] == "sub"
-    expected = {"tenant_id": tenant} if tenant else {}
-    assert seen["credential"].kwargs.get("tenant_id") == expected.get("tenant_id")
+    if tenant:
+        assert seen["credential"].credentials[0].kwargs["tenant_id"] == tenant
+    else:
+        assert isinstance(seen["credential"], FakeCredential)
+        assert seen["credential"].kwargs == {}
+
+
+def test_build_credential_is_exported_for_direct_use():
+    """Scripts that build their own ARM calls need the same credential.
+
+    Several live checks in this project talk to ARM directly rather than through
+    `MLClient`; if they construct their own credential they reintroduce the bug.
+    """
+    assert callable(build_credential)
+

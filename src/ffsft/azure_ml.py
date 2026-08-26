@@ -10,6 +10,7 @@ cluster matches whatever model is selected rather than being hardcoded.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,8 @@ if TYPE_CHECKING:  # keep azure-ai-ml an optional import
     from azure.ai.ml import MLClient
 
 from .models import ModelSpec, TuningMethod
+
+log = logging.getLogger("ffsft.azure_ml")
 
 #: Every GPU SKU Azure ML offers, as reported by
 #: `Microsoft.MachineLearningServices/locations/koreacentral/vmSizes`
@@ -226,6 +229,18 @@ def _credential_class():
     return DefaultAzureCredential
 
 
+def _cli_credential_class():
+    from azure.identity import AzureCliCredential
+
+    return AzureCliCredential
+
+
+def _chained_credential_class():
+    from azure.identity import ChainedTokenCredential
+
+    return ChainedTokenCredential
+
+
 def _ml_client_class():
     from azure.ai.ml import MLClient
 
@@ -235,27 +250,53 @@ def _ml_client_class():
 def build_credential(target: AzureTarget):
     """The one credential every caller in this package uses.
 
-    When `target.tenant_id` is set the directory is stated rather than inferred.
-    Inferring it means taking whatever the Azure CLI currently has selected,
-    which on a multi-directory workstation can change between two calls in the
-    same session and produces:
+    With no `target.tenant_id` this is exactly `DefaultAzureCredential()` and
+    nothing changes: a workstation signed in to a single directory has no
+    ambiguity to resolve.
+
+    With a tenant, the directory is stated rather than inferred. Inferring it
+    means taking whatever the Azure CLI currently has selected, which on a
+    multi-directory workstation can move between two calls in the same session:
 
         (InvalidAuthenticationTokenTenant) The access token is from the wrong
-        issuer '...' It must match one of the tenants '...'
+        issuer '...'. It must match one of the tenants '...'
 
-    `additionally_allowed_tenants=["*"]` goes with it. Without it the credential
-    declines to reuse a cached CLI login for any tenant but its own default, so
-    pinning alone would swap one authentication failure for another.
+    The tenant is pinned on `AzureCliCredential`, not on `DefaultAzureCredential`,
+    because the latter rejects the argument outright --
+    `TypeError: 'tenant_id' is not supported in DefaultAzureCredential.` It
+    accepts only per-credential variants (`shared_cache_tenant_id` and friends),
+    none of which reach the CLI credential that actually serves the token here.
 
-    When no tenant is known the argument is omitted entirely -- an explicit
-    `None` is a different request from silence, and the CLI's own default is the
-    right answer for a workstation with nothing to disambiguate.
+    `additionally_allowed_tenants=["*"]` accompanies it, because the CLI
+    credential otherwise declines any tenant but the CLI's active one -- which
+    would replace the original failure with an identical-looking one.
+
+    What pinning the tenant does NOT do is decide *which user* asks for the
+    token. That comes from the CLI's active account, which lives in one global
+    file (`$AZURE_CONFIG_DIR/azureProfile.json`, default `~/.azure`) that any
+    `az` call on the machine may rewrite. On a workstation signed in to two
+    directories, an identity from the wrong one requesting a token for the right
+    tenant fails with `AADSTS90072` -- an error that names a tenant, and so reads
+    as a tenant problem even when the tenant is already pinned. `az account set`
+    does not hold, because it is a write to shared state and the next writer
+    wins. Point `AZURE_CONFIG_DIR` at a private copy, or supply a service
+    principal so the CLI is out of the path entirely. See VERIFIED §39.
+
+    `DefaultAzureCredential` stays behind it in the chain so the same code still
+    authenticates where there is no Azure CLI. On a compute node the CLI
+    credential fails immediately and the managed identity answers instead;
+    dropping it would fix the workstation by breaking the cluster.
     """
-    kwargs: dict[str, object] = {}
-    if target.tenant_id:
-        kwargs["tenant_id"] = target.tenant_id
-        kwargs["additionally_allowed_tenants"] = ["*"]
-    return _credential_class()(**kwargs)
+    if not target.tenant_id:
+        return _credential_class()()
+
+    return _chained_credential_class()(
+        _cli_credential_class()(
+            tenant_id=target.tenant_id,
+            additionally_allowed_tenants=["*"],
+        ),
+        _credential_class()(),
+    )
 
 
 def get_ml_client(target: AzureTarget) -> MLClient:
@@ -292,8 +333,69 @@ def ensure_workspace(target: AzureTarget) -> str:
     return client.workspaces.begin_create(ws).result().id
 
 
+def grant_compute_data_roles(target: AzureTarget, compute_name: str) -> None:
+    """Give the cluster's identity the data-plane roles its jobs need.
+
+    `ensure_compute` used to *document* these two grants in a comment and make
+    neither. That comment was read and still not acted on: a cluster created by
+    hand on 2026-08-26 was given the storage role and not the registry one, and
+    the first job died in 75 seconds with
+
+        Failed to pull Docker image `acrffsftkc.azurecr.io/ffsft-train:12`
+        ... status_code: 401, "authentication required"
+
+    The lesson is not "remember the second grant". It is that **a new cluster
+    gets a new identity and inherits nothing**, so the grants have to be made by
+    whatever creates it, not by whoever remembers. Run on every call, not only on
+    creation: `ensure_role` is a no-op when the role is already held, and that
+    makes this repair a hand-made cluster too.
+
+    Never raises. A missing grant should stop a job with a clear message, but an
+    unreadable role assignment must not stop a cluster from existing.
+    """
+    from .deploy.identity import compute_role_grants, ensure_role
+    from .train.aml_job import TRAIN_IMAGE
+
+    client = get_ml_client(target)
+    try:
+        principal = getattr(
+            getattr(client.compute.get(compute_name), "identity", None),
+            "principal_id",
+            None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not read the identity of %s: %s", compute_name, exc)
+        return
+    if not principal:
+        log.warning("%s has no managed identity; skipping role grants", compute_name)
+        return
+
+    try:
+        storage_id = getattr(client.workspaces.get(target.workspace_name), "storage_account", None)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not read the workspace storage account: %s", exc)
+        storage_id = None
+
+    from .deploy.identity import acr_id_for_image
+
+    acr_id = acr_id_for_image(TRAIN_IMAGE, target.subscription_id, target.resource_group)
+
+    for scope, role in compute_role_grants(storage_id=storage_id, acr_id=acr_id or None):
+        result = ensure_role(scope, principal, role)
+        if result.granted:
+            log.info("granted %s to %s on %s", role, compute_name, scope.rsplit("/", 1)[-1])
+        elif result.error:
+            log.warning(
+                "could not grant %s to %s automatically (%s).\nRun this yourself:\n%s",
+                role, compute_name, result.error, result.manual_fix,
+            )
+
+
 def ensure_compute(target: AzureTarget) -> str:
-    """Create the GPU cluster if missing, scaled to zero when idle."""
+    """Create the GPU cluster if missing, scaled to zero when idle.
+
+    Also grants the identity its data-plane roles -- see `grant_compute_data_roles`.
+    """
     from azure.ai.ml.entities import AmlCompute, IdentityConfiguration
     from azure.core.exceptions import ResourceNotFoundError
 
@@ -301,13 +403,16 @@ def ensure_compute(target: AzureTarget) -> str:
     try:
         existing = client.compute.get(target.compute_name)
         if existing.identity is not None:
+            grant_compute_data_roles(target, existing.name)
             return existing.name
         # A cluster created without an identity is not a cosmetic gap: jobs fail
         # at start with "Identity of the specified managed compute is not found"
         # as soon as the workspace storage disallows shared keys, because the node
         # then has no way to authenticate to the datastore. Repair it in place.
         existing.identity = IdentityConfiguration(type="system_assigned")
-        return client.compute.begin_create_or_update(existing).result().name
+        repaired = client.compute.begin_create_or_update(existing).result().name
+        grant_compute_data_roles(target, repaired)
+        return repaired
     except ResourceNotFoundError:
         pass
 
@@ -326,4 +431,6 @@ def ensure_compute(target: AzureTarget) -> str:
         # (Storage Blob Data Contributor, and AcrPull for a custom image).
         identity=IdentityConfiguration(type="system_assigned"),
     )
-    return client.compute.begin_create_or_update(cluster).result().name
+    created = client.compute.begin_create_or_update(cluster).result().name
+    grant_compute_data_roles(target, created)
+    return created

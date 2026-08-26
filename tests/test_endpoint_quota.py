@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 
 from ffsft.deploy.spec import (
-    ONLINE_ENDPOINT_CORE_MULTIPLIER,
+    ONLINE_ENDPOINT_UPGRADE_RESERVATION,
     Engine,
     ServingSpec,
     Surface,
@@ -60,11 +60,33 @@ class TestRequiredDedicatedCores:
         # Azure asked for 72 when the SKU was 36 cores.
         assert required_dedicated_cores("Standard_NV36ads_A10_v5") == 72
 
-    def test_multiplier_is_two(self):
-        assert ONLINE_ENDPOINT_CORE_MULTIPLIER == 2
+    def test_reservation_factor_is_twenty_percent(self):
+        assert ONLINE_ENDPOINT_UPGRADE_RESERVATION == 1.2
 
-    def test_scales_with_instance_count(self):
-        assert required_dedicated_cores("Standard_NV18ads_A10_v5", instances=2) == 72
+    def test_reservation_rounds_up_per_deployment_not_per_instance(self):
+        # ceil(1.2 * 2) == 3 instances' worth, not 4. The flat x2 model agreed
+        # with every observation at one instance and over-charged by a whole
+        # instance from two upwards.
+        assert required_dedicated_cores("Standard_NV18ads_A10_v5", instances=2) == 54
+
+    def test_matches_the_worked_example_in_the_quota_doc(self):
+        # "if you request 10 instances of a [4-core VM] in a deployment, you
+        # should have a quota for 48 cores (12 instances * 4 cores)".
+        assert required_dedicated_cores("Standard_NC4as_T4_v3", instances=10) == 48
+
+    def test_a100_family_skips_the_reservation_entirely(self):
+        # "Skip 20% Reservation: Yes" in the supported-SKU list. Charging this
+        # family double asks for 48 cores where Azure asks for 24 -- the
+        # difference between fitting a 48-core grant twice and not at all.
+        assert required_dedicated_cores("Standard_NC24ads_A100_v4") == 24
+
+    def test_h100_family_skips_the_reservation_entirely(self):
+        assert required_dedicated_cores("Standard_NC40ads_H100_v5") == 40
+
+    def test_a10_family_still_pays_the_reservation(self):
+        # The exemption is per-family. A10 is not on the exempt list, which is
+        # why 36 granted cores could not host a 36-core SKU.
+        assert required_dedicated_cores("Standard_NV6ads_A10_v5") == 12
 
     def test_smaller_sku_needs_proportionally_less(self):
         assert required_dedicated_cores("Standard_NV18ads_A10_v5") == 36
@@ -107,7 +129,7 @@ class TestBlockedReason:
         assert "low_priority" in reason or "batch" in reason
 
     def test_instances_are_accounted_for(self):
-        # Two 36-core instances need 144 cores, not 72.
+        # Two 36-core instances need ceil(1.2 * 2) = 3 instances' worth: 108.
         reason = online_spec().blocked_reason(72, instances=2)
         assert reason is not None
-        assert "144" in reason
+        assert "108" in reason

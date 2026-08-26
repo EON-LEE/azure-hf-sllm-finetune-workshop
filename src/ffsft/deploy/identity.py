@@ -56,6 +56,10 @@ ACR_PULL = "AcrPull"
 #: Reader is enough for serving; the endpoint never writes artifacts.
 STORAGE_READ = "Storage Blob Data Reader"
 
+#: Writing them. A *training* cluster needs this and Reader is not enough: it
+#: uploads logs, artifacts and the output mount. See `ensure_compute`.
+STORAGE_WRITE = "Storage Blob Data Contributor"
+
 
 @dataclass
 class IdentityGrants:
@@ -229,21 +233,56 @@ def read_identity_grants(
         return None
 
 
-def acr_id_for_image(image: str, subscription_id: str, resource_group: str) -> str:
-    """Best-effort ARM id for the registry an image lives in.
+def acr_id_for_image(
+    image: str, subscription_id: str, resource_group: str, *, credential=None
+) -> str:
+    """ARM id for the registry an image lives in, or "" if it is not an ACR.
 
-    Only handles `<name>.azurecr.io/...` in the same resource group, which is
-    what this repo builds. Anything else returns "" and the check quietly
-    declines to run rather than checking the wrong registry.
+    The registry is looked up by name across the subscription rather than
+    assumed to sit in `resource_group`. Assuming cost a deployment: a
+    polandcentral endpoint was pointed at `acrffsftkc`, which lives in
+    `rg-ffsft-kc`, and the constructed id named `rg-ffsft-plc` instead. ARM
+    answered 404, `ensure_acr_pull` reported "could not read role assignments"
+    and granted nothing -- reproducing, in a new region, the exact
+    no-AcrPull/no-logs failure this module was written for.
+
+    `resource_group` stays the fallback for when the lookup cannot run (no
+    azure libraries, no credential, a read the caller is not entitled to), so
+    behaviour is unchanged in the same-resource-group case this repo builds.
     """
     host = str(image).split("/", 1)[0]
     if not host.endswith(".azurecr.io"):
         return ""
     registry = host.split(".", 1)[0]
-    return (
+    assumed = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.ContainerRegistry/registries/{registry}"
     )
+
+    try:
+        import requests
+        from azure.identity import DefaultAzureCredential
+
+        cred = credential or DefaultAzureCredential()
+        token = cred.get_token("https://management.azure.com/.default").token
+        resp = requests.get(
+            f"https://management.azure.com/subscriptions/{subscription_id}"
+            f"/providers/Microsoft.ContainerRegistry/registries"
+            f"?api-version=2023-01-01-preview",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        for item in resp.json().get("value") or []:
+            if str(item.get("name", "")).lower() == registry.lower() and item.get("id"):
+                return str(item["id"])
+    except Exception as exc:  # noqa: BLE001 - a failed lookup must not block deploy
+        log.debug(
+            "could not resolve ACR %s by name, assuming %s: %s",
+            registry, resource_group, exc,
+        )
+
+    return assumed
 
 
 #: ARM GUID for AcrPull, needed to *create* an assignment (the read path maps
@@ -252,6 +291,20 @@ ACR_PULL_ROLE_GUID = "7f951dda-4ed3-4680-a7ca-43fe172d538d"
 
 #: Roles that already imply pull rights, so re-granting would be noise.
 _PULL_EQUIVALENT = {ACR_PULL, "Owner", "Contributor"}
+
+#: Same idea per grantable role. Note what is *absent* from the storage entry:
+#: `Contributor` implies AcrPull but grants no blob **data-plane** access at
+#: all. It lets you read the account keys, which is exactly the door
+#: `allowSharedKeyAccess=false` closes -- so on a hardened account a Contributor
+#: is not a substitute for the data role, and treating it as one would make this
+#: check pass on the configuration it exists to catch.
+_EQUIVALENT = {
+    ACR_PULL: _PULL_EQUIVALENT,
+    STORAGE_WRITE: {STORAGE_WRITE, "Storage Blob Data Owner", "Owner"},
+}
+
+#: Name -> GUID, for the write path. `_ROLE_NAMES` is the read direction.
+_ROLE_GUIDS = {name: guid for guid, name in _ROLE_NAMES.items()}
 
 
 @dataclass
@@ -300,11 +353,17 @@ class ArmRoleAuth:
         import requests
 
         subscription = scope.split("/")[2]
+        # This used to ignore `role` and always write the AcrPull GUID. A caller
+        # asking for a storage role would have been handed a registry role and
+        # told it succeeded.
+        guid = _ROLE_GUIDS.get(role)
+        if guid is None:
+            raise ValueError(f"no role definition GUID known for {role!r}")
         body = {
             "properties": {
                 "roleDefinitionId": (
                     f"/subscriptions/{subscription}/providers"
-                    f"/Microsoft.Authorization/roleDefinitions/{ACR_PULL_ROLE_GUID}"
+                    f"/Microsoft.Authorization/roleDefinitions/{guid}"
                 ),
                 "principalId": principal_id,
                 # Required for a freshly created managed identity: without it ARM
@@ -325,18 +384,18 @@ class ArmRoleAuth:
             raise PermissionError(f"HTTP {resp.status_code}: {resp.text[:300]}")
 
 
-def _manual_fix(scope: str, principal_id: str) -> str:
+def _manual_fix(scope: str, principal_id: str, role: str = ACR_PULL) -> str:
     return (
         "  az role assignment create \\\n"
         f"    --assignee-object-id {principal_id} \\\n"
         "    --assignee-principal-type ServicePrincipal \\\n"
-        f'    --role "{ACR_PULL}" \\\n'
+        f'    --role "{role}" \\\n'
         f"    --scope {scope}"
     )
 
 
-def ensure_acr_pull(scope, principal_id, *, auth=None) -> GrantResult:
-    """Give the endpoint identity pull rights on the registry, if it lacks them.
+def ensure_role(scope, principal_id, role, *, auth=None) -> GrantResult:
+    """Give `principal_id` `role` on `scope`, if it does not already have it.
 
     Written after the preflight in this module failed to prevent the very
     failure it documents. Detecting a missing grant and then asking a human to
@@ -348,7 +407,7 @@ def ensure_acr_pull(scope, principal_id, *, auth=None) -> GrantResult:
     is the exact command to hand to somebody who does have it.
     """
     if not scope or not principal_id:
-        return GrantResult(error="no registry scope or no endpoint identity")
+        return GrantResult(error="no scope or no principal to grant to")
 
     auth = auth or ArmRoleAuth()
     try:
@@ -356,18 +415,48 @@ def ensure_acr_pull(scope, principal_id, *, auth=None) -> GrantResult:
     except Exception as exc:  # noqa: BLE001 - a failed read must not stop a deploy
         return GrantResult(
             error=f"could not read role assignments: {exc}",
-            manual_fix=_manual_fix(scope, principal_id),
+            manual_fix=_manual_fix(scope, principal_id, role),
         )
 
-    if any(r in _PULL_EQUIVALENT for r in existing):
+    if any(r in _EQUIVALENT.get(role, {role}) for r in existing):
         return GrantResult(already_had=True)
 
     try:
-        auth.create_role(scope, principal_id, ACR_PULL)
+        auth.create_role(scope, principal_id, role)
     except Exception as exc:  # noqa: BLE001 - report, do not crash the deploy
         return GrantResult(
-            error=str(exc), manual_fix=_manual_fix(scope, principal_id)
+            error=str(exc), manual_fix=_manual_fix(scope, principal_id, role)
         )
 
-    log.info("granted %s to %s on %s", ACR_PULL, principal_id, scope.rsplit("/", 1)[-1])
+    log.info("granted %s to %s on %s", role, principal_id, scope.rsplit("/", 1)[-1])
     return GrantResult(granted=True)
+
+
+def ensure_acr_pull(scope, principal_id, *, auth=None) -> GrantResult:
+    """`ensure_role` fixed to the registry role. Kept because it names the case."""
+    return ensure_role(scope, principal_id, ACR_PULL, auth=auth)
+
+
+def compute_role_grants(*, storage_id: str | None, acr_id: str | None) -> list[tuple[str, str]]:
+    """The `(scope, role)` pairs an AmlCompute identity needs in this layout.
+
+    Pure, so the decision can be tested without ARM. Two entries, and both were
+    learned the same way -- by a job dying because one was missing:
+
+    * storage: the node uploads logs, artifacts and the output mount. It needs
+      the **write** role. `STORAGE_READ` is what a serving endpoint needs and it
+      is not enough here; a cluster with only Reader finishes with `artifacts: 0`.
+    * registry: the training image lives in a registry this workspace is not
+      linked to, so nothing wires up AcrPull on its own.
+
+    A scope that could not be resolved is dropped rather than guessed. A wrong
+    scope does not fail loudly -- ARM answers 404, the grant is reported as "could
+    not read role assignments", and the caller is told about a permissions problem
+    that does not exist.
+    """
+    grants = []
+    if storage_id:
+        grants.append((storage_id, STORAGE_WRITE))
+    if acr_id:
+        grants.append((acr_id, ACR_PULL))
+    return grants

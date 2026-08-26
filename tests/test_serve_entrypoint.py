@@ -53,6 +53,9 @@ IMAGE_DEFAULTS = {
     "LORA_MODULES": "",
     "MAX_LORA_RANK": "16",
     "EXTRA_ARGS": "",
+    "MODEL_BLOB_URI": "",
+    "MODEL_CACHE_DIR": "/tmp/ffsft-model",
+    "MODEL_FETCH_WORKERS": "16",
 }
 
 pytestmark = pytest.mark.skipif(
@@ -185,3 +188,84 @@ def test_the_probe_port_matches_what_the_deployment_declares(tmp_path):
     result = run_entrypoint(tmp_path, MODEL_PATH="Qwen/Qwen3-0.6B")
     argv = argv_of(result)
     assert argv[argv.index("--port") + 1] == "8000"
+
+
+# --- the blob fetch stage --------------------------------------------------
+#
+# Model assets cannot be registered on this tenant (management-group policy
+# `MCAPSGovDeployPolicies` disables shared-key auth, and Azure ML's Model
+# Registry enumerates blobs with an account key), so a fine-tuned deployment
+# fetches its own weights with the endpoint's managed identity. These tests pin
+# the two things that matter about that stage: it must not run when it was not
+# asked for, and when it fails the container must die rather than quietly serve
+# the base model.
+
+
+def _fake_python3(tmp_path: Path, exit_code: int) -> Path:
+    """A `python3` earlier in PATH than the real one.
+
+    Stubbing the interpreter rather than parameterising the script's path keeps
+    the real `python3 /usr/local/bin/fetch_model.py` line under test -- a test
+    that edits the command it is checking proves nothing about the image.
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    shim = bindir / "python3"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "[fetch] stub invoked: $*"\nexit {exit_code}\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    return bindir
+
+
+def test_no_blob_uri_means_the_fetch_stage_never_runs(tmp_path):
+    """The default deployment style must be untouched by the new branch."""
+    bindir = _fake_python3(tmp_path, exit_code=1)  # would fail loudly if called
+    result = run_entrypoint(
+        tmp_path,
+        MODEL_PATH="Qwen/Qwen3-0.6B",
+        PATH=f"{bindir}:/usr/bin:/bin",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "stub invoked" not in result.stdout
+    assert argv_of(result)[argv_of(result).index("--model") + 1] == "Qwen/Qwen3-0.6B"
+
+
+def test_a_successful_fetch_serves_the_downloaded_directory(tmp_path):
+    cache = tmp_path / "dl"
+    cache.mkdir()
+    (cache / "config.json").write_text("{}", encoding="utf-8")
+    bindir = _fake_python3(tmp_path, exit_code=0)
+    result = run_entrypoint(
+        tmp_path,
+        MODEL_PATH="Qwen/Qwen3.8-27B",
+        MODEL_BLOB_URI="https://acct.blob.core.windows.net/c/azureml/run/merged/",
+        MODEL_CACHE_DIR=str(cache),
+        PATH=f"{bindir}:/usr/bin:/bin",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "stub invoked" in result.stdout
+    # The downloaded directory wins over the Hub id that MODEL_PATH still holds.
+    assert str(cache) in argv_of(result)
+
+
+def test_a_failed_fetch_kills_the_container(tmp_path):
+    """The regression this guard exists for: no silent fallback to the base model.
+
+    Without it, a failed download would fall through to `resolve_model`, which
+    would find no local checkpoint and hand vLLM the bare repo id -- an endpoint
+    that passes every health probe and every load test while serving weights
+    that were never fine-tuned.
+    """
+    bindir = _fake_python3(tmp_path, exit_code=1)
+    result = run_entrypoint(
+        tmp_path,
+        MODEL_PATH="Qwen/Qwen3.8-27B",
+        MODEL_BLOB_URI="https://acct.blob.core.windows.net/c/azureml/run/merged/",
+        MODEL_CACHE_DIR=str(tmp_path / "never"),
+        PATH=f"{bindir}:/usr/bin:/bin",
+    )
+    assert result.returncode != 0, "a failed fetch must not reach vLLM"
+    assert "ARGV:" not in result.stdout

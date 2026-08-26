@@ -46,6 +46,28 @@ resolve_model() {
     echo "${MODEL_PATH}"
 }
 
+# Fetch stage: pull the checkpoint out of blob storage with the deployment's own
+# managed identity, before anything tries to resolve a path.
+#
+# This runs at top level and NOT inside `resolve_model` for two separate
+# reasons, either of which alone would be enough:
+#
+#   1. `resolve_model` is called from a command substitution, and that is one of
+#      the contexts where bash stops honouring `set -e`. A failed download there
+#      would be ignored and the script would fall through to the Hugging Face
+#      branch -- serving the untuned base model from a deployment that believes
+#      it is serving the fine-tune.
+#   2. The fetcher writes progress to stdout. Inside `$(...)` that output would
+#      be captured and become part of the model path.
+#
+# Here, a non-zero exit from the fetcher kills the container under `set -e`,
+# which is the intended behaviour: no weights, no server.
+if [[ -n "${MODEL_BLOB_URI}" ]]; then
+    echo "[serve] fetching model from blob: ${MODEL_BLOB_URI}"
+    python3 /usr/local/bin/fetch_model.py
+    MODEL_PATH="${MODEL_CACHE_DIR}"
+fi
+
 MODEL="$(resolve_model)"
 echo "[serve] model      : ${MODEL}"
 echo "[serve] served as  : ${SERVED_MODEL_NAME}"
@@ -74,8 +96,23 @@ if [[ -n "${MAMBA_CACHE_MODE}" ]]; then
     ARGS+=(--mamba-cache-mode "${MAMBA_CACHE_MODE}")
 fi
 
+# Asked of the artifact, not of the registry. `configs/models.yaml` marks
+# qwen3.8-27b `multimodal: true`, which is true of the base model on the Hub and
+# false of what actually gets served: `AutoModelForCausalLM` resolves the
+# multimodal checkpoint to its text-only class, so the merge writes
+# `Qwen3_5ForCausalLM` / `qwen3_5_text` with no vision_config at all (§36.2).
+# Passing --language-model-only then makes vLLM look for the `language_model`
+# submodule of a wrapper that is not there, and it dies in load_weights:
+#   ValueError: There is no module or parameter named 'language_model' in
+#   Qwen3_5Model
+# -- job purple_wolf_g3hhc4q5qj, verbatim. The registry describes the base; only
+# the checkpoint knows what the checkpoint is.
 if [[ "${LANGUAGE_MODEL_ONLY}" == "1" ]]; then
-    ARGS+=(--language-model-only)
+    if [[ -f "${MODEL}/config.json" ]] && ! grep -q '"vision_config"' "${MODEL}/config.json"; then
+        echo "[serve] language-model-only requested, but ${MODEL} has no vision_config -- dropping the flag"
+    else
+        ARGS+=(--language-model-only)
+    fi
 fi
 
 if [[ -n "${REASONING_PARSER}" ]]; then

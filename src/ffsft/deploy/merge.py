@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import time
+from typing import Any
 
 log = logging.getLogger("ffsft.deploy.merge")
 
@@ -51,6 +52,144 @@ def _read_adapter_targets(adapter_dir: str) -> list[str]:
         cfg = json.load(fh)
     targets = cfg.get("target_modules") or []
     return sorted(targets) if isinstance(targets, list) else [str(targets)]
+
+
+#: What `save_pretrained` writes for a Qwen3.5/3.8 text model, and what vLLM
+#: expects to read. They disagree.
+#:
+#: `AutoModelForCausalLM` resolves the multimodal checkpoint to its text-only
+#: class and drops the vision tower -- the merge really is text-only, 850
+#: tensors with no `visual.*` among them (job silly_ocean_n4k5szy7gj). But the
+#: module tree it saves is still rooted at `model.language_model.`, because that
+#: is where transformers keeps the decoder inside the multimodal wrapper. The
+#: config it writes alongside says `Qwen3_5ForCausalLM` / `qwen3_5_text`, and
+#: vLLM believes it: it builds `Qwen3_5Model` with `layers.*` directly, strips
+#: the leading `model.` off each incoming key, and looks for a `language_model`
+#: submodule that its own tree does not have:
+#:
+#:   ValueError: There is no module or parameter named 'language_model' in
+#:   Qwen3_5Model
+#:
+#: -- jobs purple_wolf_g3hhc4q5qj and brave_bone_2kbcknyrgr, verbatim, five
+#: hours apart, and `nifty_neck_d3b9x8z5x9` a third time *after* this rename was
+#: in place.
+#:
+#: That third failure is why the constant below is not the fix and is not
+#: described as one any more. `from_pretrained` records the checkpoint->runtime
+#: renaming it applied on the way in, and `save_pretrained` plays it back in
+#: reverse on the way out -- `modeling_utils.py:3497`:
+#:
+#:   if save_original_format and not is_offloaded and not _hf_peft_config_loaded:
+#:       state_dict = revert_weight_conversion(model_to_save, state_dict)
+#:
+#: So whatever names the caller hands to `state_dict=` are re-mapped back to the
+#: checkpoint's own convention before a byte is written, and the runtime names
+#: were already `model.layers.*` -- this rename matched nothing and would have
+#: been undone if it had. `save_original_format=False` is the switch that
+#: decides the names on disk; see `merge_adapter`.
+TEXT_PREFIX_FIX = ("model.language_model.", "model.")
+
+#: The substring whose presence in a saved tensor name means vLLM will refuse
+#: the checkpoint -- given a config that declares no vision tower. Checked
+#: against the written files by `assert_servable_names`, because what the caller
+#: asked `save_pretrained` for and what it wrote are not the same fact.
+UNSERVABLE_FRAGMENT = "language_model."
+
+
+def text_only_state_dict(model: Any) -> dict[str, Any]:
+    """`model.state_dict()` with the multimodal wrapper's prefix removed.
+
+    Kept as a belt-and-braces for the case where a model really does expose the
+    wrapper prefix at runtime, and as the place the tensor count gets logged.
+    It is **not** what makes the saved checkpoint servable -- see the note on
+    `TEXT_PREFIX_FIX` and `save_original_format=False` in `merge_adapter`. On
+    Qwen3.8-27B it renames zero of 850 tensors, which is the correct answer and
+    was mistaken for the fix working.
+
+    A no-op for a model that never had the prefix, so it is safe to apply to
+    every architecture rather than special-casing Qwen: `str.startswith` on a
+    key that does not start that way returns the key.
+    """
+    old, new = TEXT_PREFIX_FIX
+    state = model.state_dict()
+    renamed = {
+        (new + key[len(old) :] if key.startswith(old) else key): value
+        for key, value in state.items()
+    }
+    moved = sum(1 for key in state if key.startswith(old))
+    log.info("state dict: %d tensors, %d renamed %s -> %s", len(state), moved, old, new)
+    return renamed
+
+
+def saved_tensor_names(output_dir: str) -> list[str]:
+    """Every tensor name in the checkpoint on disk, without loading it.
+
+    A sharded save writes `model.safetensors.index.json`, whose `weight_map` is
+    already the full list. A single-file save has no index, so the names come
+    out of the safetensors header itself: eight little-endian bytes of length,
+    then that many bytes of JSON. Either way this reads kilobytes -- loading the
+    tensors to ask the same question would read 54 GB.
+    """
+    index = os.path.join(output_dir, "model.safetensors.index.json")
+    if os.path.isfile(index):
+        with open(index, encoding="utf-8") as fh:
+            return sorted(json.load(fh).get("weight_map") or {})
+
+    names: list[str] = []
+    for shard in sorted(f for f in os.listdir(output_dir) if f.endswith(".safetensors")):
+        with open(os.path.join(output_dir, shard), "rb") as fh:
+            header = json.loads(fh.read(int.from_bytes(fh.read(8), "little")))
+        names.extend(key for key in header if key != "__metadata__")
+    return sorted(names)
+
+
+def assert_servable_names(output_dir: str) -> int:
+    """Refuse to publish a checkpoint whose tensor names contradict its config.
+
+    The contradiction this catches is the only one that has ever occurred here,
+    and it has occurred three times: a config that says `Qwen3_5ForCausalLM` /
+    `qwen3_5_text` with no `vision_config`, over tensors still named
+    `model.language_model.*`. vLLM believes the config, builds `Qwen3_5Model`
+    with `layers.*` directly, and dies in `load_weights`.
+
+    Checking here rather than trusting `save_original_format=False` is the point.
+    That argument reaches `save_pretrained` through `**kwargs` on some versions,
+    where an unrecognised name is ignored rather than rejected -- so "I passed
+    the flag" and "the names on disk changed" are two independent facts. The
+    cost of not separating them, measured: `nifty_neck_d3b9x8z5x9` spent 41
+    minutes allocating an A100, pulling a 9 GB image and downloading 54 GB of
+    weights to report the same ValueError as the run before it. This check reads
+    an index file at the end of the merge job and costs milliseconds.
+
+    Mirrors the guard in `docker/serve_entrypoint.sh:88`, which asks the same
+    question of the same `config.json` at the other end of the handoff.
+    """
+    config_path = os.path.join(output_dir, "config.json")
+    multimodal = False
+    if os.path.isfile(config_path):
+        with open(config_path, encoding="utf-8") as fh:
+            multimodal = "vision_config" in json.load(fh)
+
+    names = saved_tensor_names(output_dir)
+    offenders = [name for name in names if UNSERVABLE_FRAGMENT in name]
+
+    if offenders and not multimodal:
+        raise RuntimeError(
+            f"{len(offenders)} of {len(names)} tensors in {output_dir} are named "
+            f"under {UNSERVABLE_FRAGMENT!r} (e.g. {offenders[0]}), but the config "
+            f"written beside them declares no vision_config. vLLM reads the config, "
+            f"builds the text-only module tree and cannot find that submodule -- it "
+            f"fails with \"There is no module or parameter named 'language_model' in "
+            f"Qwen3_5Model\". save_pretrained reverses the renaming from_pretrained "
+            f"applied unless save_original_format=False reaches it; that this check "
+            f"fired means it did not."
+        )
+
+    log.info(
+        "checkpoint names verified: %d tensors, %d under %r, config multimodal=%s",
+        len(names), len(offenders), UNSERVABLE_FRAGMENT, multimodal,
+    )
+    return len(names)
 
 
 def merge_adapter(
@@ -113,7 +252,20 @@ def merge_adapter(
 
     os.makedirs(output_dir, exist_ok=True)
     log.info("saving merged checkpoint to %s", output_dir)
-    model.save_pretrained(output_dir, safe_serialization=True, max_shard_size=max_shard_size)
+    model.save_pretrained(
+        output_dir,
+        safe_serialization=True,
+        max_shard_size=max_shard_size,
+        state_dict=text_only_state_dict(model),
+        # The argument that decides the names on disk. `from_pretrained` records
+        # the checkpoint->runtime renaming it applied, and `save_pretrained`
+        # replays it in reverse unless this is False -- so the multimodal
+        # `model.language_model.*` prefix is written back over a config that
+        # declares no vision tower, and vLLM cannot load the result. Passing a
+        # renamed `state_dict=` does not help: the reversal happens after.
+        save_original_format=False,
+    )
+    assert_servable_names(output_dir)
 
     # The tokenizer must come from the *adapter* dir when training saved one, so
     # any added special tokens survive; fall back to the base otherwise.
@@ -144,6 +296,16 @@ def merge_adapter(
         "merged_size_gb": round(size_gb, 2),
         "wall_seconds": round(time.time() - started, 1),
         "pushed_to": None,
+        # The architecture the merge actually wrote, which is not always the one
+        # the base declared: `AutoModelForCausalLM` resolves a multimodal
+        # checkpoint to its text-only class, so Qwen3.8-27B goes in as
+        # `Qwen3_5ForConditionalGeneration` and comes out as
+        # `Qwen3_5ForCausalLM`. vLLM has to have that name registered or the
+        # server exits at startup, so it is the one field worth checking before
+        # paying for a rollout.
+        "architectures": list(getattr(model.config, "architectures", None) or []),
+        "model_type": str(getattr(model.config, "model_type", "")),
+        "files": len([f for f in os.listdir(output_dir) if f.endswith(".safetensors")]),
     }
 
     if push_to_hub:
@@ -155,6 +317,14 @@ def merge_adapter(
     with open(os.path.join(output_dir, "merge_summary.json"), "w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=2, ensure_ascii=False)
     log.info("summary: %s", json.dumps(summary, ensure_ascii=False))
+    # Both of the above land in blob, which answers AuthorizationFailure to a
+    # client outside the workspace network -- so on this workspace a merge that
+    # succeeded and one that wrote nothing look identical from the submitter's
+    # side. `qlora.py` already learned this; the merge path had not, and
+    # recovering `architectures` from a completed run cost a second job.
+    from ..train.report import publish
+
+    publish(summary, prefix="merge.")
     return summary
 
 

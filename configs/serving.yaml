@@ -48,9 +48,9 @@ patterns:
       attention, so throughput under concurrency is an order of magnitude better
       than a naive HF `generate` loop.
     caveats: >-
-      Needs dedicated GPU quota (LowPriority is rejected) and reserves 2x the
-      instance cores for rolling updates, so NV12 costs 24 of the 36 granted
-      cores. Instances bill 24/7 -- there is no scale-to-zero on managed online
+      Needs dedicated GPU quota (LowPriority is rejected) and reserves 20% more
+      instances than requested -- rounded up to a whole one -- for rolling
+      updates, so a single NV12 costs 24 cores and three cost 48. Instances bill 24/7 -- there is no scale-to-zero on managed online
       endpoints. A granted quota is still not a promise of regional capacity:
       a rollout can sit at percentComplete 0.0 indefinitely when the region has
       none (see docs/VERIFIED.md section 26.8).

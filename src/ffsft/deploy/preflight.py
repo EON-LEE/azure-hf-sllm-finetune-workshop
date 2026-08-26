@@ -46,6 +46,12 @@ class StorageReachability:
     vnet_rules: list[str] = field(default_factory=list)
     private_endpoints: list[str] = field(default_factory=list)
     workspace_isolation_mode: str | None = None
+    #: `properties.allowSharedKeyAccess`. `None` means "not read". `False` is
+    #: the hardened posture and is only a problem next to an `AccountKey`
+    #: datastore -- see `key_auth_refused`.
+    allow_shared_key: bool | None = None
+    #: Datastores whose `credentials.credentialsType` is `AccountKey`.
+    key_based_datastores: list[str] = field(default_factory=list)
 
     @property
     def public_access_off(self) -> bool:
@@ -65,9 +71,19 @@ class StorageReachability:
         mode = (self.workspace_isolation_mode or "").strip().lower()
         return mode in ISOLATED_MODES
 
+    @property
+    def key_auth_refused(self) -> bool:
+        """The account refuses the key its own datastores present.
 
-def storage_blocker(state: StorageReachability) -> str | None:
-    """Return why Azure ML cannot reach workspace storage, or None if it can.
+        Both halves must be *measured*. `allow_shared_key is None` means the
+        property was not read, and an unread property is never a blocker -- the
+        same rule `public_access_off` follows.
+        """
+        return self.allow_shared_key is False and bool(self.key_based_datastores)
+
+
+def _network_blocker(state: StorageReachability) -> str | None:
+    """Return why nothing can reach workspace storage over the network, or None.
 
     Three arrangements work. The account is reachable over the public endpoint;
     or `networkAcls.bypass` includes `AzureServices`, which exempts Azure ML
@@ -146,6 +162,64 @@ def storage_blocker(state: StorageReachability) -> str | None:
     return "\n".join(lines)
 
 
+def _credential_blocker(state: StorageReachability) -> str | None:
+    """Return why the datastore's credential is refused by the account, or None.
+
+    Orthogonal to `_network_blocker`, which is the whole point. A key is refused
+    on the public endpoint and over a private link alike, so none of the three
+    arrangements that satisfy the network check say anything about this one.
+    Measured on `mlw-ffsft-plc` (docs/VERIFIED.md S58): two healthy private
+    endpoints, an isolated workspace, the network check green -- and every write
+    still returned `KeyBasedAuthenticationNotPermitted`.
+    """
+    if not state.key_auth_refused:
+        return None
+    stores = ", ".join(state.key_based_datastores)
+    return "\n".join(
+        [
+            f"workspace storage account '{state.account_name}' refuses the credential "
+            f"its own datastores present:",
+            f"  allowSharedKeyAccess=false, but {stores} authenticate with "
+            f"credentialsType=AccountKey.",
+            "",
+            "Every write fails the same way -- job log upload, artifact upload, output",
+            "mounts, and client-side jobs.download() -- so runs finish with artifacts=0",
+            "and there is nothing to register as a model. A managed online deployment",
+            "stages through the same account and hangs in 'Creating'.",
+            "",
+            "Private endpoints and role assignments do not fix this; the key is refused",
+            "before either is consulted.",
+            "",
+            "Fix: PATCH the WORKSPACE with properties.systemDatastoresAuthMode='identity'.",
+            "That is the real lever -- it rewrites all four system datastores at once, so",
+            "PUTing them one by one just loses to the workspace setting the next time it",
+            "is applied. Use a PREVIEW api-version: the stable one does not return this",
+            "field, so a stable-version GET reads 'None' forever and every check of the",
+            "change looks like it did not take (docs/VERIFIED.md S62.7, S63).",
+            "",
+            "Then grant the workspace MSI, the cluster identity and yourself Storage Blob",
+            "Data Contributor on the account. A cluster created later gets a new identity",
+            "and needs the same grant.",
+            "",
+            "Pass force=True to deploy anyway.",
+        ]
+    )
+
+
+def storage_blocker(state: StorageReachability) -> str | None:
+    """Return why Azure ML cannot use workspace storage, or None if it can.
+
+    Two independent things can break it and they are reported together. Naming
+    only the first sends the caller through a fix-verify-fix round trip for a
+    blocker that was already visible in the same two reads.
+    """
+    network = _network_blocker(state)
+    credential = _credential_blocker(state)
+    if credential and network:
+        return f"{credential}\n\nA second, independent blocker is also present:\n\n{network}"
+    return credential or network
+
+
 def read_storage_reachability(target, *, credential=None) -> StorageReachability | None:
     """Read the live facts for `target`'s workspace, or None if unreadable.
 
@@ -187,6 +261,25 @@ def read_storage_reachability(target, *, credential=None) -> StorageReachability
         sa_props = sa_body.get("properties", {})
         acls = sa_props.get("networkAcls") or {}
 
+        # Read separately and tolerantly: an unreadable datastore list must
+        # degrade to "none are key-based", never to a blocker that is not real.
+        keyed: list[str] = []
+        try:
+            stores = requests.get(
+                f"{base}/datastores?api-version=2024-10-01", headers=headers, timeout=30
+            )
+            stores.raise_for_status()
+            keyed = sorted(
+                d.get("name", "")
+                for d in stores.json().get("value") or []
+                if ((d.get("properties") or {}).get("credentials") or {}).get(
+                    "credentialsType"
+                )
+                == "AccountKey"
+            )
+        except Exception as exc:  # noqa: BLE001 - see above
+            log.debug("preflight could not read datastore credentials: %s", exc)
+
         return StorageReachability(
             account_name=sa_body.get("name", storage_id.rsplit("/", 1)[-1]),
             public_network_access=sa_props.get("publicNetworkAccess"),
@@ -199,6 +292,8 @@ def read_storage_reachability(target, *, credential=None) -> StorageReachability
             workspace_isolation_mode=(ws_props.get("managedNetwork") or {}).get(
                 "isolationMode"
             ),
+            allow_shared_key=sa_props.get("allowSharedKeyAccess"),
+            key_based_datastores=keyed,
         )
     except Exception as exc:  # noqa: BLE001 - a preflight must never be the blocker
         log.debug("preflight could not read storage reachability: %s", exc)
@@ -305,6 +400,62 @@ def sku_advisory(state: SkuAvailability | None) -> str | None:
         f"exactly this restriction. Treat it as one signal if the rollout "
         f"stalls in 'Creating' with no container logs, alongside quota and "
         f"regional capacity."
+    )
+
+
+class RestrictedSkuError(RuntimeError):
+    """A managed online endpoint was asked for a SKU it cannot be given.
+
+    Distinct from the advisory `sku_advisory` returns, and deliberately fatal.
+    See `online_endpoint_blocker`.
+    """
+
+
+def online_endpoint_blocker(state: SkuAvailability | None) -> str | None:
+    """Refuse a managed online deployment the scheduler can never place.
+
+    `sku_advisory` reports the same field without enforcing it, and that is
+    correct where it is used: AmlCompute defaults to LowPriority, Spot allocates
+    from a pool that ignores `NotAvailableForSubscription`, and this
+    subscription fine-tunes a 27B model on an A100 restricted `Location` across
+    the whole region. Enforcing it there would refuse the only GPU configuration
+    that works.
+
+    Managed online endpoints have no such escape hatch. They reject LowPriority
+    outright, so every node they get is on-demand dedicated -- exactly what the
+    restriction describes. The advisory's own caveat ("LowPriority/Spot
+    allocates from a separate pool that ignores it") is therefore true of the
+    training path and false here, and collapsing the two is what made this field
+    look inconclusive when for this one caller it is decisive.
+
+    The cost of not enforcing it, measured: five rollouts, none of which got a
+    node, none of which produced a container log, at 50-113 minutes each. The
+    last two were preceded by this exact advisory being logged and read.
+
+    Returns None when nothing was measured -- "could not look" is never a
+    finding -- or when a zone remains to land in.
+    """
+    if state is None or state.restrictions is None:
+        return None
+    if not state.region_blocked and not (
+        state.zones and state.blocked_zones and not state.usable_zones
+    ):
+        return None
+
+    scope = (
+        f"across the whole of '{state.region}'"
+        if state.region_blocked
+        else f"in every zone of '{state.region}' "
+        f"({', '.join(sorted(state.blocked_zones))})"
+    )
+    return (
+        f"'{state.sku}' is marked NotAvailableForSubscription {scope}, and a "
+        f"managed online endpoint cannot use LowPriority/Spot -- so unlike an "
+        f"AmlCompute cluster it has no pool that ignores this. The rollout "
+        f"would sit in 'Creating' at 0% for roughly two hours, produce no "
+        f"container logs because no container is ever created, and end in "
+        f"InternalServerError. Choose a SKU with an unrestricted zone, or pass "
+        f"force=True to spend the two hours anyway."
     )
 
 

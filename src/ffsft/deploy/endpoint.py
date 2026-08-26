@@ -23,15 +23,21 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import logging
+import math
 import os
 import re
 import time
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from ..train.aml_job import image_tag
 from .registry import get_serving_registry
 from .spec import ServingSpec, Surface
 
 if TYPE_CHECKING:
+    from azure.ai.ml import MLClient
+    from azure.ai.ml.entities import Environment
+
     from ..models.spec import ModelSpec
 
 log = logging.getLogger("ffsft.deploy.endpoint")
@@ -39,10 +45,83 @@ log = logging.getLogger("ffsft.deploy.endpoint")
 #: Image built by docker/Dockerfile.serve. Bump with the tag, like the trainer's.
 #: :3 makes the vLLM launch neutral by default -- architecture flags now come
 #: from the ModelSpec via serving_env() instead of being baked into the image.
-SERVE_IMAGE = "acrffsftkc.azurecr.io/ffsft-serve:3"
+#: :4 adds the guard in `serve_entrypoint.sh:88`: the registry says
+#: qwen3.8-27b is multimodal, which is true of the base on the Hub and false of
+#: the merged checkpoint, so `LANGUAGE_MODEL_ONLY=1` was being passed to a
+#: text-only model and vLLM died in `load_weights` with "There is no module or
+#: parameter named 'language_model' in Qwen3_5Model" (job
+#: purple_wolf_g3hhc4q5qj). The bench path moved to :4 when `ffsft-bench:8` was
+#: built; this constant did not, so a managed deployment of the very model this
+#: project produces would still have hit that error the moment a node was
+#: allocated. See docs/VERIFIED.md 51.5.
+SERVE_IMAGE = "acrffsftkc.azurecr.io/ffsft-serve:5"
+
+SERVE_ENVIRONMENT_NAME = "ffsft-serve"
+
+#: Derived from the tag rather than typed, for the same reason the trainer and
+#: the bench derive theirs. This was the one of the three registrations that
+#: passed no version at all, which is how `ffsft-serve` ended up with versions
+#: 1 and 2 holding images `:2` and `:3` -- a numbering that tells a reader
+#: nothing about which image a version holds.
+SERVE_ENVIRONMENT_VERSION = image_tag(SERVE_IMAGE)
 
 #: Where Azure ML mounts a registered model inside the inference container.
 MODEL_MOUNT = "/var/azureml-app/azureml-models"
+
+
+def serve_environment(client: MLClient) -> Environment:
+    """The serving environment, checked against what is already registered.
+
+    Third of the three registrations in this repo, and until now the odd one:
+    `train.aml_job.ensure_environment` and `serve.bench_job.ensure_bench_environment`
+    both pin an explicit version derived from the image tag and refuse to
+    proceed when the registered version holds a different image. This one
+    passed no version at all, so Azure ML auto-numbered it -- which is how
+    `ffsft-serve` versions 1 and 2 came to hold images `:2` and `:3`.
+
+    The check matters more here than there. An environment version is
+    immutable, so `create_or_update` over a stale version returns the stored
+    entity rather than correcting it; a deployment then serves an image the
+    caller never named, and the way that surfaces is a container that never
+    becomes healthy after Azure has spent an hour trying to allocate a node for
+    it. Noticing here is free.
+
+    Returns the entity rather than registering it: it is passed inline to the
+    `ManagedOnlineDeployment`, which is what performs the registration.
+    """
+    from azure.ai.ml.entities import Environment
+    from azure.core.exceptions import ResourceNotFoundError
+
+    name, version, image = (
+        SERVE_ENVIRONMENT_NAME,
+        SERVE_ENVIRONMENT_VERSION,
+        SERVE_IMAGE,
+    )
+    try:
+        registered = client.environments.get(name, version=version)
+    except ResourceNotFoundError:
+        registered = None
+
+    if registered is not None and registered.image != image:
+        raise RuntimeError(
+            f"environment '{name}:{version}' is already registered against "
+            f"'{registered.image}', not '{image}'. An Azure ML environment version "
+            f"is immutable, so this cannot be re-pointed -- build a new tag and "
+            f"bump SERVE_IMAGE, which moves the version with it."
+        )
+
+    return Environment(
+        name=name,
+        version=version,
+        image=image,
+        # vLLM's own OpenAI server, so the container speaks the protocol the
+        # load-test client and the eval harness already target.
+        inference_config={
+            "liveness_route": {"port": 8000, "path": "/health"},
+            "readiness_route": {"port": 8000, "path": "/health"},
+            "scoring_route": {"port": 8000, "path": "/v1/chat/completions"},
+        },
+    )
 
 
 def read_dedicated_quota(subscription_id: str, location: str, family: str) -> int:
@@ -126,9 +205,22 @@ def classify_cluster_error(message: str) -> tuple[str, str]:
 def probe_sku(client, sku: str, tier: str, *, name: str = "ffsft-probe") -> SkuProbe:
     """Ask the control plane to create the cluster, then take it straight back.
 
-    This is the only honest answer to 'can this SKU be deployed'. Quota says
-    yes for A10 v5 and the create call says no; the catalogue lists all sixteen
-    GPU SKUs and the create call still says no.
+    Scope, stated first because this function was read as answering a broader
+    question than it does: this creates an **AmlCompute cluster**, so it answers
+    "can a training job run on this SKU". It says nothing about a managed online
+    endpoint, which is a different resource type on a different control plane.
+
+    Reading it as a deployment probe inverts its answer. In koreacentral all six
+    A10 v5 SKUs are MIR-only -- their `supportedComputeTypes` lists MIR and not
+    AmlCompute -- so this call refuses precisely the SKUs a managed endpoint
+    accepts. VERIFIED 43 concluded "every GPU SKU is NotAvailableForSubscription"
+    from exactly that inversion; VERIFIED 51 retracts it, having created an
+    endpoint in 69 seconds. For the deployment question, attempt a
+    `ManagedOnlineDeployment` -- nothing else is evidence.
+
+    Within its own scope it is the honest answer, and that part still holds:
+    quota says yes for A10 v5 and the create call says no; the catalogue lists
+    all sixteen GPU SKUs and the create call still says no.
 
     Free: a refusal returns in about two seconds having created nothing, and an
     acceptance is a `min_instances=0` cluster that allocates no node before it
@@ -139,8 +231,12 @@ def probe_sku(client, sku: str, tier: str, *, name: str = "ffsft-probe") -> SkuP
     try:
         client.compute.begin_create_or_update(
             AmlCompute(
-                name=name, size=sku, min_instances=0, max_instances=1,
-                tier=tier, idle_time_before_scale_down=120,
+                name=name,
+                size=sku,
+                min_instances=0,
+                max_instances=1,
+                tier=tier,
+                idle_time_before_scale_down=120,
             )
         ).result()
     except Exception as exc:  # noqa: BLE001 - the message is the whole point
@@ -176,9 +272,18 @@ class StoreProbe:
     private_endpoints: int
     reachable: bool
     detail: str
+    key_auth_refused: bool = False
+    key_based_datastores: tuple[str, ...] = ()
 
 
-def classify_store(account: str, public_access: str, private_endpoints: int) -> StoreProbe:
+def classify_store(
+    account: str,
+    public_access: str,
+    private_endpoints: int,
+    *,
+    allow_shared_key: bool | None = None,
+    key_based_datastores: Sequence[str] = (),
+) -> StoreProbe:
     """Decide whether a storage account is reachable by anything.
 
     Two ways to be reachable, and they are the only two:
@@ -197,37 +302,113 @@ def classify_store(account: str, public_access: str, private_endpoints: int) -> 
     back `Disabled`, so this is enforced above the subscription and cannot be
     fixed from here.
 
+    Network reachability is necessary and *not* sufficient. A datastore also
+    names how to authenticate, and that is a separate axis this check was blind
+    to until polandcentral (S57.8): `mlw-ffsft-plc` sat behind two working
+    private endpoints -- reachable by the rule above, and this function said so
+    -- while every write still failed, because all four of its datastores were
+    created with `credentialsType: AccountKey` against a storage account with
+    `allowSharedKeyAccess: false`. The account refuses the key the datastore
+    insists on presenting, so job log upload, artifact upload, output mounts and
+    client-side `jobs.download()` all return `KeyBasedAuthenticationNotPermitted`
+    -- the *same* zero-artifact symptom as an unreachable account, from a cause
+    no amount of private endpoints or RBAC can fix. Two workspaces created the
+    same way disagreed on this: koreacentral came up `None`, polandcentral came
+    up `AccountKey`, so it cannot be assumed from the deployment path either.
+
     Anything this function cannot read reports reachable. A probe that cannot
     see is not the same as a resource that is broken, and the expensive mistake
     in this project has consistently been turning the former into the latter.
+    That is why `allow_shared_key=None` (unread) never fails the check: only a
+    measured `False` alongside a measured `AccountKey` datastore does.
     """
+    key_based = tuple(key_based_datastores)
+
     if public_access != "Disabled":
-        return StoreProbe(account, public_access, private_endpoints, True, "")
-    if private_endpoints > 0:
-        return StoreProbe(
-            account,
-            public_access,
-            private_endpoints,
+        net_ok, net_detail = True, ""
+    elif private_endpoints > 0:
+        net_ok, net_detail = (
             True,
-            f"{account}: public access off, reached over {private_endpoints} private endpoint(s)",
+            (f"{account}: public access off, reached over {private_endpoints} private endpoint(s)"),
         )
-    detail = (
-        f"no reachable datastore: '{account}' has publicNetworkAccess=Disabled "
-        f"and 0 private endpoints, so neither this client nor the Azure ML "
-        f"compute node can open a session against it. Job outputs never upload "
-        f"(artifacts=0 on every finished run), so there is nothing to register "
-        f"as a model -- and every hosted pattern deploys a model asset. "
-        f"Fix: attach a private endpoint to the account and put the compute in "
-        f"that VNet. Turning public access back on is rejected silently by "
-        f"tenant-level enforcement."
+    else:
+        net_ok, net_detail = (
+            False,
+            (
+                f"no reachable datastore: '{account}' has publicNetworkAccess=Disabled "
+                f"and 0 private endpoints, so neither this client nor the Azure ML "
+                f"compute node can open a session against it. Job outputs never upload "
+                f"(artifacts=0 on every finished run), so there is nothing to register "
+                f"as a model -- and every hosted pattern deploys a model asset. "
+                f"Fix: attach a private endpoint to the account and put the compute in "
+                f"that VNet. Turning public access back on is rejected silently by "
+                f"tenant-level enforcement."
+            ),
+        )
+
+    if allow_shared_key is False and key_based:
+        # Reported even when the network posture passes, because it is
+        # orthogonal to it: the key is refused on the public endpoint and over a
+        # private link alike, so a green network answer says nothing about this.
+        detail = (
+            f"datastore credential mismatch: '{account}' has "
+            f"allowSharedKeyAccess=false, but datastore(s) {', '.join(key_based)} "
+            f"authenticate with credentialsType=AccountKey. Every write fails "
+            f"with KeyBasedAuthenticationNotPermitted -- job logs, artifacts, "
+            f"output mounts and jobs.download() alike -- so runs finish with "
+            f"artifacts=0 and there is nothing to register as a model. Private "
+            f"endpoints and role assignments do not fix this. Fix: PUT each "
+            f"datastore with credentials.credentialsType='None' (identity-based) "
+            f"and grant the workspace MSI, the cluster identity and yourself "
+            f"Storage Blob Data Contributor on the account. Keep isDefault=true "
+            f"on the workspace default datastore or the PUT is rejected."
+        )
+        if not net_ok:
+            # Both broken at once (measured on `mlw-ffsft-jpe`). Reporting only
+            # the first sends the caller through a fix-verify-fix round trip for
+            # a blocker that was already visible here.
+            detail += f" A second, independent blocker is also present -- {net_detail}"
+        return StoreProbe(account, public_access, private_endpoints, False, detail, True, key_based)
+
+    return StoreProbe(
+        account, public_access, private_endpoints, net_ok, net_detail, False, key_based
     )
-    return StoreProbe(account, public_access, private_endpoints, False, detail)
+
+
+def _key_based_datastores(root: str, workspace: str, head: dict) -> list[str]:
+    """Names of datastores that authenticate with an account key.
+
+    Read separately from the account so an unreadable datastore list degrades to
+    "no key-based datastores found" rather than to a false blocker -- the same
+    reason `probe_model_store` reports reachable when it cannot see.
+    """
+    import requests
+
+    try:
+        page = requests.get(
+            f"{root}/Microsoft.MachineLearningServices/workspaces/"
+            f"{workspace}/datastores?api-version=2024-10-01",
+            headers=head,
+            timeout=60,
+        ).json()
+        return sorted(
+            d["name"]
+            for d in (page.get("value") or [])
+            if ((d.get("properties") or {}).get("credentials") or {}).get("credentialsType")
+            == "AccountKey"
+        )
+    except Exception as exc:  # noqa: BLE001 - an unreadable list must not block
+        log.warning("could not read datastore credentials: %s", exc)
+        return []
 
 
 def probe_model_store(target) -> StoreProbe:
-    """Read the live public-access posture of the workspace's default datastore.
+    """Read the live posture of the workspace's default datastore.
 
-    Free and read-only: two ARM GETs, no resource is created or touched.
+    Free and read-only: three ARM GETs, no resource is created or touched. Two
+    independent things can make the datastore unusable -- the account being
+    unreachable, and the datastore presenting a credential the account refuses
+    -- so both are read here and both are handed to `classify_store`.
     """
     import requests
     from azure.identity import AzureCliCredential
@@ -257,10 +438,27 @@ def probe_model_store(target) -> StoreProbe:
             account,
             sa.get("publicNetworkAccess", "Unknown"),
             len(sa.get("privateEndpointConnections") or []),
+            allow_shared_key=sa.get("allowSharedKeyAccess"),
+            key_based_datastores=_key_based_datastores(root, target.workspace_name, head),
         )
     except Exception as exc:  # noqa: BLE001 - an unreadable probe must not block
         log.warning("could not read the datastore posture: %s", exc)
         return classify_store("unknown", "Unknown", 0)
+
+
+def quota_family_for(sku: str | None) -> str | None:
+    """Dedicated quota family `sku` bills against, or None if unknown.
+
+    Unknown returns None rather than a guess so the caller falls back to the
+    pattern's declared family -- the same reason `required_dedicated_cores`
+    raises instead of assuming a core count.
+    """
+    if not sku:
+        return None
+    from ffsft.azure_ml import GPU_SKUS
+
+    entry = GPU_SKUS.get(sku)
+    return entry.get("family") if entry else None
 
 
 def check_pattern(
@@ -289,29 +487,124 @@ def check_pattern(
         return spec, store.detail
     if spec.allows_low_priority or not spec.quota_family:
         return spec, None
-    available = read_dedicated_quota(subscription_id, location, spec.quota_family)
-    return spec, spec.blocked_reason(available, instances=instances, sku=sku)
+    # A `--sku` override can cross quota families. The pattern names the family
+    # of its *default* SKU, but Azure bills the family the *chosen* SKU belongs
+    # to, so reading `spec.quota_family` here measures a pool the deployment
+    # never touches: an A100 SKU was refused in a region with 48 A100 cores
+    # granted because the A10 pool it would never use read 0.
+    family = quota_family_for(sku or spec.default_sku) or spec.quota_family
+    available = read_dedicated_quota(subscription_id, location, family)
+    return spec, spec.blocked_reason(available, instances=instances, sku=sku, quota_family=family)
 
 
+#: Seconds before the first probe fires. Small and fixed on purpose.
+#:
+#: This constant used to be the whole startup budget, and that was the wrong
+#: knob -- see VERIFIED §38. A probe that fails costs nothing; Azure simply
+#: tries again `period` seconds later. So every second spent here is a second
+#: the deployment cannot go healthy in *even when the container is already
+#: serving*, while `failure_threshold` buys the same patience for free in the
+#: success case. Azure's own defaults have this shape (`initial_delay 10`,
+#: `failure_threshold 30`) and the inverted version here was local invention.
+#:
+#: 120 s covers image start and the entrypoint reaching the point where it binds
+#: a port. Probing before that yields connection refusals, which are noise.
+PROBE_INITIAL_DELAY = 120
 
-def startup_grace_for(params_b: float | None) -> int:
-    """Seconds to wait before the readiness probe starts judging the container.
+#: Seconds between probes. Azure's default is 10; 15 halves the request volume
+#: against a loading container while still noticing readiness within a quarter
+#: of a minute of it becoming true.
+PROBE_PERIOD = 15
 
-    Startup is dominated by pulling weights from the Hub and loading them onto
-    the GPU, both of which scale with parameter count. Roughly 2 GB of bf16
-    weights per billion parameters, and a Hub download that sustains on the
-    order of 100 MB/s into an Azure ML node, works out near 25 s per billion.
-    The fixed 120 s covers image start and CUDA graph capture.
+#: Azure's own documented default for `failure_threshold`, used here as a floor.
+#: A vLLM container holding tens of gigabytes of weights is strictly harder to
+#: start than the generic deployment that default was chosen for, so being *less*
+#: patient than the platform default is never the right answer. The value that
+#: shipped before this comment existed was 10.
+AZURE_DEFAULT_FAILURE_THRESHOLD = 30
 
-    The reason this is a function rather than the old hardcoded 600: a fixed
-    27B-sized grace period means a 0.6B smoke deployment that can never become
-    healthy still takes ~45 minutes to be declared failed, and Azure withholds
-    the container logs until it is. The upper bound exists for the same reason
-    -- a grace period long enough to never fail is not a grace period.
+#: Hard server-side ceiling on `failure_threshold`, discovered by hitting it.
+#:
+#: The YAML schema reference documents a minimum of 1 and a default of 30 for
+#: this field and states no maximum at all, so the first version of
+#: `probe_settings_for` put the whole budget here and sent 125. Azure rejected
+#: the deployment in 61 seconds:
+#:
+#:     LivenessProbe.FailureThreshold: Invalid value provided for Failure
+#:     Threshold for Probe: <125>. The value should be less than 120.
+#:
+#: "less than 120" means 119 is the largest accepted value. Cheap failure --
+#: a 400 before any node was allocated -- but only because it is validated at
+#: request time; the same mistake in a field validated later would have cost
+#: another rollout. See VERIFIED §38.6.
+AZURE_MAX_FAILURE_THRESHOLD = 119
+
+
+#: How much longer a container takes to start when vLLM quantises on the way to
+#: the card instead of loading weights that are already in their served format.
+#:
+#: It reads the whole bf16 checkpoint and converts every tensor to NF4 during
+#: load, so the work is proportional to the *unquantised* size while the benefit
+#: only shows up afterwards. On one A10 that is compute-bound, which is why it
+#: does not appear anywhere in the per-billion download estimate. It also repeats
+#: on every container start -- a restart or a scale-out pays it again.
+IN_FLIGHT_QUANTIZATION_FACTOR = 2.5
+
+
+def startup_grace_for(params_b: float | None, *, quantization: str | None = None) -> int:
+    """Total seconds a container may take to become healthy.
+
+    A budget, not a delay -- `probe_settings_for` decides how it is spent.
+    Startup is dominated by moving weights onto the GPU, which scales with
+    parameter count: roughly 2 GB of bf16 weights per billion parameters, and a
+    download sustaining on the order of 100 MB/s into an Azure ML node, works out
+    near 25 s per billion. The fixed 120 s covers image start and CUDA graph
+    capture.
+
+    The cap is 3600 rather than the 1800 it was, because in-flight quantisation
+    is not download-bound and so is not covered by the per-billion estimate: vLLM
+    reads the full bf16 checkpoint and quantises to NF4 on the way to the card,
+    and on a single A10 that is compute, not bandwidth. A cap still exists,
+    because a budget large enough never to be exceeded can never report a
+    failure -- and Azure withholds the container logs until the deployment
+    reaches a terminal state, so "never fails" also means "never readable".
     """
+    factor = IN_FLIGHT_QUANTIZATION_FACTOR if quantization else 1.0
     if params_b is None:
-        return 600
-    return int(min(1800, max(120, 120 + params_b * 25)))
+        return int(min(3600, 600 * factor))
+    return int(min(3600, max(120, (120 + params_b * 25) * factor)))
+
+
+def probe_settings_for(grace_seconds: int) -> dict[str, int]:
+    """Split a startup budget into the three fields Azure actually accepts.
+
+    The budget goes into `failure_threshold` for as long as it fits, because
+    that is the spelling that lets the deployment go healthy the moment the
+    container does, instead of holding it in `Creating` for a fixed term sized
+    for the worst case.
+
+    It stops fitting at `AZURE_MAX_FAILURE_THRESHOLD`, which a 27B model with
+    in-flight quantisation exceeds. Past that point the remainder goes into
+    `period` instead. The cost of a longer period is bounded and small: it is
+    how late readiness can be *noticed* after it becomes true, so stretching 15 s
+    to 16 s to buy 33 minutes of patience is a second of latency for half an hour
+    of budget. Widening `initial_delay` would buy the same patience by making
+    every start slower, which is the trade this function exists to refuse.
+    """
+    remaining = max(0, grace_seconds - PROBE_INITIAL_DELAY)
+    period = PROBE_PERIOD
+    retries = math.ceil(remaining / period)
+    if retries > AZURE_MAX_FAILURE_THRESHOLD:
+        period = math.ceil(remaining / AZURE_MAX_FAILURE_THRESHOLD)
+        retries = math.ceil(remaining / period)
+    return {
+        "initial_delay": PROBE_INITIAL_DELAY,
+        "period": period,
+        "failure_threshold": min(
+            AZURE_MAX_FAILURE_THRESHOLD,
+            max(AZURE_DEFAULT_FAILURE_THRESHOLD, retries),
+        ),
+    }
 
 
 #: A parameter count written as a size suffix: `-8B`, `-0.6b`, `-70B`.
@@ -377,6 +670,7 @@ def serving_env(
     gpu_memory_utilization: float = 0.9,
     quantization: str | None = None,
     extra_args: str | None = None,
+    model_blob_uri: str | None = None,
 ) -> dict[str, str]:
     """Build the container environment for one model.
 
@@ -397,6 +691,12 @@ def serving_env(
         # treating the value as a Hub reference, so one variable covers both
         # deployment styles.
         "MODEL_PATH": hf_model or MODEL_MOUNT,
+        # Emitted even when empty, for the same reason as the architecture keys
+        # above: the image carries `MODEL_BLOB_URI=""` as a default, and a
+        # deployment that omits the key inherits whatever the image was built
+        # with. An image rebuilt with a URI baked in would otherwise silently
+        # pull that checkpoint into every deployment that never asked for one.
+        "MODEL_BLOB_URI": model_blob_uri or "",
         "SERVED_MODEL_NAME": served_model_name,
         "MAX_MODEL_LEN": str(max_model_len),
         "GPU_MEMORY_UTILIZATION": str(gpu_memory_utilization),
@@ -411,10 +711,105 @@ def serving_env(
     return env
 
 
+def egress_for(explicit: str | None, reachability: object | None) -> str | None:
+    """Whether to set `egressPublicNetworkAccess` on the deployment at all.
+
+    On a workspace secured by a managed VNet: never. That workspace governs its
+    deployments' egress itself, and Azure rejects the per-deployment setting
+    outright -- a 400 at submit time, before a node is allocated:
+
+        The EgressPublicNetworkAccess under online deployment is no longer
+        supported when your workspace is secured with managed virtual network.
+        Please avoid setting EgressPublicNetworkAccess on the deployment in
+        this case.
+
+    Asking for ``"disabled"`` earns a second clause in the same 400 -- private
+    networking requires a Premium ACR, and the registry holding the serve image
+    is Basic.
+
+    Reading the setting back is not evidence anyone set it: ARM reports
+    `Enabled` for a deployment that never specified it, which is what the live
+    `blue` deployment shows despite being created without the argument. Only an
+    explicit value reaches the validator, so leaving it unset is both the
+    working configuration and the measured one.
+
+    The isolation mode is what decides this, so it is read off the preflight the
+    caller already ran rather than inferred from where the weights live. A
+    `None` reachability means the workspace could not be read, and the safe
+    answer there is the same one: leave it unset.
+
+    See docs/VERIFIED.md S64.
+    """
+    if getattr(reachability, "workspace_is_isolated", False):
+        # The managed VNet already places the container on the network that
+        # reaches workspace storage, so there is nothing here to choose --
+        # only a 400 to earn.
+        return None
+    # `None` leaves the SDK default alone. Returning "enabled" here would rewrite
+    # the setting on every existing deployment that never asked about networking.
+    return explicit
+
+
+def ensure_endpoint(client, endpoint_name: str) -> None:
+    """Create the endpoint if it is missing; never touch it if it exists.
+
+    `begin_create_or_update` is a PUT that replaces, and a `ManagedOnlineEndpoint`
+    built fresh here -- never read back from Azure -- serialises with
+    `properties.traffic == {}`::
+
+        ManagedOnlineEndpoint(name=..., auth_mode="key")
+            ._to_rest_online_endpoint(location=...).properties.traffic
+        -> {}
+
+    That is an explicit empty map, not an omitted field ARM might merge, so
+    PUTting it at a live endpoint sends every deployment to 0% traffic. Nothing
+    reports it: the deployments stay `Succeeded`, the endpoint stays `Succeeded`,
+    and only the scoring URI goes dead. This endpoint served a full 100-request
+    load test on that URI and later read back `traffic: {}`, with deploys the
+    only writes in between.
+
+    It also made `deploy_online`'s `--traffic 0` branch untrue -- that branch
+    promises not to take the endpoint down, then logs the `{}` this step created
+    as if it had found it that way.
+
+    See docs/VERIFIED.md S65.
+    """
+    from azure.ai.ml.entities import ManagedOnlineEndpoint
+    from azure.core.exceptions import ResourceNotFoundError
+
+    try:
+        existing = client.online_endpoints.get(endpoint_name)
+    except ResourceNotFoundError:
+        existing = None
+
+    if existing is None:
+        log.info("creating endpoint %s", endpoint_name)
+        client.online_endpoints.begin_create_or_update(
+            ManagedOnlineEndpoint(name=endpoint_name, auth_mode="key")
+        ).result()
+        return
+
+    log.info(
+        "endpoint %s exists; leaving it as-is (traffic=%s)",
+        endpoint_name,
+        existing.traffic or {},
+    )
+    if (existing.auth_mode or "").lower() != "key":
+        # Worth saying rather than silently rewriting: changing auth mode rotates
+        # how every existing client authenticates.
+        log.warning(
+            "endpoint %s has auth_mode=%s, not 'key'; leaving it alone",
+            endpoint_name,
+            existing.auth_mode,
+        )
+
+
 def deploy_online(
     endpoint_name: str,
     model_uri: str | None,
     *,
+    deployment_name: str = "blue",
+    traffic_percent: int = 100,
     pattern_key: str = "aml_online_vllm",
     instance_count: int = 1,
     sku: str | None = None,
@@ -423,29 +818,40 @@ def deploy_online(
     gpu_memory_utilization: float = 0.90,
     request_timeout_ms: int = 180_000,
     hf_model: str | None = None,
+    model_blob_uri: str | None = None,
     model_spec: ModelSpec | None = None,
     params_b: float | None = None,
     quantization: str | None = None,
     extra_args: str = "",
+    egress_public_network_access: str | None = None,
     force: bool = False,
 ):
     """Create/update a managed online endpoint running vLLM.
 
-    Pass either `model_uri` (a registered Azure ML model, mounted into the
-    container) or `hf_model` (a Hugging Face repo id that vLLM downloads at
-    startup). The Hub path exists because this workspace's storage account is
-    network-isolated: registering a model requires a write path that is not
-    always available, whereas the container's outbound HTTPS is. It is also much
-    faster to iterate on.
+    Pass exactly one weight source:
+
+    * `model_uri` -- a registered Azure ML model, mounted into the container.
+    * `hf_model` -- a Hugging Face repo id that vLLM downloads at startup. This
+      path exists because this workspace's storage account is network-isolated:
+      registering a model requires a write path that is not always available,
+      whereas the container's outbound HTTPS is. It is also much faster to
+      iterate on.
+    * `model_blob_uri` -- an https blob URL the container downloads with its own
+      managed identity before vLLM starts. This is the only route for a
+      *fine-tuned* checkpoint on a tenant where model registration is closed:
+      `MCAPSGovDeployPolicies` disables shared-key auth account-wide, and Azure
+      ML's Model Registry enumerates blobs with an account key, so no model
+      asset can be created at all. Managed deployments accept only a registered
+      asset id -- datastore paths and job-output references are rejected at
+      parse time -- so the container fetches the weights itself instead. See
+      `docker/fetch_model.py`.
 
     `request_timeout_ms` defaults far above Azure ML's 5s default: a 27B model
     generating 128 tokens takes tens of seconds, and the default silently turns
     every real request into a 504.
     """
     from azure.ai.ml.entities import (
-        Environment,
         ManagedOnlineDeployment,
-        ManagedOnlineEndpoint,
         OnlineRequestSettings,
         ProbeSettings,
     )
@@ -459,7 +865,10 @@ def deploy_online(
         target.location,
         sku=sku,
         instances=instance_count,
-        from_hub=bool(hf_model),
+        # Named for the Hub because that was the first case, but what the
+        # flag actually declares is "the server resolves its own weights, so no
+        # model asset is involved". A blob fetch is that same case.
+        from_hub=bool(hf_model or model_blob_uri),
     )
     if blocker and not force:
         raise RuntimeError(blocker)
@@ -479,6 +888,8 @@ def deploy_online(
     # runs after the endpoint is created, below. Creating an endpoint is free;
     # only a deployment allocates a GPU.
     from .preflight import (
+        RestrictedSkuError,
+        online_endpoint_blocker,
         read_sku_availability,
         read_storage_reachability,
         sku_advisory,
@@ -494,24 +905,26 @@ def deploy_online(
 
     instance_type = sku or spec.default_sku
 
-    # Reported, never enforced. Three A10 rollouts here stalled in `Creating`
-    # and this field is the only regional signal that distinguishes them -- but
-    # the A100 that trains on this same subscription carries a stricter
-    # restriction still, so it cannot decide a deployment. Surfacing it means
-    # the next stall has somewhere to start instead of an hour of silence.
-    availability = read_sku_availability(
-        target.subscription_id, target.location, instance_type
-    )
-    note = sku_advisory(availability)
-    if note:
-        log.warning("%s", note)
+    # Enforced here, advisory everywhere else -- see `online_endpoint_blocker`.
+    # A managed online endpoint cannot use LowPriority, so the Spot pool that
+    # makes this field inconclusive for an AmlCompute cluster does not exist for
+    # this caller. Two rollouts were spent today confirming that, each sitting at
+    # `percentComplete: 0.0` for the better part of two hours after this same
+    # advisory had been logged and treated as one signal among several.
+    availability = read_sku_availability(target.subscription_id, target.location, instance_type)
+    blocker = online_endpoint_blocker(availability)
+    if blocker and not force:
+        raise RestrictedSkuError(blocker)
+    if blocker:
+        log.warning("force=True, proceeding despite: %s", blocker)
+    else:
+        note = sku_advisory(availability)
+        if note:
+            log.warning("%s", note)
 
     client = get_ml_client(target)
 
-    log.info("ensuring endpoint %s", endpoint_name)
-    client.online_endpoints.begin_create_or_update(
-        ManagedOnlineEndpoint(name=endpoint_name, auth_mode="key")
-    ).result()
+    ensure_endpoint(client, endpoint_name)
 
     # Now the identity exists and can be checked -- and fixed. Azure wires up
     # AcrPull automatically only for the workspace-linked registry; this
@@ -543,7 +956,8 @@ def deploy_online(
         elif result.error:
             log.warning(
                 "could not grant AcrPull automatically (%s).\nRun this yourself:\n%s",
-                result.error, result.manual_fix,
+                result.error,
+                result.manual_fix,
             )
 
         grants = read_identity_grants(target, endpoint_name, acr_id)
@@ -559,33 +973,39 @@ def deploy_online(
     # Retrying after a quota rejection therefore fails for a *second*, unrelated
     # reason unless the corpse is cleared first.
     try:
-        existing = client.online_deployments.get(name="blue", endpoint_name=endpoint_name)
+        existing = client.online_deployments.get(name=deployment_name, endpoint_name=endpoint_name)
         state = (getattr(existing, "provisioning_state", "") or "").lower()
         if state in {"failed", "canceled"}:
             log.warning(
-                "deployment 'blue' is in state '%s' and cannot be updated; deleting it",
+                "deployment '%s' is in state '%s' and cannot be updated; deleting it",
+                deployment_name,
                 state,
             )
             client.online_deployments.begin_delete(
-                name="blue", endpoint_name=endpoint_name
+                name=deployment_name, endpoint_name=endpoint_name
             ).result()
     except Exception as exc:  # noqa: BLE001 - absence is the normal first-run case
         log.debug("no existing deployment to clean up: %s", exc)
 
-    env = Environment(
-        name="ffsft-serve",
-        image=SERVE_IMAGE,
-        # vLLM's own OpenAI server, so the container speaks the protocol the
-        # load-test client and the eval harness already target.
-        inference_config={
-            "liveness_route": {"port": 8000, "path": "/health"},
-            "readiness_route": {"port": 8000, "path": "/health"},
-            "scoring_route": {"port": 8000, "path": "/v1/chat/completions"},
-        },
-    )
+    env = serve_environment(client)
 
-    if not model_uri and not hf_model:
-        raise ValueError("pass either model_uri (registered model) or hf_model (Hub id)")
+    if not model_uri and not hf_model and not model_blob_uri:
+        raise ValueError(
+            "pass one of model_uri (registered model), hf_model (Hub id) "
+            "or model_blob_uri (blob URL fetched by the container)"
+        )
+
+    if model_spec is None and hf_model:
+        # `--hf-model` carries a Hub repo id, and the CLI has no way to also name
+        # a registry key, so `model_spec` arrived as None and every measured
+        # serving flag went out empty -- `--mamba-cache-mode` among them, for a
+        # checkpoint whose 48 of 64 layers are Gated DeltaNet. Recover the spec
+        # from the id itself; an id the registry has never seen stays None.
+        from ffsft.models.registry import get_registry
+
+        model_spec = get_registry().by_hf_id(hf_model)
+        if model_spec is not None:
+            log.info("matched --hf-model %s to registry key %s", hf_model, model_spec.key)
 
     env_vars = serving_env(
         model_spec,
@@ -595,20 +1015,35 @@ def deploy_online(
         gpu_memory_utilization=gpu_memory_utilization,
         quantization=quantization,
         extra_args=extra_args or None,
+        model_blob_uri=model_blob_uri,
     )
     log.info("serving env: %s", {k: v for k, v in env_vars.items() if k != "EXTRA_ARGS"})
 
     sized_from = resolve_params_b(explicit=params_b, spec=model_spec, hf_model=hf_model)
-    grace = startup_grace_for(sized_from)
+    grace = startup_grace_for(sized_from, quantization=quantization)
+    probe = probe_settings_for(grace)
     log.info(
-        "startup grace: %ds from params_b=%s (probe gives up ~%ds after that)",
+        "startup budget %ds from params_b=%s quantization=%s: "
+        "first probe at %ds, then %d retries every %ds",
         grace,
         sized_from,
-        10 * 30,
+        quantization,
+        probe["initial_delay"],
+        probe["failure_threshold"],
+        probe["period"],
     )
 
+    egress = egress_for(egress_public_network_access, reachability)
+    if egress_public_network_access is not None and egress is None:
+        log.warning(
+            "ignoring --egress-public-network-access=%s: this workspace is secured "
+            "with a managed VNet, which governs deployment egress itself and makes "
+            "Azure reject the setting on the deployment",
+            egress_public_network_access,
+        )
+
     deployment = ManagedOnlineDeployment(
-        name="blue",
+        name=deployment_name,
         endpoint_name=endpoint_name,
         model=model_uri,
         environment=env,
@@ -619,20 +1054,48 @@ def deploy_online(
             request_timeout_ms=request_timeout_ms,
             max_concurrent_requests_per_instance=64,
         ),
-        # Sized from the model rather than fixed: a large model needs minutes to
-        # load, but using that budget for a small one means a container that can
-        # never start still takes ~45 minutes to be reported as failed, with the
-        # logs withheld until then.
-        liveness_probe=ProbeSettings(initial_delay=grace, period=30, failure_threshold=10),
-        readiness_probe=ProbeSettings(initial_delay=grace, period=30, failure_threshold=10),
+        # The budget lives in `failure_threshold`, deliberately -- see
+        # `probe_settings_for`. Still sized from the model rather than fixed,
+        # because a budget large enough for a 27B model means a container that
+        # can never start holds the deployment in `Creating` for the better part
+        # of an hour, with the logs withheld until it is terminal.
+        liveness_probe=ProbeSettings(**probe),
+        readiness_probe=ProbeSettings(**probe),
+        egress_public_network_access=egress,
     )
 
     log.info("creating deployment on %s x%d (this takes 15-30 min)", instance_type, instance_count)
     client.online_deployments.begin_create_or_update(deployment).result()
 
-    endpoint = client.online_endpoints.get(endpoint_name)
-    endpoint.traffic = {"blue": 100}
-    client.online_endpoints.begin_create_or_update(endpoint).result()
+    if traffic_percent <= 0:
+        # Blue/green: bring the new deployment up beside the serving one and
+        # leave the traffic map alone, so a bad rollout cannot take the endpoint
+        # down. Shift traffic in a second call once it answers correctly.
+        current = client.online_endpoints.get(endpoint_name).traffic
+        log.info(
+            "deployment %s created with no traffic; endpoint traffic stays %s",
+            deployment_name,
+            current,
+        )
+    else:
+        endpoint = client.online_endpoints.get(endpoint_name)
+        traffic = dict(endpoint.traffic or {})
+        others = [n for n in traffic if n != deployment_name]
+        remainder = 100 - traffic_percent
+        if remainder and len(others) != 1:
+            raise ValueError(
+                f"--traffic {traffic_percent} leaves {remainder}% to assign, but "
+                f"the endpoint has {len(others)} other deployment(s) {others}; "
+                f"Azure requires the map to sum to 100. Use --traffic 100, or "
+                f"split against exactly one other deployment."
+            )
+        traffic = dict.fromkeys(traffic, 0)
+        traffic[deployment_name] = traffic_percent
+        if remainder:
+            traffic[others[0]] = remainder
+        endpoint.traffic = traffic
+        client.online_endpoints.begin_create_or_update(endpoint).result()
+        log.info("traffic set to %s", traffic)
 
     scoring_uri = client.online_endpoints.get(endpoint_name).scoring_uri
     log.info("endpoint ready: %s", scoring_uri)
@@ -666,9 +1129,7 @@ def deploy_batch(
     target = AzureTarget.from_env()
     spec = get_serving_registry().get(pattern_key)
     if not spec.allows_low_priority:
-        raise ValueError(
-            f"pattern '{pattern_key}' is an online pattern; use deploy_online instead"
-        )
+        raise ValueError(f"pattern '{pattern_key}' is an online pattern; use deploy_online instead")
 
     client = get_ml_client(target)
     compute = compute_name or target.compute_name
@@ -714,9 +1175,11 @@ def cmd_check(args) -> int:
 
     store = probe_model_store(target)
     if not store.reachable:
-        print(f"  datastore  UNREACHABLE  {store.account} "
-              f"(publicNetworkAccess={store.public_access}, "
-              f"{store.private_endpoints} private endpoints)\n")
+        print(
+            f"  datastore  UNREACHABLE  {store.account} "
+            f"(publicNetworkAccess={store.public_access}, "
+            f"{store.private_endpoints} private endpoints)\n"
+        )
 
     client = get_ml_client(target) if args.probe else None
     width = max(len(s.key) for s in registry)
@@ -724,20 +1187,23 @@ def cmd_check(args) -> int:
         if spec.surface is Surface.LOCAL:
             print(f"  {spec.key:<{width}}  n/a       (local, no Azure quota involved)")
             continue
-        _, blocker = check_pattern(
-            spec.key, target.subscription_id, target.location, store=store
-        )
+        _, blocker = check_pattern(spec.key, target.subscription_id, target.location, store=store)
         if blocker and spec.can_serve_from_hub and not store.reachable:
             # The datastore is dark, but this server resolves its own weights.
             # Re-ask without the storage constraint before calling it blocked --
             # ffsft-a10 deployed exactly this way while storage stayed dark.
             _, hub_blocker = check_pattern(
-                spec.key, target.subscription_id, target.location,
-                store=store, from_hub=True,
+                spec.key,
+                target.subscription_id,
+                target.location,
+                store=store,
+                from_hub=True,
             )
             if hub_blocker is None:
-                print(f"  {spec.key:<{width}}  ok        via --hf-model "
-                      "(no model asset, storage not involved)")
+                print(
+                    f"  {spec.key:<{width}}  ok        via --hf-model "
+                    "(no model asset, storage not involved)"
+                )
                 continue
         if blocker:
             summary = blocker if len(blocker) <= 110 else blocker[:107].rstrip() + "..."
@@ -752,16 +1218,15 @@ def cmd_check(args) -> int:
             if probe.blocker:
                 print(f"  {spec.key:<{width}}  BLOCKED   {probe.blocker}")
             else:
-                print(f"  {spec.key:<{width}}  ok        {tier} {spec.default_sku} "
-                      "(create accepted)")
+                print(
+                    f"  {spec.key:<{width}}  ok        {tier} {spec.default_sku} (create accepted)"
+                )
             continue
 
         if spec.allows_low_priority:
             print(f"  {spec.key:<{width}}  ok?       LowPriority pool ({spec.default_sku})")
         else:
-            cores = read_dedicated_quota(
-                target.subscription_id, target.location, spec.quota_family
-            )
+            cores = read_dedicated_quota(target.subscription_id, target.location, spec.quota_family)
             print(
                 f"  {spec.key:<{width}}  ok?       dedicated {spec.quota_family}="
                 f"{cores} cores ({spec.default_sku})"
@@ -786,9 +1251,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = sub.add_parser("check", help="Show which serving patterns are deployable right now.")
     check.add_argument(
-        "--probe", action="store_true",
+        "--probe",
+        action="store_true",
         help="Ask the control plane for real instead of trusting the quota number. "
-             "Free: refusals create nothing, acceptances are min=0 and deleted.",
+        "Free: refusals create nothing, acceptances are min=0 and deleted.",
     )
 
     online = sub.add_parser(
@@ -796,20 +1262,64 @@ def build_parser() -> argparse.ArgumentParser:
     )
     online.add_argument("--endpoint", default="ffsft-online")
     online.add_argument(
-        "--model-uri", default=None,
+        "--model-uri",
+        default=None,
         help="A registered Azure ML model, e.g. azureml:qwen3-ko:1. Mutually "
-             "exclusive with --hf-model.",
+        "exclusive with --hf-model.",
     )
     online.add_argument(
-        "--hf-model", default=None,
+        "--hf-model",
+        default=None,
         help="A Hugging Face repo id, e.g. Qwen/Qwen3.5-0.8B. vLLM downloads the "
-             "weights at container start, so this path needs no model asset and "
-             "no reachable workspace storage account (see VERIFIED.md section 24).",
+        "weights at container start, so this path needs no model asset and "
+        "no reachable workspace storage account (see VERIFIED.md section 24).",
+    )
+    online.add_argument(
+        "--model-blob-uri",
+        default=None,
+        help="An https blob URL (…/container/prefix/) holding a checkpoint. The "
+        "container downloads it with the endpoint's managed identity before "
+        "vLLM starts. Use this for a fine-tuned model on a tenant where "
+        "model registration is blocked by policy. Pair with --model-key so "
+        "the architecture flags are not left empty.",
+    )
+    online.add_argument(
+        "--model-key",
+        default=None,
+        help="Registry key (e.g. qwen3.8-27b) naming the architecture being "
+        "served. --hf-model infers this from the repo id; --model-blob-uri "
+        "cannot, and a missing spec means --mamba-cache-mode goes out empty "
+        "-- which for Qwen3.8 is not a default but a crash.",
+    )
+    online.add_argument(
+        "--deployment",
+        default="blue",
+        help="Deployment name under the endpoint. Use a second name (e.g. green) "
+        "with --traffic 0 to bring a new version up beside the serving one.",
+    )
+    online.add_argument(
+        "--traffic",
+        type=int,
+        default=100,
+        help="Percent of endpoint traffic to send to this deployment once it is "
+        "healthy. 0 leaves the endpoint's traffic map untouched.",
     )
     online.add_argument("--sku", default=None)
     online.add_argument("--instance-count", type=int, default=1)
     online.add_argument("--max-model-len", type=int, default=4096)
     online.add_argument("--gpu-memory-utilization", type=float, default=0.90)
+    online.add_argument(
+        "--egress-public-network-access",
+        choices=["enabled", "disabled"],
+        default=None,
+        help=(
+            "Which network the container's outbound traffic uses. Defaults to "
+            "'disabled' with --model-blob-uri, because the blob account is "
+            "private-endpoint-only and 'enabled' resolves it to a public IP that "
+            "refuses the request. 'disabled' joins the workspace managed VNet; "
+            "with an AllowInternetOutbound VNet a public ACR still pulls fine."
+        ),
+    )
     online.add_argument("--force", action="store_true", help="Ignore the quota precheck.")
 
     batch = sub.add_parser("deploy-batch", help="Batch endpoint on the LowPriority cluster.")
@@ -832,20 +1342,48 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "check":
         return cmd_check(args)
     if args.cmd == "deploy-online":
-        # Exactly one weight source. Neither leaves vLLM with nothing to serve;
-        # both is a contradiction the deployment would resolve silently.
-        if bool(args.model_uri) == bool(args.hf_model):
-            ap.error("deploy-online needs exactly one of --model-uri or --hf-model")
+        # Exactly one weight source. None leaves vLLM with nothing to serve;
+        # more than one is a contradiction the deployment would resolve silently.
+        sources = [bool(args.model_uri), bool(args.hf_model), bool(args.model_blob_uri)]
+        if sum(sources) != 1:
+            ap.error(
+                "deploy-online needs exactly one of --model-uri, --hf-model or --model-blob-uri"
+            )
+        # A blob URI carries no architecture information -- it is just a path --
+        # so nothing can infer the spec the way `--hf-model` infers it from the
+        # repo id. Refusing here beats a deployment that comes up without
+        # `--mamba-cache-mode align` and dies inside vLLM twenty minutes later
+        # with a NotImplementedError, which is what an empty spec produces on
+        # every Qwen3.5/3.8 checkpoint.
+        if args.model_blob_uri and not args.model_key:
+            ap.error("--model-blob-uri requires --model-key (e.g. --model-key qwen3.8-27b)")
+        spec = None
+        if args.model_key:
+            from ffsft.models.registry import get_model
+
+            spec = get_model(args.model_key)
         deploy_online(
-            args.endpoint, args.model_uri, hf_model=args.hf_model, sku=args.sku,
-            instance_count=args.instance_count, max_model_len=args.max_model_len,
+            args.endpoint,
+            args.model_uri,
+            hf_model=args.hf_model,
+            sku=args.sku,
+            model_blob_uri=args.model_blob_uri,
+            model_spec=spec,
+            deployment_name=args.deployment,
+            traffic_percent=args.traffic,
+            instance_count=args.instance_count,
+            max_model_len=args.max_model_len,
             gpu_memory_utilization=args.gpu_memory_utilization,
+            egress_public_network_access=args.egress_public_network_access,
             force=args.force,
         )
         return 0
     deploy_batch(
-        args.endpoint, args.model_uri, compute_name=args.compute,
-        instance_count=args.instance_count, mini_batch_size=args.mini_batch_size,
+        args.endpoint,
+        args.model_uri,
+        compute_name=args.compute,
+        instance_count=args.instance_count,
+        mini_batch_size=args.mini_batch_size,
     )
     return 0
 

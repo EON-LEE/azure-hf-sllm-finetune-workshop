@@ -189,3 +189,81 @@ def test_the_refusal_names_the_way_out(monkeypatch):
 
     with pytest.raises(RuntimeError, match="immutable"):
         ensure_environment(FakeClient(FakeEnvOps([stale])))
+
+
+# --------------------------------------------------------------------------
+# the third registration
+# --------------------------------------------------------------------------
+#
+# `deploy.endpoint` was the one caller that passed no version at all, so Azure
+# ML auto-numbered it and `ffsft-serve` ended up with versions 1 and 2 holding
+# images `:2` and `:3`. That numbering hid a live defect: `SERVE_IMAGE` sat at
+# `:3` while the bench path had already moved to `:4` for the
+# `--language-model-only` guard, so a managed deployment of the merged 27B
+# would have reproduced `purple_wolf_g3hhc4q5qj` -- "There is no module or
+# parameter named 'language_model' in Qwen3_5Model" -- the moment a node was
+# allocated. docs/VERIFIED.md 51.5.
+
+
+def test_serve_environment_version_tracks_the_image_tag():
+    from ffsft.deploy.endpoint import SERVE_ENVIRONMENT_VERSION, SERVE_IMAGE
+
+    assert SERVE_ENVIRONMENT_VERSION == image_tag(SERVE_IMAGE)
+
+
+def test_serve_environment_carries_the_vllm_inference_routes():
+    """The routes are why this Environment cannot reuse `ensure_environment`.
+
+    A managed endpoint needs liveness, readiness and scoring routes; a command
+    job has no such concept. Dropping them makes the container fail its probes
+    rather than fail to start, which reads as a quota problem.
+    """
+    from ffsft.deploy.endpoint import SERVE_IMAGE, serve_environment
+
+    env = serve_environment(FakeClient(FakeEnvOps()))
+
+    assert env.image == SERVE_IMAGE
+    assert env.inference_config["scoring_route"]["path"] == "/v1/chat/completions"
+    assert env.inference_config["liveness_route"]["port"] == 8000
+
+
+def test_serve_environment_refuses_a_version_holding_a_different_image():
+    """Same guard as the trainer's, and it costs more to skip here.
+
+    A command job that runs the wrong image fails in minutes. A deployment that
+    serves the wrong image fails after Azure has spent the better part of an
+    hour trying to allocate a GPU node for it.
+    """
+    from ffsft.deploy.endpoint import (
+        SERVE_ENVIRONMENT_NAME,
+        SERVE_ENVIRONMENT_VERSION,
+        SERVE_IMAGE,
+        serve_environment,
+    )
+
+    stale = FakeEnv(
+        SERVE_ENVIRONMENT_NAME, SERVE_ENVIRONMENT_VERSION, "acrffsftkc.azurecr.io/ffsft-serve:3"
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        serve_environment(FakeClient(FakeEnvOps([stale])))
+
+    message = str(excinfo.value)
+    assert "ffsft-serve:3" in message
+    assert SERVE_IMAGE in message
+    assert "immutable" in message
+
+
+def test_serve_environment_reuses_a_version_holding_the_right_image():
+    from ffsft.deploy.endpoint import (
+        SERVE_ENVIRONMENT_NAME,
+        SERVE_ENVIRONMENT_VERSION,
+        SERVE_IMAGE,
+        serve_environment,
+    )
+
+    ops = FakeEnvOps([FakeEnv(SERVE_ENVIRONMENT_NAME, SERVE_ENVIRONMENT_VERSION, SERVE_IMAGE)])
+    env = serve_environment(FakeClient(ops))
+
+    assert env.image == SERVE_IMAGE
+    assert ops.created == []

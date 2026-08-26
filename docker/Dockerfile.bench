@@ -1,0 +1,89 @@
+# Benchmark image: the serving image plus the load generator, in one container.
+#
+# Why this exists at all
+# ----------------------
+# A managed online endpoint cannot be created in this subscription. Every GPU
+# SKU koreacentral offers is marked NotAvailableForSubscription, and an online
+# deployment has no LowPriority pool to fall back to, so five rollouts sat at
+# `percentComplete: 0.0` for 50-113 minutes each and never got a node
+# (docs/VERIFIED.md §40). AmlCompute LowPriority *does* get A100s here -- that
+# is what trained the adapter -- so the load test moves to where the hardware
+# actually is: server and client inside one command job on gpu-a100-lp.
+#
+# What is lost: no public HTTPS endpoint, no Azure front door, no autoscaler.
+# What is kept: real TTFT/TPOT/p50-p95-p99 against a real 27B on a real A100,
+# with the weights in bf16 rather than quantised down to fit a card we cannot
+# have. The numbers describe the model and the GPU, which is what a load test
+# is for; they do not describe Azure's routing layer, and this file should not
+# be read as if they did.
+#
+# Why FROM the serve image and not from vLLM directly
+# ---------------------------------------------------
+# serve_entrypoint.sh already turns environment variables into vLLM flags, and
+# every one of those flags is load-bearing for Qwen3.8's hybrid attention
+# (--mamba-cache-mode align, --language-model-only, --reasoning-parser qwen3).
+# Rebuilding that logic here would create a second place for it to be wrong,
+# and the bench would then measure a differently-configured server than the one
+# deployment uses. So the bench launches the real entrypoint as a subprocess and
+# adds only the client.
+ARG SERVE_TAG=4
+FROM acrffsftkc.azurecr.io/ffsft-serve:${SERVE_TAG}
+
+# The load generator needs httpx; the registry needs pydantic and pyyaml. All
+# three are already in the vLLM base, so this resolves to "already satisfied"
+# and installs nothing -- it is here to fail the build rather than the job if a
+# future base drops one. No --upgrade, deliberately: upgrading pydantic under
+# vLLM would replace a version its own FastAPI layer is pinned against.
+RUN python3 -m pip install --no-cache-dir "httpx>=0.27" "pydantic>=2.7" "pyyaml>=6.0"
+
+# mlflow, into its own directory rather than into site-packages.
+#
+# It has to be here at all because this workspace's storage account has
+# publicNetworkAccess disabled: the job's declared output, its SAS link, the
+# artifact `content` proxy and `jobs.stream` are all AuthorizationFailure from
+# outside the VNet, so a bench job that only writes files and prints to stdout
+# measures a 27B on an A100 and then loses every number. MLflow talks to the
+# tracking service, which is not blob. Same reasoning as Dockerfile.train:27.
+#
+# `--target` rather than a normal install because this image's site-packages is
+# vLLM's, pinned to versions its own FastAPI and torch layers were built
+# against, and mlflow pulls in protobuf, requests and typing-extensions. A
+# resolver free to upgrade any of those would trade a reporting problem for a
+# serving one, and the load test would then measure a differently-broken
+# server. `bench_report.enable_mlflow_lib` appends this directory to sys.path
+# -- never PYTHONPATH, which sorts ahead of site-packages -- so it can only
+# supply what is missing. mlflow-skinny is the client without the tracking
+# server's own stack; if azureml-mlflow needs more, pip resolves it in here.
+RUN python3 -m pip install --no-cache-dir --target=/opt/mlflowlib \
+        "mlflow-skinny>=2.16" "azureml-mlflow>=1.57"
+
+# Same reason as the training image: `command(code=...)` uploads a snapshot to a
+# storage account this workspace refuses from outside its VNet, so the code is
+# baked in. The registry resolves configs/models.yaml relative to the package,
+# so the repo layout has to survive the copy.
+COPY . /opt/ffsft
+ENV PYTHONPATH=/opt/ffsft/src
+WORKDIR /opt/ffsft
+
+COPY docker/bench_entrypoint.sh /usr/local/bin/bench_entrypoint.sh
+RUN chmod +x /usr/local/bin/bench_entrypoint.sh
+
+# Azure ML supplies its own command, and an inherited ENTRYPOINT that starts a
+# server would fight it. Reset explicitly rather than relying on the runner to
+# override -- the serve image's entrypoint execs vLLM and never returns.
+ENTRYPOINT []
+
+# Fail the build, not a 40-minute LowPriority job, if the client cannot import.
+RUN python3 -c "from ffsft.serve.loadtest import sweep, format_table; print('loadtest OK')" \
+ && python3 -c "from ffsft.models import get_model; print('registry OK:', get_model('qwen3.8-27b').hf_id)"
+
+# The reporting path, exercised exactly as the job runs it: import the package
+# that pulls in httpx, then append the --target directory and import mlflow on
+# top of it. This is the assertion that the append does not shadow anything the
+# sweep itself needs, and it costs a second at build time instead of an A100
+# allocation and 50 minutes of weight loading at run time.
+# One line, unwrapped: ACR's dependency scanner reads the Dockerfile before
+# Docker does and cannot follow a backslash continuation inside a quoted
+# string. Run `dey` died in 3 seconds on "unable to understand line from
+# ffsft.serve.bench_report import ...". Length is the lesser problem.
+RUN python3 -c "from ffsft.serve.bench_report import enable_mlflow_lib; assert enable_mlflow_lib(), 'mlflow --target dir missing'; import httpx, mlflow, azureml.mlflow; print('report OK: mlflow', mlflow.__version__, '/ httpx', httpx.__version__)"

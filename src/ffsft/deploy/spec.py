@@ -21,6 +21,7 @@ instead of letting a deployment fail 20 minutes in.
 
 from __future__ import annotations
 
+import math
 import sys
 from enum import Enum
 
@@ -76,11 +77,29 @@ class AdapterMode(StrEnum):
     RUNTIME_ADAPTER = "runtime_adapter"
 
 
-#: A managed online endpoint reserves a second full set of instances so it can
-#: bring up a new version before retiring the old one. Azure therefore charges
-#: the deployment against double the instance cores, which is how a 36-core SKU
-#: with 36 cores granted failed with "quota requested is 72".
-ONLINE_ENDPOINT_CORE_MULTIPLIER = 2
+#: A managed online endpoint keeps headroom to bring up a new version before
+#: retiring the old one, so Azure charges 20% more instances than the deployment
+#: asks for, rounded up to a whole instance:
+#:
+#:     ceil(ONLINE_ENDPOINT_UPGRADE_RESERVATION * instances) * cores_per_instance
+#:
+#: At one instance the round-up makes this exactly double, which is how a 36-core
+#: SKU with 36 cores granted failed with "quota requested is 72". Every
+#: observation this repo had was at one instance, so a flat x2 fitted them all
+#: and was still wrong from two instances up: two pay for three, not four.
+ONLINE_ENDPOINT_UPGRADE_RESERVATION = 1.2
+
+#: Families Azure exempts from the reservation above -- the "Skip 20% Reservation"
+#: column of the supported-SKU list for managed online endpoints. Charging these
+#: double asks for twice the quota Azure does, which turns a grant that fits into
+#: one that appears not to. The exemption is granted per family, not per SKU.
+UPGRADE_RESERVATION_EXEMPT_FAMILIES = frozenset(
+    {
+        "standardncadsa100v4family",
+        "standardncadsh100v5family",
+        "standardndv5h100family",
+    }
+)
 
 
 def required_dedicated_cores(sku: str, *, instances: int = 1) -> int:
@@ -91,8 +110,11 @@ def required_dedicated_cores(sku: str, *, instances: int = 1) -> int:
     """
     from ffsft.azure_ml import GPU_SKUS
 
-    cores = GPU_SKUS[sku]["cores"]
-    return cores * instances * ONLINE_ENDPOINT_CORE_MULTIPLIER
+    entry = GPU_SKUS[sku]
+    cores = entry["cores"]
+    if entry["family"].lower() in UPGRADE_RESERVATION_EXEMPT_FAMILIES:
+        return cores * instances
+    return math.ceil(ONLINE_ENDPOINT_UPGRADE_RESERVATION * instances) * cores
 
 
 class ServingSpec(BaseModel):
@@ -186,7 +208,12 @@ class ServingSpec(BaseModel):
         return self.is_interactive and self.openai_compatible
 
     def blocked_reason(
-        self, dedicated_cores_available: int, *, instances: int = 1, sku: str | None = None
+        self,
+        dedicated_cores_available: int,
+        *,
+        instances: int = 1,
+        sku: str | None = None,
+        quota_family: str | None = None,
     ) -> str | None:
         """Explain why this pattern cannot deploy right now, or None if it can.
 
@@ -201,8 +228,8 @@ class ServingSpec(BaseModel):
             maximum amount of quota is [N/A]
 
         on a 36-core SKU with exactly 36 cores granted. A managed online
-        endpoint reserves a second full set of instances for rolling updates,
-        so the real requirement is double. See required_dedicated_cores.
+        endpoint reserves upgrade headroom on top of the instances asked for,
+        so the real requirement is higher. See required_dedicated_cores.
         """
         if self.allows_low_priority:
             return None
@@ -222,11 +249,12 @@ class ServingSpec(BaseModel):
 
         return (
             f"{self.display_name} on {target_sku} x{instances} needs "
-            f"{needed} dedicated cores ({ONLINE_ENDPOINT_CORE_MULTIPLIER}x the "
-            f"instance cores, because a managed online endpoint reserves "
-            f"headroom to roll out a new version). '{self.quota_family}' has a "
-            f"limit of {dedicated_cores_available} cores in this region. "
-            f"Request an increase, pick a smaller SKU, or use a pattern with "
+            f"{needed} dedicated cores, because a managed online endpoint "
+            f"reserves {ONLINE_ENDPOINT_UPGRADE_RESERVATION:.0%} of the "
+            f"instances -- rounded up to a whole one -- as headroom to roll out "
+            f"a new version. '{quota_family or self.quota_family}' has a limit of "
+            f"{dedicated_cores_available} cores in this region. Request an "
+            f"increase, pick a smaller SKU, or use a pattern with "
             f"allows_low_priority: true (e.g. aml_batch_vllm)."
         )
 

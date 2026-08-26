@@ -31,15 +31,39 @@ class LogStatus(str, Enum):
     OK = "ok"
     #: Azure refuses logs outside terminal states. Says nothing about the container.
     WITHHELD = "withheld"
+    #: The logs are gone rather than refused. A deployment that never reached a
+    #: terminal state has its node reclaimed with the container's output still on
+    #: it, and Azure then answers `getLogs` with prose telling you to try later --
+    #: which is never going to become true. Distinct from WITHHELD because
+    #: WITHHELD is worth retrying and this is not.
+    GONE = "gone"
     #: The request itself failed. Says nothing about anything.
     ERROR = "error"
 
 
-#: The only values `containerType` accepts. Getting this wrong returns a
-#: `RequestInvalid` UserError that looks like an empty log if stderr is dropped.
-STORAGE_INITIALIZER = "StorageInitializer"
-INFERENCE_SERVER = "InferenceServer"
+#: The container names, in the spelling `MLClient.online_deployments.get_logs`
+#: accepts. There are two spellings and they belong to two different call paths,
+#: which is why this looks like a contradiction and is not:
+#:
+#:   * The raw ARM `getLogs` enum takes PascalCase. Sending it lowercase returns
+#:     a `RequestInvalid` UserError that reads as an empty log once stderr is
+#:     dropped -- the 33-minute misdiagnosis in this module's docstring.
+#:   * The SDK validates `container_type` on the client, before any request
+#:     goes out, and accepts only the hyphenated lowercase form. On
+#:     azure-ai-ml 1.34.1 the PascalCase constants raise
+#:     `ValidationException: Invalid container type 'StorageInitializer'.
+#:     Supported container types are inference-server and storage-initializer`
+#:     -- measured 2026-08-24 against a live deployment.
+#:
+#: This repo reaches Azure through the SDK, so the SDK spelling is the one that
+#: belongs in the constants. `REST_CONTAINER_TYPES` keeps the other so the
+#: earlier finding is not re-lost.
+STORAGE_INITIALIZER = "storage-initializer"
+INFERENCE_SERVER = "inference-server"
 CONTAINER_TYPES = (STORAGE_INITIALIZER, INFERENCE_SERVER)
+
+#: The same two containers as the raw ARM enum spells them.
+REST_CONTAINER_TYPES = ("StorageInitializer", "InferenceServer")
 
 
 @dataclass
@@ -71,9 +95,25 @@ def classify_log_response(status_code: int, body: str) -> LogRead:
     lowered = body.lower()
     if "can't be retrieved" in lowered or "cannot be retrieved" in lowered:
         return LogRead(LogStatus.WITHHELD, detail=body.strip())
+    # Measured 2026-08-24 on `ffsft-qwen38/blue` the moment it went Failed, with
+    # the node already reclaimed:
+    #
+    #     There are no logs for this deployment at the moment.
+    #     Please try again later.
+    #
+    # 76 characters of prose returned as HTTP 200, and without this branch it
+    # classified as OK -- a sentence about logs presented as the log. That is the
+    # exact confusion this module exists to prevent, and it survived here for as
+    # long as it did because the WITHHELD wording was the only one ever seen.
+    if "no logs for this deployment" in lowered:
+        return LogRead(LogStatus.GONE, detail=body.strip())
     if "not a valid enum value" in lowered or "requestinvalid" in lowered:
         return LogRead(
             LogStatus.ERROR,
-            detail=f"bad request (check containerType is one of {CONTAINER_TYPES}): {body[:200]}",
+            detail=(
+                f"bad request: containerType must be one of {CONTAINER_TYPES} "
+                f"through the SDK, or {REST_CONTAINER_TYPES} against raw ARM. "
+                f"{body[:200]}"
+            ),
         )
     return LogRead(LogStatus.OK, text=body)

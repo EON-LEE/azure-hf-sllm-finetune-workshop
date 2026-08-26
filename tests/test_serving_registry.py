@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from ffsft.azure_ml import GPU_SKUS
 from ffsft.deploy import (
     AdapterMode,
     Engine,
@@ -140,13 +141,31 @@ def test_dedicated_pattern_unblocked_once_quota_granted():
         openai_compatible=True,
         allows_low_priority=False,
         quota_family="StandardNVADSA10v5Family",
+        default_sku="Standard_NV18ads_A10_v5",
     )
-    # make_spec defaults to a 24-core A100 SKU, and a managed online endpoint
-    # reserves double for rolling updates, so 48 is the threshold -- not 24.
-    # This assertion used to read `blocked_reason(36) is None`, which is how a
-    # deployment reached Azure and came back with "quota requested is 72".
-    assert spec.blocked_reason(36) is not None
-    assert spec.blocked_reason(48) is None
+    # The A10 family pays the upgrade reservation, so an 18-core SKU needs 36 --
+    # not 18. This assertion used to read `blocked_reason(18) is None`, which is
+    # how a deployment reached Azure and came back with "quota requested is 72".
+    assert spec.blocked_reason(18) is not None
+    assert spec.blocked_reason(36) is None
+
+
+def test_exempt_family_is_not_charged_the_reservation():
+    # A100 is on the "Skip 20% Reservation" list of the supported-SKU doc, so a
+    # 24-core SKU needs exactly 24. This test exists because the reservation was
+    # once applied to every family, which would block a 24-core A100 grant that
+    # Azure itself would have accepted -- a self-inflicted outage on the one
+    # family big enough to serve 27B in bf16.
+    spec = make_spec(
+        surface="aml_online_endpoint",
+        engine="vllm",
+        openai_compatible=True,
+        allows_low_priority=False,
+        quota_family="standardNCADSA100v4Family",
+        default_sku="Standard_NC24ads_A100_v4",
+    )
+    assert spec.blocked_reason(23) is not None
+    assert spec.blocked_reason(24) is None
 
 
 # -- filtering ----------------------------------------------------------
@@ -172,10 +191,13 @@ def test_filter_by_engine():
 # back to a value that only works on paper.
 
 
-#: Dedicated cores actually granted for the A10 family in koreacentral,
-#: measured 2026-08-21 via the Microsoft.Quota usages API. The request was for
-#: 36 and 36 is what arrived -- not the 72 an NV36 online endpoint needs.
-GRANTED_A10_DEDICATED_CORES = 36
+#: Dedicated cores actually granted for the A10 family, measured 2026-08-25 via
+#: the Microsoft.Quota API: 72 in koreacentral and 72 in japaneast. It was 36
+#: when this file was written, which is why an NV36 online endpoint -- needing
+#: 72 for its single instance -- could not fit. Raise this only from a fresh
+#: measurement: a grant is a ceiling, and the region can still refuse to
+#: allocate underneath it.
+GRANTED_A10_DEDICATED_CORES = 72
 
 
 def test_online_pattern_default_sku_fits_the_granted_quota():
@@ -199,12 +221,14 @@ def test_every_online_default_sku_is_within_reach_of_its_quota_family():
         )
 
 
-def test_default_sku_leaves_room_for_a_second_instance_check():
-    # Two instances double again on top of the rolling-update multiplier. This
-    # is not a requirement -- it is documentation of what scaling out costs, so
-    # nobody discovers the arithmetic during an incident.
+def test_default_sku_scaling_cost_is_documented():
+    # Not a requirement -- documentation of what scaling out costs, so nobody
+    # discovers the arithmetic during an incident. The upgrade reservation
+    # rounds up per *deployment*, not per instance, so the marginal instance is
+    # cheaper than the first: 1 pays for 2, 2 pay for 3, 3 pay for 4.
     spec = get_serving("aml_online_vllm")
-    one = required_dedicated_cores(spec.default_sku, instances=1)
-    two = required_dedicated_cores(spec.default_sku, instances=2)
-    assert two == one * 2
-    assert two > GRANTED_A10_DEDICATED_CORES
+    per_instance = GPU_SKUS[spec.default_sku]["cores"]
+    cost = [required_dedicated_cores(spec.default_sku, instances=n) for n in (1, 2, 3)]
+    assert cost == [2 * per_instance, 3 * per_instance, 4 * per_instance]
+    # Load testing a scaled-out deployment therefore fits the current grant.
+    assert cost[-1] <= GRANTED_A10_DEDICATED_CORES

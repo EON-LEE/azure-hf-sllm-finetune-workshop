@@ -168,3 +168,96 @@ def test_from_hub_does_not_rescue_batch(monkeypatch):
         "aml_batch", "sub", "koreacentral", store=_dead(), from_hub=True
     )
     assert blocked is not None, "batch has no Hub path; it must stay blocked"
+
+
+# --- The third failure mode: credentials, not reachability ------------------
+#
+# Everything above measures whether the account can be *reached*. polandcentral
+# proved that is only half the check. `mlw-ffsft-plc` sat behind two healthy
+# private endpoints -- `classify_store` said reachable, and it was right about
+# the network -- yet every finished run still reported artifacts=0, job logs
+# never uploaded, and `jobs.download()` returned:
+#
+#     (KeyBasedAuthenticationNotPermitted) Key based authentication is not
+#     permitted on this storage account.
+#
+# All four of its datastores carried `credentialsType: AccountKey` against a
+# storage account with `allowSharedKeyAccess: false`. The account refuses the
+# key the datastore insists on presenting. No private endpoint and no role
+# assignment can fix that, and the symptom is identical to an unreachable
+# account -- which is exactly why the old check passed it.
+#
+# Not inferable from how the workspace was made: koreacentral `mlw-ffsft` came
+# up `None` and polandcentral `mlw-ffsft-plc` came up `AccountKey`, created the
+# same way on the same subscription.
+
+KEYED = ("workspaceblobstore", "workspaceartifactstore")
+
+
+def test_key_based_datastore_on_a_no_key_account_is_unreachable():
+    """Two private endpoints do not rescue a credential the account refuses."""
+    probe = classify_store(
+        ACCOUNT, "Disabled", 2, allow_shared_key=False, key_based_datastores=KEYED
+    )
+    assert probe.reachable is False
+    assert probe.key_auth_refused is True
+
+
+def test_key_mismatch_blocks_even_with_public_access_on():
+    """The key is refused on the public endpoint too -- the axes are orthogonal."""
+    probe = classify_store(
+        ACCOUNT, "Enabled", 0, allow_shared_key=False, key_based_datastores=KEYED
+    )
+    assert probe.reachable is False
+
+
+def test_key_mismatch_detail_names_the_datastores_and_the_fix():
+    probe = classify_store(
+        ACCOUNT, "Disabled", 2, allow_shared_key=False, key_based_datastores=KEYED
+    )
+    assert "workspaceblobstore" in probe.detail
+    assert "allowSharedKeyAccess" in probe.detail
+    assert "credentialsType" in probe.detail
+    # The PUT that applies the fix is rejected without this, which cost a round.
+    assert "isDefault" in probe.detail
+
+
+def test_identity_based_datastores_on_a_no_key_account_are_fine():
+    """`allowSharedKeyAccess: false` is the hardened posture, not a fault."""
+    probe = classify_store(
+        ACCOUNT, "Disabled", 2, allow_shared_key=False, key_based_datastores=()
+    )
+    assert probe.reachable is True
+    assert probe.key_auth_refused is False
+
+
+def test_key_based_datastores_are_fine_when_the_account_allows_keys():
+    probe = classify_store(
+        ACCOUNT, "Disabled", 2, allow_shared_key=True, key_based_datastores=KEYED
+    )
+    assert probe.reachable is True
+
+
+def test_an_unread_key_policy_never_fails_the_check():
+    """A probe that cannot see is not a resource that is broken (module rule)."""
+    probe = classify_store(
+        ACCOUNT, "Disabled", 2, allow_shared_key=None, key_based_datastores=KEYED
+    )
+    assert probe.reachable is True
+
+
+def test_the_credential_axis_is_optional_so_existing_callers_are_unchanged():
+    assert classify_store(ACCOUNT, "Disabled", 1).reachable is True
+    assert classify_store(ACCOUNT, "Disabled", 0).reachable is False
+
+
+def test_both_blockers_are_reported_together():
+    """`mlw-ffsft-jpe` has both at once: 0 private endpoints AND AccountKey
+    datastores on a no-key account. Naming only the credential fault would send
+    the caller back for a second round on a blocker already visible here."""
+    probe = classify_store(
+        ACCOUNT, "Disabled", 0, allow_shared_key=False, key_based_datastores=KEYED
+    )
+    assert probe.reachable is False
+    assert "credentialsType" in probe.detail
+    assert "0 private endpoints" in probe.detail

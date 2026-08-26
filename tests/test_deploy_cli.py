@@ -99,3 +99,40 @@ def test_main_forwards_model_uri_and_leaves_hf_model_unset(monkeypatch):
     assert ep.main(["deploy-online", "--model-uri", "azureml:qwen3-ko:1"]) == 0
     assert seen["model_uri"] == "azureml:qwen3-ko:1"
     assert seen["hf_model"] is None
+
+
+# --- blue/green -----------------------------------------------------------
+#
+# `deploy_online` hardcoded the deployment name "blue" and unconditionally set
+# `traffic = {"blue": 100}`.  That makes every redeploy an in-place overwrite of
+# the deployment currently serving traffic: a rollout that fails to start takes
+# the endpoint down with it, and the only way back is another 20-minute deploy.
+# The endpoint resource has always supported several named deployments; only the
+# caller could not name them.
+
+
+def test_deployment_name_defaults_to_blue_so_existing_callers_are_unchanged():
+    args = _parse("deploy-online", "--hf-model", "x")
+    assert args.deployment == "blue"
+    assert args.traffic == 100
+
+
+def test_a_second_deployment_can_be_named_and_kept_off_traffic():
+    args = _parse(
+        "deploy-online", "--hf-model", "x", "--deployment", "green", "--traffic", "0"
+    )
+    assert args.deployment == "green"
+    assert args.traffic == 0
+
+
+def test_main_forwards_the_deployment_name_and_traffic(monkeypatch):
+    """A flag the parser accepts but main drops is worse than no flag at all:
+    the rollout silently overwrites blue while reporting success."""
+    seen = {}
+    monkeypatch.setattr(ep, "deploy_online", lambda *a, **k: seen.update(k))
+    rc = ep.main(
+        ["deploy-online", "--hf-model", "x", "--deployment", "green", "--traffic", "0"]
+    )
+    assert rc == 0
+    assert seen["deployment_name"] == "green"
+    assert seen["traffic_percent"] == 0

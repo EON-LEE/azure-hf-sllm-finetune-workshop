@@ -23,6 +23,16 @@ region happily runs CPU workloads.
 So these facts are reported and never enforced. A preflight with false
 negatives gets ignored; a preflight with false positives gets deleted, and
 takes the checks that did work with it.
+
+Refined 2026-08-24, without retracting any of the above. The reasoning holds
+wherever LowPriority is available, which is every AmlCompute caller. It does not
+hold for managed online endpoints, which reject LowPriority outright and so have
+no pool that ignores the restriction. `online_endpoint_blocker` enforces the
+field for that one caller only; `sku_advisory` still merely reports it for
+everyone else, and a test below pins the A100 case above so this split cannot
+quietly become a blanket refusal again. Cost of the missing distinction: two
+further rollouts at `percentComplete: 0.0`, 108 and 113 minutes, no container
+ever created. See VERIFIED §40.
 """
 
 from __future__ import annotations
@@ -30,7 +40,11 @@ from __future__ import annotations
 import pytest
 
 from ffsft.deploy import preflight
-from ffsft.deploy.preflight import SkuAvailability, sku_advisory
+from ffsft.deploy.preflight import (
+    SkuAvailability,
+    online_endpoint_blocker,
+    sku_advisory,
+)
 
 
 def avail(**overrides) -> SkuAvailability:
@@ -168,3 +182,98 @@ def test_partial_zone_restriction_leaves_the_rest():
 def test_region_restriction_leaves_no_zone():
     assert avail(restrictions=LOCATION_RESTRICTION).usable_zones == set()
     assert avail(restrictions=LOCATION_RESTRICTION).region_blocked is True
+
+
+# -- managed online endpoints have no Spot escape hatch -------------------
+
+
+def _koreacentral_a10() -> SkuAvailability:
+    """The exact ARM response that cost two rollouts on 2026-08-24.
+
+    Copied from `Microsoft.Compute/skus` for `Standard_NV36ads_A10_v5` in
+    koreacentral rather than invented, so the test fails if the shape of the
+    field ever changes underneath it.
+    """
+    return SkuAvailability(
+        sku="Standard_NV36ads_A10_v5",
+        region="koreacentral",
+        zones=["2", "3"],
+        restrictions=[
+            {
+                "type": "Zone",
+                "reasonCode": "NotAvailableForSubscription",
+                "values": ["KoreaCentral"],
+                "restrictionInfo": {
+                    "locations": ["KoreaCentral"],
+                    "zones": ["1", "2", "3"],
+                },
+            }
+        ],
+    )
+
+
+def test_the_sku_that_stalled_twice_is_refused_before_anything_is_spent():
+    blocker = online_endpoint_blocker(_koreacentral_a10())
+    assert blocker is not None
+    assert "Standard_NV36ads_A10_v5" in blocker
+    assert "LowPriority" in blocker
+
+
+def test_the_a100_that_trains_here_is_still_only_an_advisory():
+    """`sku_advisory` must keep reporting rather than refusing.
+
+    The A100 carries a stricter `Location` restriction than the A10 and is the
+    cluster that fine-tuned the 27B model. The new blocker applies to managed
+    online endpoints; it must not have turned the advisory into a refusal for
+    everyone else.
+    """
+    a100 = SkuAvailability(
+        sku="Standard_NC24ads_A100_v4",
+        region="koreacentral",
+        zones=[],
+        restrictions=[
+            {"type": "Location", "reasonCode": "NotAvailableForSubscription"}
+        ],
+    )
+    assert sku_advisory(a100) is not None
+    assert "not conclusive" in sku_advisory(a100)
+
+
+def test_an_unread_restriction_is_never_a_refusal():
+    """"Could not look" is not "looked and it is blocked"."""
+    assert online_endpoint_blocker(None) is None
+    assert (
+        online_endpoint_blocker(
+            SkuAvailability(sku="x", region="koreacentral", restrictions=None)
+        )
+        is None
+    )
+
+
+def test_a_sku_with_one_zone_left_is_allowed_through():
+    ok = SkuAvailability(
+        sku="Standard_NV36ads_A10_v5",
+        region="koreacentral",
+        zones=["1", "2", "3"],
+        restrictions=[
+            {
+                "type": "Zone",
+                "reasonCode": "NotAvailableForSubscription",
+                "restrictionInfo": {"zones": ["1", "2"]},
+            }
+        ],
+    )
+    assert online_endpoint_blocker(ok) is None
+
+
+def test_quota_id_restrictions_do_not_block():
+    """`QuotaId` describes which offers may buy the SKU, not placement."""
+    state = SkuAvailability(
+        sku="Standard_NV36ads_A10_v5",
+        region="koreacentral",
+        zones=["1"],
+        restrictions=[
+            {"type": "Zone", "reasonCode": "QuotaId", "restrictionInfo": {"zones": ["1"]}}
+        ],
+    )
+    assert online_endpoint_blocker(state) is None

@@ -41,6 +41,11 @@ def main() -> int:
         action="store_true",
         help="skip uri_folder output mounts (needed when workspace storage is network-isolated)",
     )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="submit even if workspace storage is unreachable (see --no-outputs)",
+    )
     ap.add_argument("--wait", action="store_true", help="stream logs until the job ends")
     args = ap.parse_args()
 
@@ -65,6 +70,32 @@ def main() -> int:
         preflight=args.preflight,
         mount_outputs=not args.no_outputs,
     )
+
+    # The deploy path has refused an unreachable storage account since section 58;
+    # this path did not, and it is the path that can waste more. A training run
+    # whose storage is unreachable does not fail fast: under `upload` it trains
+    # for an hour and then has nowhere to put the adapter, and under `rw_mount`
+    # -- which is what this script actually selects, see `mount_outputs` above --
+    # it dies in the lifecycler *after* paying for node allocation and a 9 GB
+    # image pull, before the command ever starts.
+    #
+    # `read_storage_reachability` returns None on every failure path, so an
+    # unreadable subscription degrades to "not blocked" rather than to a refusal
+    # that is not real.
+    from ffsft.deploy.preflight import read_storage_reachability, storage_blocker
+
+    reachability = read_storage_reachability(target)
+    storage_issue = storage_blocker(reachability) if reachability else None
+    if storage_issue and not args.force:
+        print(storage_issue, file=sys.stderr)
+        print(
+            "\nThis run would allocate a node and produce nothing that outlives it.\n"
+            "Fix the account, or pass --force to submit anyway.",
+            file=sys.stderr,
+        )
+        return 1
+    if storage_issue:
+        print(f"submitting despite: {storage_issue}", file=sys.stderr)
 
     info = submit(target, job, wait=args.wait)
     print(json.dumps(info, indent=2))

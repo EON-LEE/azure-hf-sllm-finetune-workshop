@@ -554,10 +554,12 @@ def cmd_up(args) -> int:
         instance_count=args.instances,
         sku=args.sku,
         max_model_len=args.max_model_len,
+        gpu_memory_utilization=args.gpu_memory_utilization,
         hf_model=args.hf_model or (spec.hf_id if spec and not args.model_uri else None),
         model_spec=spec,
         params_b=args.params_b,
         quantization=args.quantization,
+        extra_args=args.extra_args,
     )
     print(f"\nendpoint '{args.endpoint}' is up")
     print(f"scoring uri: {scoring_uri}")
@@ -592,7 +594,28 @@ def main() -> int:
     p_up.add_argument("--sku", default=None)
     p_up.add_argument("--instances", type=int, default=1)
     p_up.add_argument("--max-model-len", type=int, default=4096)
+    # Both of these reach container ENV the serve image has always read
+    # (GPU_MEMORY_UTILIZATION, EXTRA_ARGS); only this parser was missing the
+    # passthrough, which made them unreachable without an image rebuild.
+    p_up.add_argument(
+        "--gpu-memory-utilization",
+        type=float,
+        default=0.90,
+        help="fraction of the card vLLM may claim. Lower it when the weights "
+        "nearly fill the GPU: what is left has to cover the KV cache, the "
+        "hybrid state cache and CUDA graph capture, and vLLM exits rather "
+        "than shrinking to fit.",
+    )
     p_up.add_argument("--quantization", default=None)
+    p_up.add_argument(
+        "--extra-args",
+        default="",
+        help="appended verbatim to the vLLM launch line. Attach the value with "
+        "'=' -- argparse reads a dash-leading token as the next option, so "
+        "--extra-args='--enforce-eager --max-num-seqs 8' works and the "
+        "space-separated spelling exits 2. Graph capture is the first thing "
+        "to drop when a model only just fits.",
+    )
     p_up.set_defaults(func=cmd_up)
 
     p_down = sub.add_parser("down", help="delete always-on compute")

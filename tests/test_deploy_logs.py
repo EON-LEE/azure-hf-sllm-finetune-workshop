@@ -17,6 +17,7 @@ from __future__ import annotations
 from ffsft.deploy.logs import (
     CONTAINER_TYPES,
     INFERENCE_SERVER,
+    REST_CONTAINER_TYPES,
     STORAGE_INITIALIZER,
     LogStatus,
     classify_log_response,
@@ -78,11 +79,17 @@ def test_enum_rejection_names_the_valid_values():
     assert INFERENCE_SERVER in detail
 
 
-def test_container_types_are_pascal_case():
-    """Lowercase spellings are silently refused by ARM."""
-    assert CONTAINER_TYPES == ("StorageInitializer", "InferenceServer")
+def test_container_types_use_the_spelling_the_sdk_accepts():
+    """azure-ai-ml validates this client-side and takes only this spelling.
+
+    Measured on 1.34.1 against a live deployment: the PascalCase values the raw
+    ARM enum wants raise `ValidationException` before a request is even sent.
+    Both spellings are real; this tuple is the one the SDK path uses.
+    """
+    assert CONTAINER_TYPES == ("storage-initializer", "inference-server")
+    assert REST_CONTAINER_TYPES == ("StorageInitializer", "InferenceServer")
     for value in CONTAINER_TYPES:
-        assert value[0].isupper()
+        assert value.islower() and "-" in value
 
 
 def test_withheld_read_repeats_azures_own_wording():
@@ -106,3 +113,30 @@ def test_str_of_an_empty_ok_read_says_so_explicitly():
 def test_wording_variant_cannot_be_retrieved_is_also_withheld():
     body = "Logs cannot be retrieved at this time."
     assert classify_log_response(200, body).status is LogStatus.WITHHELD
+
+
+def test_a_sentence_about_logs_is_never_mistaken_for_the_logs():
+    """Azure has a third answer, and it is neither an error nor a log.
+
+    Measured when `ffsft-qwen38/blue` went Failed with its node already
+    reclaimed: HTTP 200 carrying 76 characters of prose. Classified as OK it
+    would read as a container that started, printed one line about logs, and
+    stopped -- so the caller would conclude the container produced no output,
+    which is the one conclusion this module is built to refuse.
+    """
+    body = "There are no logs for this deployment at the moment. Please try again later."
+    read = classify_log_response(200, body)
+    assert read.status is LogStatus.GONE
+    assert not read.is_evidence
+    assert body.strip() in str(read)
+
+
+def test_gone_is_distinguished_from_withheld():
+    """Both mean "no logs", but only one of them is worth waiting out."""
+    withheld = classify_log_response(
+        200, "Deployment is in deleting or creating state so logs can't be retrieved."
+    )
+    gone = classify_log_response(200, "There are no logs for this deployment at the moment.")
+    assert withheld.status is LogStatus.WITHHELD
+    assert gone.status is LogStatus.GONE
+    assert not withheld.is_evidence and not gone.is_evidence

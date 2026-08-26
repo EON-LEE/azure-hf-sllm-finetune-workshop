@@ -288,3 +288,101 @@ def test_format_inventory_shows_monthly_projection():
     assert "BILLING NOW" in out
     assert "/month" in out
     assert "3,154" in out or "3,153" in out
+
+
+# --- `up` flag passthrough --------------------------------------------------
+#
+# The serve image has always read GPU_MEMORY_UTILIZATION and EXTRA_ARGS, but the
+# `up` parser did not offer either, so neither was reachable without rebuilding
+# the image. On a model that only just fits its card these are the two knobs
+# that decide whether the rollout comes up at all -- what is left after the
+# weights has to cover the KV cache, the hybrid state cache and CUDA graph
+# capture, and vLLM exits rather than shrinking to fit. Pin the wiring.
+
+
+def _run_up(monkeypatch, argv):
+    """Drive `ffsft-lifecycle up` and return the kwargs deploy_online saw."""
+    from ffsft.deploy import endpoint, lifecycle
+
+    seen = {}
+
+    def fake_deploy_online(endpoint_name, model_uri, **kwargs):
+        seen["endpoint_name"] = endpoint_name
+        seen["model_uri"] = model_uri
+        seen.update(kwargs)
+        return "https://example.invalid/score"
+
+    monkeypatch.setattr(endpoint, "deploy_online", fake_deploy_online)
+    monkeypatch.setattr("sys.argv", ["ffsft-lifecycle", "up", *argv])
+    assert lifecycle.main() == 0
+    return seen
+
+
+def test_up_defaults_gpu_memory_utilization_to_the_deploy_default(monkeypatch):
+    seen = _run_up(monkeypatch, ["--endpoint", "e", "--hf-model", "org/repo"])
+    assert seen["gpu_memory_utilization"] == 0.90
+    assert seen["extra_args"] == ""
+
+
+def test_up_forwards_gpu_memory_utilization(monkeypatch):
+    seen = _run_up(
+        monkeypatch,
+        ["--endpoint", "e", "--hf-model", "org/repo", "--gpu-memory-utilization", "0.82"],
+    )
+    assert seen["gpu_memory_utilization"] == 0.82
+
+
+def test_up_forwards_extra_args_verbatim(monkeypatch):
+    """The value must be attached with `=`.
+
+    Every useful value here starts with a dash, and argparse reads a
+    dash-leading token as the next option rather than as this one's value:
+    `--extra-args --enforce-eager` exits 2 with "expected one argument". The
+    attached form is the only spelling that works, so it is the one pinned.
+    """
+    seen = _run_up(
+        monkeypatch,
+        ["--endpoint", "e", "--hf-model", "org/repo", "--extra-args=--enforce-eager"],
+    )
+    assert seen["extra_args"] == "--enforce-eager"
+
+
+def test_up_forwards_several_extra_args_as_one_string(monkeypatch):
+    seen = _run_up(
+        monkeypatch,
+        [
+            "--endpoint", "e",
+            "--hf-model", "org/repo",
+            "--extra-args=--enforce-eager --max-num-seqs 8",
+        ],
+    )
+    assert seen["extra_args"] == "--enforce-eager --max-num-seqs 8"
+
+
+def test_up_forwards_quantization_and_max_model_len(monkeypatch):
+    seen = _run_up(
+        monkeypatch,
+        [
+            "--endpoint", "e",
+            "--hf-model", "org/repo",
+            "--quantization", "bitsandbytes",
+            "--max-model-len", "2048",
+        ],
+    )
+    assert seen["quantization"] == "bitsandbytes"
+    assert seen["max_model_len"] == 2048
+
+
+def test_up_prefers_a_registered_model_over_the_specs_hub_id(monkeypatch):
+    """A merged asset must not be silently replaced by the untuned base."""
+    seen = _run_up(
+        monkeypatch,
+        [
+            "--endpoint", "e",
+            "--model", "qwen3.8-27b",
+            "--model-uri", "azureml:qwen3_8-27b-ko-merged:1",
+        ],
+    )
+    assert seen["model_uri"] == "azureml:qwen3_8-27b-ko-merged:1"
+    assert seen["hf_model"] is None
+    assert seen["model_spec"].key == "qwen3.8-27b"
