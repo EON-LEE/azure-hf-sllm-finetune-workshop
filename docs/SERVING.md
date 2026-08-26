@@ -41,16 +41,25 @@ The amount of CPU quota requested is 72 and your maximum amount of quota is [N/A
 - Azure가 요구한 값: **72 코어**
 
 Managed online endpoint는 새 버전을 띄운 뒤 기존 버전을 내리는
-**롤링 업데이트 여유분**으로 인스턴스 코어의 2배를 잡습니다.
+**롤링 업데이트 여유분**으로 요청한 인스턴스보다 20% 많은 인스턴스를 잡되,
+**정수 인스턴스 단위로 올림**합니다 — `ceil(1.2 × instances) × 인스턴스 코어`.
+
+인스턴스가 1개면 올림 때문에 정확히 2배가 되므로, 위 실패 로그만 보면
+"항상 2배"로 보입니다. 실제로는 2개면 3개분(4개분이 아님), 3개면 4개분입니다.
+그리고 **A100/H100/ND 계열은 이 여유분이 아예 면제**됩니다(공식 지원 SKU
+문서의 "Skip 20% Reservation" 열). 이 계열까지 2배로 계산하면 Azure가 받아줬을
+쿼터를 우리 코드가 먼저 막습니다 — `UPGRADE_RESERVATION_EXEMPT_FAMILIES`.
 
 `ServingSpec.blocked_reason()` 이 이 계산을 배포 **전에** 수행합니다.
 예전에는 `쿼터 > 0` 만 확인했고, 그래서 절대 생성될 수 없는 배포를
 20분 기다린 뒤에 실패시켰습니다.
 
 ```python
-required_dedicated_cores("Standard_NV36ads_A10_v5")            # 72
-required_dedicated_cores("Standard_NV18ads_A10_v5")            # 36
-required_dedicated_cores("Standard_NV18ads_A10_v5", instances=2)  # 72
+required_dedicated_cores("Standard_NV36ads_A10_v5")                # 72
+required_dedicated_cores("Standard_NV18ads_A10_v5")                # 36
+required_dedicated_cores("Standard_NV18ads_A10_v5", instances=2)   # 54  (3 x 18)
+required_dedicated_cores("Standard_NC4as_T4_v3",   instances=10)   # 48  (12 x 4)
+required_dedicated_cores("Standard_NC24ads_A100_v4")               # 24  (면제 계열)
 ```
 
 **실전 우회법**: 쿼터가 36이면 18코어 SKU(`NV18ads_A10_v5`, 12GB)를 쓰면

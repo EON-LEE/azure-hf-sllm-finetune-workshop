@@ -231,7 +231,7 @@ docs/
   PLAN.md           # 전체 설계 문서 (리서치 근거 포함)
   SERVING.md        # 서빙 패턴 · 쿼터 규칙 · 실측 제약
   VERIFIED.md       # 실제로 실행해서 확인된 것만 기록
-tests/              # 167+ 테스트 (Azure 호출 없음, 무과금)
+tests/              # 500 테스트 (Azure 호출 없음, 무과금)
 ```
 
 ---

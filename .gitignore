@@ -28,6 +28,8 @@ checkpoints/
 runs/
 wandb/
 mlruns/
+mlflow.db
+mlflow.db-journal
 *.safetensors
 *.gguf
 *.bin
