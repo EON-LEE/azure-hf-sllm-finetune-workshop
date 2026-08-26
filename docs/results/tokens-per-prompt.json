@@ -1,0 +1,167 @@
+{
+ "max_tokens": 128,
+ "temperature": 0.0,
+ "chat_template_kwargs": {
+  "enable_thinking": false
+ },
+ "prompts": [
+  "안녕하세요. 간단히 자기소개해 주세요.",
+  "한국의 4대 명절을 나열하고 각각 한 문장으로 설명해 주세요.",
+  "다음 문장을 정중한 존댓말로 바꿔줘: '내일 회의 몇시야?'",
+  "머신러닝에서 과적합이 무엇인지 비전공자에게 설명해 주세요.",
+  "서울에서 부산까지 가는 교통수단을 비용과 소요시간 관점에서 비교해 주세요.",
+  "다음 요구사항으로 파이썬 함수를 작성해줘: 리스트에서 중복을 제거하되 순서는 유지할 것.",
+  "전세와 월세의 차이를 표로 정리하고, 각각 어떤 상황에 유리한지 설명해 주세요.",
+  "'배가 고프다'와 '배가 아프다'에서 '배'의 의미 차이를 설명하고 예문을 3개 만들어 주세요."
+ ],
+ "deployments": {
+  "blue": [
+   {
+    "finish_reason": "stop",
+    "completion_tokens": 101,
+    "prompt_tokens": 23,
+    "chars": 216,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "안녕하세요! 저는 알리바바 그룹의 통이 연구소(Tongyi Lab)에서 개발한 대규모 언어 모델, **Qwen(통이치엔원)**입니다.\n\n저는 텍스트 생성, 논리적 추론, 코드 작성, 다국어 이해 등 다양한 작업을 도와드릴 수 있는 AI 어시스턴트입니다. 복잡한 문제를 해결하거나 아이디어를 구체화하는 데 도움이 필요하시다면 언제든 편하게 말씀해 주세요.\n\n오늘 어떤 도움이 필요하신가요?"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 30,
+    "chars": 203,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "한국의 4대 명절은 설날, 정월대보름, 한식, 추석입니다.\n\n*   **설날(설날)**: 음력 1월 1일로, 새해의 시작을 맞아 조상을 추모하고 가족이 모여 떡국을 먹으며 덕담을 나누는 가장 중요한 명절입니다.\n*   **정월대보름**: 음력 1월 15일로, 한 해의 첫 보름달을 보며 건강과 풍요를 기원하고 오곡밥과 나물을 먹으며 소원을 빌어온 전통 명절입니다."
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 31,
+    "chars": 258,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "상황과 상대방과의 관계에 따라 몇 가지 다른 표현이 가능합니다. 가장 무난하고 정중한 표현부터 순서대로 정리해 드릴게요.\n\n**1. 가장 무난하고 정중한 표현 (상사나 외부 고객에게)**\n> \"내일 회의 시간이 언제인지 확인 부탁드립니다.\"\n> \"내일 회의 일정이 어떻게 잡혀 있는지 알려 주실 수 있을까요?\"\n\n**2. 조금 더 부드럽고 정중한 표현 (동료나 친한 상사에게)**\n> \"내일 회의 시간이 몇 시인지 알려 주시겠어요?\"\n> \"내일 회의 일정, 혹시"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 31,
+    "chars": 269,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "머신러닝에서 **과적합(Overfitting)**을 이해하기 위해, 비전공자분들도 쉽게 공감할 수 있는 **'시험 공부'** 비유를 들어보겠습니다.\n\n### 📚 비유: 시험 공부를 너무 열심히 한 학생\n\n상상해 보십시오. 어떤 학생이 수학 시험을 준비하고 있습니다.\n\n1.  **적절한 공부 (적합, Good Fit):**\n    *   학생은 수학의 **원리와 공식**을 이해하고, 다양한 유형의 문제를 풀어봅니다.\n    *   결과: 시험장에서 **새로운 문제**가 나와도 원"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 30,
+    "chars": 239,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "서울에서 부산까지 이동하는 주요 교통수단인 **KTX(고속철도)**, **SRT**, **항공기(비행기)**, **버스(고속/시외)**를 비용과 소요시간 관점에서 비교해 드립니다.\n\n*(참고: 2024년 기준 평균 가격 및 소요시간이며, 실제 가격은 예약 시점, 할인 여부, 시간대에 따라 변동될 수 있습니다.)*\n\n---\n\n### 🚄 1. KTX (한국철도공사)\n- **소요시간**: 약 **2시간 40분 ~ 3시간**\n  -"
+   },
+   {
+    "finish_reason": "stop",
+    "completion_tokens": 106,
+    "prompt_tokens": 39,
+    "chars": 350,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "```python\ndef remove_duplicates(lst: list) -> list:\n    \"\"\"\n    리스트에서 중복을 제거하되 순서를 유지한다.\n    \n    Args:\n        lst: 중복 제거할 리스트\n        \n    Returns:\n        중복이 제거되고 순서가 유지된 리스트\n    \"\"\"\n    seen = set()\n    result = []\n    for item in lst:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n    return result\n```"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 34,
+    "chars": 258,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "전세와 월세는 한국의 대표적인 주거 형태이지만, 자금 운용 방식과 리스크가 크게 다릅니다. 아래 표와 설명을 통해 두 형태의 차이점과 각각 유리한 상황을 정리해 드립니다.\n\n### 1. 전세 vs 월세 비교 표\n\n| 구분 | **전세 (Jeonse)** | **월세 (Monthly Rent)** |\n| :--- | :--- | :--- |\n| **초기 비용** | **매우 높음**<br>(보증금: 월세의 10~20배 수준) | **낮음**<br>(보증금: 월"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 45,
+    "chars": 234,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "'배가 고프다'와 '배가 아프다'에서 '배'의 의미는 **물리적 위치(장기)와 추상적 상태(허기/불편함)의 차이**로 설명할 수 있습니다.\n\n### 1. '배'의 의미 차이\n\n| 표현 | '배'의 의미 | 설명 |\n|------|-------------|------|\n| **배가 고프다** | **허기를 느끼는 신체 상태** | '배'는 단순히 위장이라는 장기를 지칭하는 것이 아니라, **식욕이 느껴지고 음식이 필요"
+   }
+  ],
+  "green": [
+   {
+    "finish_reason": "stop",
+    "completion_tokens": 111,
+    "prompt_tokens": 23,
+    "chars": 251,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "안녕하세요! 저는 Qwen입니다. 알리바바 그룹의 통이 연구소(Tongyi Lab)에서 개발한 대규모 언어 모델입니다. 저는 다양한 작업을 도와드릴 수 있습니다. 예를 들어, 질문에 답하고, 글을 작성하고, 코드를 작성하고, 논리적 추론을 수행하는 것 등이 있습니다. 또한, 저는 여러 언어를 이해하고 사용할 수 있으며, 사용자의 요구에 맞춰 유연하게 대응할 수 있습니다.\n\n제가 어떻게 도와드릴 수 있을까요? 어떤 질문이나 도움이 필요하신가요? 😊"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 30,
+    "chars": 207,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "한국의 4대 명절은 다음과 같습니다:\n\n1. **설날 (설날)**: 음력 1월 1일로, 새해를 맞이하여 가족들이 함께 모여 떡국을 먹고, 조상에게 감사하는 전통적인 명절입니다.\n\n2. **정월대보름 (정월대보름)**: 음력 1월 15일로, 한 해의 첫 보름달을 맞이하여 건강과 풍요를 기원하는 명절입니다.\n\n3. **단오절 (단오절)**: 음력 5월 5일로, 여름의 시작"
+   },
+   {
+    "finish_reason": "stop",
+    "completion_tokens": 29,
+    "prompt_tokens": 31,
+    "chars": 54,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "'내일 회의는 몇 시에 있나요?' 또는 '내일 회의는 몇 시에 시작하나요?'라고 할 수 있습니다."
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 31,
+    "chars": 291,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "과적합은 머신러닝 모델이 학습 데이터에 너무 잘 맞춰져서 새로운 데이터에 대한 예측 성능이 떨어지는 현상을 말합니다. 비전공자에게 설명하자면, 과적합은 마치 학생이 시험 문제를 외워서 시험에 대비하는 것과 비슷합니다. 학생은 시험 문제를 완벽하게 외워서 시험에서 좋은 성적을 얻을 수 있지만, 새로운 문제를 만나면 문제를 해결하는 방법을 모를 수 있습니다.\n\n머신러닝 모델도 마찬가지입니다. 학습 데이터에 너무 잘 맞춰져 있으면, 새로운 데이터에 대한 예측 성능이 떨어질 수 있습니다. 이는 모델이 학습 데이터의 노이즈나"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 30,
+    "chars": 232,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "서울에서 부산까지 가는 교통수단을 비용과 소요시간 관점에서 비교해 드리겠습니다.\n\n1. **KTX (고속철도)**\n   - **비용**: 약 59,800원 (일반석 기준)\n   - **소요시간**: 약 2시간 40분\n   - **장점**: 빠르고 편안하며, 정시성이 높습니다.\n   - **단점**: 비용이 상대적으로 높습니다.\n\n2. **SRT (수서고속철도)**\n   - **비용**: 약 59,800원 (일반석"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 39,
+    "chars": 395,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "리스트에서 중복을 제거하되 순서를 유지하는 파이썬 함수를 작성해드리겠습니다.\n\n```python\ndef remove_duplicates(lst):\n    \"\"\"\n    리스트에서 중복을 제거하되 순서를 유지하는 함수.\n    \n    Args:\n        lst: 중복을 제거할 리스트\n        \n    Returns:\n        중복이 제거된 리스트\n    \"\"\"\n    seen = set()\n    result = []\n    for item in lst:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n    return result\n```\n\n이 함수는 다음과 같이 동작합니다"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 34,
+    "chars": 245,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "전세와 월세는 한국의 주택 임대차 시장에서 흔히 사용되는 두 가지 계약 형태입니다. 각각의 특징과 장단점을 이해하는 것은 주택을 임대할 때 중요한 결정에 도움이 됩니다. 아래는 전세와 월세의 차이를 표로 정리한 것입니다.\n\n| 구분 | 전세 | 월세 |\n|------|------|------|\n| 보증금 | 높음 (월세의 10~20배) | 낮음 (월세의 1~3개월치) |\n| 월세 | 없음 | 있음 (보증금의 1~3% 수준) |\n| 계약"
+   },
+   {
+    "finish_reason": "length",
+    "completion_tokens": 128,
+    "prompt_tokens": 45,
+    "chars": 219,
+    "reasoning_tokens": 0,
+    "thinking_in_content": false,
+    "content": "'배가 고프다'와 '배가 아프다'에서 '배'의 의미 차이는 다음과 같습니다:\n\n1. '배가 고프다': 이 표현은 '배'가 '몸의 일부, 특히 위장'을 의미하며, 음식이 필요하다는 느낌을 나타냅니다. 즉, '배가 고프다'는 '배가 비어 있고, 음식이 필요하다는 상태'를 의미합니다.\n\n2. '배가 아프다': 이 표현은 '배'가 '몸의 일부, 특히 위장'을 의미하며, 위장에 통증이 있다는 느낌을"
+   }
+  ]
+ }
+}

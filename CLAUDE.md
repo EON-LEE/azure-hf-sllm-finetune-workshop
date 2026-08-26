@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 uv sync --extra dev          # dev extra is enough for the whole test suite
-uv run pytest                # 700 tests, ~9s, no network and no Azure calls
+uv run pytest                # 725 tests, ~10s, no network and no Azure calls
 uv run pytest tests/test_aml_job.py::test_preflight_runs_the_self_test_and_nothing_else
 uv run pytest -k lora        # substring selection
 uv run ruff check .          # line-length 100, target py310, rules E/F/I/UP/B
@@ -34,7 +34,7 @@ uv run ffsft bench list / bench suites
 ```
 
 **Delegates** — `ffsft train submit | merge submit | merge local | eval | deploy |
-lifecycle | loadtest | serve-local` swap `sys.argv` and call the same `main()` the
+lifecycle | loadtest | plot | serve-local` swap `sys.argv` and call the same `main()` the
 console script calls, so the two names cannot drift (`tests/test_cli_delegates.py`
 reads `[project.scripts]` and fails if a script appears with no `ffsft` command
 reaching it). **`cli.py` must import with only the registry deps present** — every
@@ -52,6 +52,7 @@ uv run ffsft-deploy    check | deploy-online | deploy-batch
 uv run ffsft-lifecycle status | up | down [--all] [--yes]
 uv run ffsft-serve-local                         # CPU transformers, OpenAI-compatible + SSE
 uv run ffsft-loadtest                            # TTFT / TPOT / p50-p95-p99, knee point
+uv run ffsft-plot      # a loadtest --output report -> SVG, stdlib only, no matplotlib
 ```
 
 `ffsft-serve-local` plus `ffsft-loadtest` (or `scripts/mock_vllm_server.py`) exercise the
@@ -166,10 +167,17 @@ wrong root causes (§0, §30). Read it before "fixing" anything below.
   `docs/RUNBOOK.md` is the manual up/down procedure, `docs/SERVING.md` the serving patterns,
   `docs/design/PLAN.md` the original design research.
 - **`docs/labs/lab0..lab8.md` are the workshop**, `docs/GOTCHAS.md` the failures a participant
-  actually hits, and `docs/RESULTS.md` the reference run's measured numbers with the raw
-  `--output` JSONs in `docs/results/`. A lab's "기대 출력" must be cut from `RESULTS.md`, not
+  actually hits, and `docs/PERFORMANCE.md` the reference run's measured numbers with the raw
+  `--output` JSONs in `docs/results/`. A lab's "기대 출력" must be cut from `PERFORMANCE.md`, not
   retyped: every number in the labs traces to a measurement or a JOURNAL section, never to an
   estimate. Bump the test count in `lab0.md` when the suite grows.
+- **The charts in `docs/results/*.svg` are generated, never hand-drawn** — `ffsft plot` renders
+  them from the JSON next to them, so editing raw data updates the pictures. `ffsft-serve-local`
+  plus `ffsft-loadtest` plus `ffsft-plot` produce a full report with no GPU and no Azure.
+- **A tok/s difference between two deployments is a length difference until proven otherwise.**
+  `scripts/compare_deployments.py` is the check: it prints `finish_reason` per prompt and warns
+  when replies sat on the `max_tokens` cap, where a token count is a floor and not a length
+  (§70 retracts a causal claim that skipped this step).
 - **Tests never touch Azure or the network.** The SDK is imported lazily inside functions, so tests
   inject fakes by monkeypatching the module attribute the function reaches for (see the docstring
   of `tests/test_aml_job.py`). Keep new Azure imports function-local for this reason.

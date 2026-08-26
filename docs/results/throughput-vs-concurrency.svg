@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+<rect width="720" height="380" fill="#ffffff"/>
+<text x="74" y="26" font-size="15" font-weight="600" fill="#1f2937">처리량 — 출력 tok/s (실선) 과 req/s (점선, ×100)</text>
+<text x="74" y="44" font-size="11" fill="#6b7280">tok/s 는 green 이 낮고 req/s 는 green 이 높다. 같은 현상의 두 얼굴이다.</text>
+<line x1="74" y1="318.0" x2="696" y2="318.0" stroke="#e5e7eb"/>
+<text x="66" y="322.0" font-size="11" fill="#6b7280" text-anchor="end">0</text>
+<line x1="74" y1="264.8" x2="696" y2="264.8" stroke="#e5e7eb"/>
+<text x="66" y="268.8" font-size="11" fill="#6b7280" text-anchor="end">50</text>
+<line x1="74" y1="211.6" x2="696" y2="211.6" stroke="#e5e7eb"/>
+<text x="66" y="215.6" font-size="11" fill="#6b7280" text-anchor="end">100</text>
+<line x1="74" y1="158.4" x2="696" y2="158.4" stroke="#e5e7eb"/>
+<text x="66" y="162.4" font-size="11" fill="#6b7280" text-anchor="end">150</text>
+<line x1="74" y1="105.2" x2="696" y2="105.2" stroke="#e5e7eb"/>
+<text x="66" y="109.2" font-size="11" fill="#6b7280" text-anchor="end">200</text>
+<line x1="74" y1="52.0" x2="696" y2="52.0" stroke="#e5e7eb"/>
+<text x="66" y="56.0" font-size="11" fill="#6b7280" text-anchor="end">250</text>
+<text x="14" y="185.0" font-size="11" fill="#6b7280" text-anchor="middle" transform="rotate(-90 14 185.0)">출력 tok/s   ·   req/s ×100</text>
+<text x="385.0" y="368" font-size="11" fill="#6b7280" text-anchor="middle">동시성</text>
+<text x="136.2" y="336" font-size="11" fill="#6b7280" text-anchor="middle">1</text>
+<text x="260.6" y="336" font-size="11" fill="#6b7280" text-anchor="middle">2</text>
+<text x="385.0" y="336" font-size="11" fill="#6b7280" text-anchor="middle">4</text>
+<text x="509.4" y="336" font-size="11" fill="#6b7280" text-anchor="middle">8</text>
+<text x="633.8" y="336" font-size="11" fill="#6b7280" text-anchor="middle">16</text>
+<polyline points="136.2,294.5 260.6,271.9 385.0,229.7 509.4,178.0 633.8,100.6" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round"/>
+<circle cx="136.2" cy="294.5" r="3.5" fill="#2563eb"/>
+<circle cx="260.6" cy="271.9" r="3.5" fill="#2563eb"/>
+<circle cx="385.0" cy="229.7" r="3.5" fill="#2563eb"/>
+<circle cx="509.4" cy="178.0" r="3.5" fill="#2563eb"/>
+<circle cx="633.8" cy="100.6" r="3.5" fill="#2563eb"/>
+<polyline points="136.2,298.7 260.6,280.1 385.0,245.4 509.4,203.0 633.8,139.5" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="5 3"/>
+<circle cx="136.2" cy="298.7" r="3.5" fill="#2563eb"/>
+<circle cx="260.6" cy="280.1" r="3.5" fill="#2563eb"/>
+<circle cx="385.0" cy="245.4" r="3.5" fill="#2563eb"/>
+<circle cx="509.4" cy="203.0" r="3.5" fill="#2563eb"/>
+<circle cx="633.8" cy="139.5" r="3.5" fill="#2563eb"/>
+<polyline points="136.2,295.3 260.6,274.2 385.0,238.2 509.4,190.6 633.8,116.9" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linejoin="round"/>
+<circle cx="136.2" cy="295.3" r="3.5" fill="#16a34a"/>
+<circle cx="260.6" cy="274.2" r="3.5" fill="#16a34a"/>
+<circle cx="385.0" cy="238.2" r="3.5" fill="#16a34a"/>
+<circle cx="509.4" cy="190.6" r="3.5" fill="#16a34a"/>
+<circle cx="633.8" cy="116.9" r="3.5" fill="#16a34a"/>
+<polyline points="136.2,297.5 260.6,278.4 385.0,245.9 509.4,202.8 633.8,136.2" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linejoin="round" stroke-dasharray="5 3"/>
+<circle cx="136.2" cy="297.5" r="3.5" fill="#16a34a"/>
+<circle cx="260.6" cy="278.4" r="3.5" fill="#16a34a"/>
+<circle cx="385.0" cy="245.9" r="3.5" fill="#16a34a"/>
+<circle cx="509.4" cy="202.8" r="3.5" fill="#16a34a"/>
+<circle cx="633.8" cy="136.2" r="3.5" fill="#16a34a"/>
+<line x1="74" y1="342" x2="94" y2="342" stroke="#2563eb" stroke-width="2.5"/>
+<text x="100" y="346" font-size="11" fill="#1f2937">blue tok/s</text>
+<line x1="172" y1="342" x2="192" y2="342" stroke="#2563eb" stroke-width="2.5" stroke-dasharray="5 3"/>
+<text x="198" y="346" font-size="11" fill="#1f2937">blue req/s×100</text>
+<line x1="295" y1="342" x2="315" y2="342" stroke="#16a34a" stroke-width="2.5"/>
+<text x="321" y="346" font-size="11" fill="#1f2937">green tok/s</text>
+<line x1="399" y1="342" x2="419" y2="342" stroke="#16a34a" stroke-width="2.5" stroke-dasharray="5 3"/>
+<text x="425" y="346" font-size="11" fill="#1f2937">green req/s×100</text>
+</svg>

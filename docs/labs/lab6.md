@@ -59,7 +59,7 @@ uv run ffsft-loadtest \
 ## 2. 기대 출력 (실측 — A100 NC24ads 1 인스턴스, 27B bf16, max_model_len 8192)
 
 아래는 `blue` 5레벨 중 요약 컬럼입니다. **p99·e2e p50 까지 포함한 전체 표와
-`--output` 원자료 JSON 은 [`docs/RESULTS.md` §2](../RESULTS.md)** 에 있습니다.
+`--output` 원자료 JSON 은 [`docs/PERFORMANCE.md` §2](../PERFORMANCE.md)** 에 있습니다.
 
 ```
  conc    ok  fail  TTFT p50  TTFT p95  TPOT p50   e2e p95     tok/s    req/s
@@ -75,9 +75,32 @@ uv run ffsft-loadtest \
 - 동시성이 16배가 되는데 TPOT 는 **12% 만** 나빠지고 처리량은 **9.3배**
   → 연속 배칭(continuous batching)이 의도대로 동작한다는 뜻
 
-## 3. ⚠️ tok/s 로 두 모델을 비교하면 틀린다 (§66.2)
+### 2.1 그래프로 보기
 
-같은 엔드포인트의 두 배포를 나란히 재면 (양 끝 레벨만; 5레벨 전체는 [RESULTS §3](../RESULTS.md)):
+숫자 표에서는 knee 가 어디인지, 배칭이 도는지가 잘 안 보입니다. `--output` 으로
+남긴 JSON 을 그대로 그래프로 그립니다 (matplotlib 불필요 — 표준 라이브러리로 SVG).
+
+```bash
+uv run ffsft plot mine=my-loadtest.json --out-dir .
+```
+
+`ttft-vs-concurrency.svg`, `tpot-vs-concurrency.svg`, `throughput-vs-concurrency.svg`,
+`tokens-per-request.svg` 4장이 나옵니다. 기준 회차는 이렇게 생겼습니다:
+
+![기준 회차 TTFT — p95 가 SLO 선 아래에 머문다](../results/ttft-vs-concurrency.svg)
+
+- **p95(점선)가 SLO 선을 뚫는 직전이 knee** 입니다.
+- 여러분의 곡선이 c=1 부터 SLO 위에 있으면 부하가 아니라 **배포가 문제**입니다.
+  [GOTCHAS](../GOTCHAS.md) 로 가세요.
+
+![기준 회차 TPOT — 두 배포가 겹친다](../results/tpot-vs-concurrency.svg)
+
+**동시성을 16배 올리는 동안 TPOT 는 12% 만 나빠집니다.** 이 선이 동시성에 비례해
+올라가면 연속 배칭이 안 도는 것입니다.
+
+## 3. ⚠️ tok/s 로 두 모델을 비교하면 틀린다 (§66.2, §70)
+
+같은 엔드포인트의 두 배포를 나란히 재면 (양 끝 레벨만; 5레벨 전체는 [PERFORMANCE §6](../PERFORMANCE.md)):
 
 ```
             blue (베이스)                   green (파인튜닝)
@@ -93,14 +116,24 @@ peak tok/s 가 204.3 → 189.0 으로 **7.5% 낮습니다.** 이걸 성능 저�
 - **req/s 는 green 이 오히려 높습니다** (c=16 에서 1.71 vs 1.68).
 - 차이는 전부 **응답 길이**입니다. blue 121.8 tok/req vs green 110.6 — 9.2% 짧음.
 
-blue 는 **영어 사고과정을 `content` 에 쏟아내서** 토큰 수가 부풀어 있었습니다.
-green 은 `REASONING_PARSER=qwen3` 로 그걸 분리합니다.
+**왜 짧은지는 집계값으로 알 수 없습니다.** 상한에서 잘렸을 수도, 사고과정이
+`content` 로 샜을 수도, 진짜로 말을 덜 했을 수도 있고 셋의 의미가 전부 다릅니다.
+프롬프트 단위로 다시 재보면 이 회차는 **8개 중 6개가 양쪽 다 `max_tokens=128`
+상한에서 잘렸고**, 격차 223토큰은 **프롬프트 한 개**가 혼자 만들었습니다
+([PERFORMANCE §6.1](../PERFORMANCE.md)). 사고과정 누출은 0건이었습니다.
 
-> **tok/s 는 같은 일을 할 때만 비교 가능한 지표인데, 두 배포는 같은 일을 하고 있지
-> 않습니다.** 서빙 속도로 읽어야 할 값은 **TPOT 와 req/s** 입니다.
+```bash
+uv run python scripts/compare_deployments.py \
+   --base-url "${BASE%/chat/completions}" \
+   --deployment blue --deployment green --max-tokens 128
+```
+
+> **tok/s 는 두 배포가 같은 일을 할 때만 비교 가능한 지표입니다.**
+> 서빙 속도로 읽어야 할 값은 **TPOT 와 req/s** 이고, 길이 차이가 보이면
+> `finish_reason` 을 먼저 확인하세요.
 
 원가로 환산하면 knee 기준 **100만 출력 토큰당 $7.29**, 동시성 1 로 쓰면 **$62.5** —
-9.3배입니다. 배칭이 원가의 대부분입니다 ([RESULTS §4](../RESULTS.md)).
+9.3배입니다. 배칭이 원가의 대부분입니다 ([PERFORMANCE §7](../PERFORMANCE.md)).
 
 ## 4. 토큰 뷰어 — 정성 평가
 
@@ -167,7 +200,8 @@ delta 키별 등장 횟수: {'role': 1, 'reasoning': 4920}
 | 답이 안 나오고 잘림 | [#16](../GOTCHAS.md#16) — `max_tokens` 가 사고보다 작음 |
 | 빈 응답처럼 보임 | [#14](../GOTCHAS.md#14) — scoringUri 모양 |
 | 파인튜닝했더니 tok/s 가 떨어짐 | §3 — TPOT 와 req/s 를 보세요 |
-| 내 숫자가 표와 다름 | [RESULTS](../RESULTS.md) — ±20% 는 정상, 그 밖이면 여기 |
+| 내 숫자가 표와 다름 | [PERFORMANCE](../PERFORMANCE.md) — ±20% 는 정상, 그 밖이면 여기 |
+| tok/s 가 기대보다 낮음 | 먼저 `compare_deployments.py` 로 `finish_reason` 확인 — 짧은 것과 느린 것은 다릅니다 (§3) |
 | 손으로 만든 프롬프트로 판정하고 싶을 때 | §68.4 — `POST /tokenize` 가 정답을 알려줍니다 |
 
 ## 정리 — 반드시

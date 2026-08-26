@@ -50,6 +50,7 @@ DELEGATES = {
     ("deploy",): "ffsft.deploy.endpoint",
     ("lifecycle",): "ffsft.deploy.lifecycle",
     ("loadtest",): "ffsft.serve.loadtest",
+    ("plot",): "ffsft.serve.plot",
     ("serve-local",): "ffsft.serve.local",
     ("merge", "local"): "ffsft.deploy.merge",
 }

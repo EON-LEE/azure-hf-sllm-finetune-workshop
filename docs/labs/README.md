@@ -30,7 +30,7 @@
 
 ## 여러분의 숫자가 맞나
 
-각 Lab 의 "기대 출력" 은 [`docs/RESULTS.md`](../RESULTS.md) 의 기준 회차를 잘라 붙인
+각 Lab 의 "기대 출력" 은 [`docs/PERFORMANCE.md`](../PERFORMANCE.md) 의 기준 회차를 잘라 붙인
 것입니다. 전체 로드테스트 표(5레벨 × 두 배포)와 `--output` 원자료 JSON 이 거기 있습니다.
 
 ## 실습 중 언제든

@@ -271,7 +271,7 @@ uv run ffsft-loadtest \
 ```
 
 실측 비교 (§66.2, 각 100요청 / 실패 0 — 5레벨 전체와 원자료 JSON 은
-[`docs/RESULTS.md`](../RESULTS.md)):
+[`docs/PERFORMANCE.md`](../PERFORMANCE.md)):
 
 ```
             blue (베이스)                   green (파인튜닝)
@@ -286,9 +286,10 @@ peak tok/s 가 204.3 → 189.0 으로 **7.5% 낮습니다. 이걸 성능 저하�
 - **TPOT 는 소수점 넷째 자리까지 같습니다.** 토큰 하나 뽑는 비용은 안 변했습니다
 - **req/s 는 green 이 오히려 높습니다** (c=16 에서 1.71 vs 1.68)
 - 차이는 전부 **응답 길이**입니다 — blue 121.8 vs green 110.6 tok/req.
-  blue 는 영어 사고과정을 `content` 에 쏟아내서 토큰 수가 부풀어 있었습니다.
-  green 은 `REASONING_PARSER=qwen3` 로 그걸 `reasoning` 필드로 빼냅니다
-  ([GOTCHAS #15](../GOTCHAS.md#15))
+  **다만 이 회차는 8개 프롬프트 중 6개가 양쪽 다 `max_tokens=128` 상한에서
+  잘렸습니다.** 잘린 응답의 토큰 수는 길이가 아니라 상한이므로, 이 격차를
+  "파인튜닝이 응답을 짧게 만들었다" 로 읽으면 안 됩니다
+  ([PERFORMANCE §6.1](../PERFORMANCE.md) 이 프롬프트 단위로 분해합니다)
 
 **tok/s 는 두 배포가 같은 일을 할 때만 비교 가능한 지표입니다.** 서빙 속도로 읽어야 할
 값은 TPOT 와 req/s 이고, 그 둘로 보면 green 은 동등하거나 근소하게 낫습니다.
@@ -296,6 +297,7 @@ e2e p95 도 green 이 짧습니다 — c=16 에서 6.471 vs 6.987초.
 
 > 결과를 파일로 남기려면 `--output my-loadtest.json` 을 붙이세요. 이 리포의
 > [`docs/results/`](../results/) 에 있는 두 JSON 이 같은 플래그의 산출물입니다.
+> `uv run ffsft plot mine=my-loadtest.json` 이 그 JSON 을 그래프로 그립니다.
 
 ---
 

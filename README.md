@@ -14,7 +14,7 @@ TTFT/TPOT 를 재는 것까지 — 한 리포에서 끝까지 돕니다.
 ## 실측 기준선
 
 이 리포의 숫자는 전부 라이브 Azure 구독에서 잰 것입니다. 근거는 `docs/JOURNAL.md` 절 번호.
-**전체 로드테스트 결과와 원자료는 [`docs/RESULTS.md`](docs/RESULTS.md)** 에 있습니다.
+**전체 로드테스트 결과·그래프·원자료는 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)** 에 있습니다.
 
 | 항목 | 실측값 | 근거 |
 |---|---|---|
@@ -23,8 +23,9 @@ TTFT/TPOT 를 재는 것까지 — 한 리포에서 끝까지 돕니다.
 | 학습 파라미터 | 116.73M (**0.79%**) | §20 |
 | 관리형 엔드포인트 서빙 (A100 1대, thinking OFF) | **peak 189 tok/s**, knee=16, p95 TTFT 1.32초 | §66 |
 | 같은 부하, 베이스 모델 대조군 | peak 204 tok/s, **TPOT 는 동일** (0.0407초) | §66.2 |
+| tok/s 격차 223토큰의 출처 | **프롬프트 1개** — 나머지는 `max_tokens` 상한에 눌림 | §70 |
 | 로드테스트 성공률 | **200/200, 실패 0** (2배포 × 5레벨 × 20요청) | §66 |
-| 출력 토큰 원가 (knee 기준) | **$7.29 / 100만 토큰** | [RESULTS §4](docs/RESULTS.md) |
+| 출력 토큰 원가 (knee 기준) | **$7.29 / 100만 토큰** | [PERFORMANCE §7](docs/PERFORMANCE.md) |
 | 사고 토큰 스트림 | SSE 4921 프레임 중 4920 이 `reasoning` 필드 | §68 |
 | 3개 게이트 (학습 → 배포 → 로드테스트) | 전부 통과 | §66 |
 
@@ -165,7 +166,7 @@ models:
 |---|---|
 | [`docs/labs/`](docs/labs/) | **실습. 여기부터.** lab0 ~ lab8 |
 | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) | **막혔을 때.** 실제로 밟은 함정 18개 |
-| [`docs/RESULTS.md`](docs/RESULTS.md) | **내 숫자가 맞나.** 기준 회차 실측 전체 + 원자료 JSON |
+| [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | **내 숫자가 맞나.** 성능 평가 — 그래프 5장 + 원자료 JSON |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | 손으로 올리고 내리는 절차 |
 | [`docs/SERVING.md`](docs/SERVING.md) | 서빙 패턴 레퍼런스 |
 | [`docs/design/PLAN.md`](docs/design/PLAN.md) | 왜 이렇게 설계했나 |

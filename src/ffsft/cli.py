@@ -46,6 +46,7 @@ _COMMAND_ORDER = [
     "deploy",       # Lab 5
     "lifecycle",    # Lab 5, and Lab 7 -- `down` is not optional
     "loadtest",     # Lab 6
+    "plot",         # Lab 6  the report as SVG
     "merge",        # Lab 8
     "serve-local",  # no GPU, no Azure
 ]
@@ -422,6 +423,12 @@ def lifecycle_cmd(ctx: typer.Context) -> None:
 def loadtest_cmd(ctx: typer.Context) -> None:
     """TTFT / TPOT / knee against an OpenAI-compatible URL. Same as `ffsft-loadtest`."""
     _run(_module_main("ffsft.serve.loadtest", "serve"), ctx.args, "ffsft loadtest")
+
+
+@app.command("plot", context_settings=_PASSTHROUGH, add_help_option=False)
+def plot_cmd(ctx: typer.Context) -> None:
+    """Render a `loadtest --output` report as SVG charts. Same as `ffsft-plot`."""
+    _run(_module_main("ffsft.serve.plot", "serve"), ctx.args, "ffsft plot")
 
 
 @app.command("serve-local", context_settings=_PASSTHROUGH, add_help_option=False)

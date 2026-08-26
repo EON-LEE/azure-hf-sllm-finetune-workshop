@@ -84,6 +84,7 @@ dev = [
 ffsft = "ffsft.cli:app"
 ffsft-lifecycle = "ffsft.deploy.lifecycle:main"
 ffsft-loadtest = "ffsft.serve.loadtest:main"
+ffsft-plot = "ffsft.serve.plot:main"
 ffsft-serve-local = "ffsft.serve.local:main"
 ffsft-eval = "ffsft.eval.run:main"
 ffsft-merge = "ffsft.deploy.merge:main"
