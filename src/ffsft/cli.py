@@ -1,12 +1,28 @@
 """`ffsft` command line entry point.
 
-Exposes the registry layers: models, benchmarks and serving patterns. Train /
-eval / deploy are separate module entry points (`python -m ffsft.train.qlora`,
-`ffsft-eval`, `ffsft-deploy`, `ffsft-loadtest`) because they need heavyweight
-optional dependencies that this CLI must import lazily or not at all.
+Two kinds of command live here.
+
+The registry commands (`models`, `serving`, `bench`) read `configs/*.yaml` and
+answer questions about what can be trained, served and measured. They are the
+original contents of this module.
+
+The rest **delegate**. Until they existed, `ffsft --help` listed three
+read-only commands while every command a workshop participant actually needs
+lived behind six other console scripts and two files in `scripts/` -- eleven
+entry points, and no way to discover them from the one that is on PATH. Each
+delegating command swaps `sys.argv` and calls the same `main()` the console
+script calls, so `ffsft loadtest` and `ffsft-loadtest` are the same code path
+and cannot drift. The old names all still work; the labs use them.
+
+**Imports for the delegates stay inside the functions.** This module has to
+import with only the registry dependencies present -- `uv run ffsft models
+list` runs on a laptop with no `train`, `azure` or `serve` extra installed,
+and a module-level `import torch` here would break every command for everyone.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 import typer
 from rich.console import Console
@@ -16,7 +32,34 @@ from .deploy import get_serving_registry
 from .eval import get_benchmark_registry
 from .models import Provider, TuningMethod, get_registry
 
+#: `ffsft --help` is the first thing a workshop participant runs, so it is
+#: ordered by the lab it belongs to rather than by how Click happens to collect
+#: commands -- which is registration order for plain commands and *after all of
+#: them* for sub-groups, putting `models` (Lab 0) below `loadtest` (Lab 6).
+#: A name missing from this list still lists, at the end.
+_COMMAND_ORDER = [
+    "models",       # Lab 0  what can be trained
+    "serving",      # Lab 0  what can be served
+    "bench",        # Lab 0  what can be measured
+    "train",        # Lab 2
+    "eval",         # Lab 3
+    "deploy",       # Lab 5
+    "lifecycle",    # Lab 5, and Lab 7 -- `down` is not optional
+    "loadtest",     # Lab 6
+    "merge",        # Lab 8
+    "serve-local",  # no GPU, no Azure
+]
+
+
+class _LabOrderGroup(typer.core.TyperGroup):
+    def list_commands(self, ctx) -> list[str]:
+        names = super().list_commands(ctx)
+        return sorted(names, key=lambda n: (_COMMAND_ORDER.index(n)
+                                            if n in _COMMAND_ORDER else len(_COMMAND_ORDER), n))
+
+
 app = typer.Typer(
+    cls=_LabOrderGroup,
     add_completion=False,
     help="Fabric + Foundry sLLM fine-tuning asset.",
     no_args_is_help=True,
@@ -249,6 +292,142 @@ def bench_suites() -> None:
         runnable = sum(1 for s in specs if s.runnable_by_harness)
         table.add_row(key, ", ".join(s.key for s in specs), f"{runnable}/{len(specs)}")
     console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# Delegating commands. Nothing below reimplements anything -- see the module
+# docstring for why they exist and why every import is function-local.
+# ---------------------------------------------------------------------------
+
+#: Hand the whole tail of the command line to the delegate untouched. Without
+#: `add_help_option=False` Typer would answer `--help` itself and the
+#: participant would never see the flags that matter.
+_PASSTHROUGH = {"allow_extra_args": True, "ignore_unknown_options": True}
+
+
+def _run(main: Callable[[], int | None], argv: list[str], prog: str) -> None:
+    """Call a console-script `main()` with `argv`, then exit with its code.
+
+    `sys.argv` is swapped rather than passed as a parameter because all but one
+    of these `main()`s take no arguments and read `sys.argv` themselves. It is
+    restored in a `finally` so a delegate that raises does not leave the
+    process holding a rewritten command line.
+    """
+    import sys
+
+    saved = sys.argv
+    sys.argv = [prog, *argv]
+    try:
+        code = main()
+    finally:
+        sys.argv = saved
+    raise typer.Exit(code or 0)
+
+
+def _module_main(module: str, extra: str) -> Callable[[], int | None]:
+    """Import a delegate's module and return its `main`.
+
+    Names the extra on ImportError. The bare failure is
+    `ModuleNotFoundError: No module named 'httpx'`, which does not tell anyone
+    on a fresh checkout that the fix is `uv sync --extra serve`.
+    """
+    import importlib
+
+    try:
+        return importlib.import_module(module).main
+    except ImportError as exc:
+        console.print(
+            f"[red]{module} is not importable:[/red] {exc}\n"
+            f"This command needs the '{extra}' extra: [bold]uv sync --extra {extra}[/bold]"
+        )
+        raise typer.Exit(1) from exc
+
+
+def _script_main(name: str) -> Callable[[], int | None]:
+    """Load `scripts/<name>.py` and return its `main`.
+
+    The submit scripts are not importable modules and are not packaged: they
+    are client-side, they are what a participant reads before spending money,
+    and they live next to the shell tooling for that reason. Loading one by
+    path is already how `tests/test_submit_training_guard.py` drives it -- this
+    is the same loader, not a second convention.
+
+    Only reachable from a checkout. An installed wheel has no `scripts/`, so
+    say that instead of raising `FileNotFoundError` from importlib.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / f"{name}.py"
+    if not path.is_file():
+        console.print(
+            f"[red]{path} not found.[/red] The submit scripts ship in the repo, "
+            f"not in the package -- run this from a checkout."
+        )
+        raise typer.Exit(1)
+    spec = importlib.util.spec_from_file_location(f"ffsft_script_{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.main
+
+
+train_app = typer.Typer(no_args_is_help=True, help="Submit training to Azure ML (Lab 2, Lab 3).")
+merge_app = typer.Typer(no_args_is_help=True, help="Fold a LoRA adapter into base weights (Lab 8).")
+app.add_typer(train_app, name="train")
+app.add_typer(merge_app, name="merge")
+
+
+@train_app.command("submit", context_settings=_PASSTHROUGH, add_help_option=False)
+def train_submit(ctx: typer.Context) -> None:
+    """Submit a QLoRA job. Same as `python scripts/submit_training.py`."""
+    _run(_script_main("submit_training"), ctx.args, "ffsft train submit")
+
+
+@merge_app.command("submit", context_settings=_PASSTHROUGH, add_help_option=False)
+def merge_submit(ctx: typer.Context) -> None:
+    """Submit the merge as a job. Same as `python scripts/submit_merge.py`."""
+    _run(_script_main("submit_merge"), ctx.args, "ffsft merge submit")
+
+
+@merge_app.command("local", context_settings=_PASSTHROUGH, add_help_option=False)
+def merge_local(ctx: typer.Context) -> None:
+    """Run the merge here rather than submitting it. Same as `ffsft-merge`.
+
+    This is the code the job runs on the node. Merging a 27B needs ~54 GB of
+    bf16 weights materialised, so on a workstation it is a way to merge a small
+    model, not the 27B.
+    """
+    _run(_module_main("ffsft.deploy.merge", "train"), ctx.args, "ffsft merge local")
+
+
+@app.command("eval", context_settings=_PASSTHROUGH, add_help_option=False)
+def eval_cmd(ctx: typer.Context) -> None:
+    """Score base against tuned on identical items. Same as `ffsft-eval`."""
+    _run(_module_main("ffsft.eval.run", "eval"), ctx.args, "ffsft eval")
+
+
+@app.command("deploy", context_settings=_PASSTHROUGH, add_help_option=False)
+def deploy_cmd(ctx: typer.Context) -> None:
+    """check | deploy-online | deploy-batch | shift. Same as `ffsft-deploy`."""
+    _run(_module_main("ffsft.deploy.endpoint", "azure"), ctx.args, "ffsft deploy")
+
+
+@app.command("lifecycle", context_settings=_PASSTHROUGH, add_help_option=False)
+def lifecycle_cmd(ctx: typer.Context) -> None:
+    """status | up | down. Same as `ffsft-lifecycle`. Run `status` often."""
+    _run(_module_main("ffsft.deploy.lifecycle", "azure"), ctx.args, "ffsft lifecycle")
+
+
+@app.command("loadtest", context_settings=_PASSTHROUGH, add_help_option=False)
+def loadtest_cmd(ctx: typer.Context) -> None:
+    """TTFT / TPOT / knee against an OpenAI-compatible URL. Same as `ffsft-loadtest`."""
+    _run(_module_main("ffsft.serve.loadtest", "serve"), ctx.args, "ffsft loadtest")
+
+
+@app.command("serve-local", context_settings=_PASSTHROUGH, add_help_option=False)
+def serve_local_cmd(ctx: typer.Context) -> None:
+    """CPU transformers server, OpenAI-compatible. Same as `ffsft-serve-local`."""
+    _run(_module_main("ffsft.serve.local", "train"), ctx.args, "ffsft serve-local")
 
 
 if __name__ == "__main__":
