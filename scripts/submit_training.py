@@ -35,6 +35,17 @@ def main() -> int:
     ap.add_argument("--batch-size", type=int, default=1)
     ap.add_argument("--grad-accum", type=int, default=16)
     ap.add_argument("--rank", type=int, default=16)
+    # `JobSpec` chains `train && eval` into one node allocation, so scoring the
+    # adapter costs no second image pull and no trip through the datastore.
+    # Section 23 measured the whole chain at ~$1.5 on A100 LowPriority.
+    ap.add_argument(
+        "--eval-suite", default=None,
+        help="Score base vs tuned in the same job (e.g. ko_fast). Omit to train only.",
+    )
+    ap.add_argument(
+        "--eval-limit", type=int, default=None,
+        help="Examples per benchmark task. Without it a 27B suite is hours of GPU.",
+    )
     ap.add_argument("--preflight", action="store_true", help="run the node self-test only")
     ap.add_argument(
         "--no-outputs",
@@ -67,6 +78,8 @@ def main() -> int:
         batch_size=args.batch_size,
         grad_accum=args.grad_accum,
         rank=args.rank,
+        eval_suite=args.eval_suite,
+        eval_limit=args.eval_limit,
         preflight=args.preflight,
         mount_outputs=not args.no_outputs,
     )
