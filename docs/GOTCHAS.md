@@ -228,6 +228,7 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
 - 대처: `enable_thinking` 을 켤 거면 `max_tokens` 를 넉넉히. smoke 가
   `budget used 108/400 (27%)` 처럼 소진율을 찍는다
 - 벤치 주의: thinking ON/OFF 는 **다른 눈금자**다. 이 리포의 189 tok/s 는 OFF 측정치
+  ([RESULTS §2](RESULTS.md) 가 전체 표, §5 가 ON 실측)
 - 근거: §67, §55
 
 ## <a id="17"></a>17. 클러스터를 다시 만들면 권한이 둘 다 날아간다

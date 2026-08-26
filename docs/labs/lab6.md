@@ -56,7 +56,10 @@ uv run ffsft-loadtest \
 
 > `--api-key` 는 기본값이 `$FFSFT_ENDPOINT_KEY` 입니다. **키를 명령줄에 적지 마세요.**
 
-## 2. 기대 출력 (§57.6 실측 — A100 NC24ads 1 인스턴스, 27B bf16, max_model_len 8192)
+## 2. 기대 출력 (실측 — A100 NC24ads 1 인스턴스, 27B bf16, max_model_len 8192)
+
+아래는 `blue` 5레벨 중 요약 컬럼입니다. **p99·e2e p50 까지 포함한 전체 표와
+`--output` 원자료 JSON 은 [`docs/RESULTS.md` §2](../RESULTS.md)** 에 있습니다.
 
 ```
  conc    ok  fail  TTFT p50  TTFT p95  TPOT p50   e2e p95     tok/s    req/s
@@ -74,7 +77,7 @@ uv run ffsft-loadtest \
 
 ## 3. ⚠️ tok/s 로 두 모델을 비교하면 틀린다 (§66.2)
 
-같은 엔드포인트의 두 배포를 나란히 재면:
+같은 엔드포인트의 두 배포를 나란히 재면 (양 끝 레벨만; 5레벨 전체는 [RESULTS §3](../RESULTS.md)):
 
 ```
             blue (베이스)                   green (파인튜닝)
@@ -95,6 +98,9 @@ green 은 `REASONING_PARSER=qwen3` 로 그걸 분리합니다.
 
 > **tok/s 는 같은 일을 할 때만 비교 가능한 지표인데, 두 배포는 같은 일을 하고 있지
 > 않습니다.** 서빙 속도로 읽어야 할 값은 **TPOT 와 req/s** 입니다.
+
+원가로 환산하면 knee 기준 **100만 출력 토큰당 $7.29**, 동시성 1 로 쓰면 **$62.5** —
+9.3배입니다. 배칭이 원가의 대부분입니다 ([RESULTS §4](../RESULTS.md)).
 
 ## 4. 토큰 뷰어 — 정성 평가
 
@@ -161,6 +167,7 @@ delta 키별 등장 횟수: {'role': 1, 'reasoning': 4920}
 | 답이 안 나오고 잘림 | [#16](../GOTCHAS.md#16) — `max_tokens` 가 사고보다 작음 |
 | 빈 응답처럼 보임 | [#14](../GOTCHAS.md#14) — scoringUri 모양 |
 | 파인튜닝했더니 tok/s 가 떨어짐 | §3 — TPOT 와 req/s 를 보세요 |
+| 내 숫자가 표와 다름 | [RESULTS](../RESULTS.md) — ±20% 는 정상, 그 밖이면 여기 |
 | 손으로 만든 프롬프트로 판정하고 싶을 때 | §68.4 — `POST /tokenize` 가 정답을 알려줍니다 |
 
 ## 정리 — 반드시

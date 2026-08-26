@@ -270,7 +270,8 @@ uv run ffsft-loadtest \
    --requests-per-level 20
 ```
 
-실측 비교 (§66.2, 각 100요청 / 실패 0):
+실측 비교 (§66.2, 각 100요청 / 실패 0 — 5레벨 전체와 원자료 JSON 은
+[`docs/RESULTS.md`](../RESULTS.md)):
 
 ```
             blue (베이스)                   green (파인튜닝)
@@ -291,6 +292,10 @@ peak tok/s 가 204.3 → 189.0 으로 **7.5% 낮습니다. 이걸 성능 저하�
 
 **tok/s 는 두 배포가 같은 일을 할 때만 비교 가능한 지표입니다.** 서빙 속도로 읽어야 할
 값은 TPOT 와 req/s 이고, 그 둘로 보면 green 은 동등하거나 근소하게 낫습니다.
+e2e p95 도 green 이 짧습니다 — c=16 에서 6.471 vs 6.987초.
+
+> 결과를 파일로 남기려면 `--output my-loadtest.json` 을 붙이세요. 이 리포의
+> [`docs/results/`](../results/) 에 있는 두 JSON 이 같은 플래그의 산출물입니다.
 
 ---
 
