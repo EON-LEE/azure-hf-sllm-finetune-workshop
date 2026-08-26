@@ -1322,6 +1322,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     online.add_argument("--force", action="store_true", help="Ignore the quota precheck.")
 
+    shift = sub.add_parser(
+        "shift",
+        help="Point the endpoint URL at one deployment (blue/green cutover).",
+    )
+    shift.add_argument("--endpoint", required=True)
+    shift.add_argument(
+        "--to",
+        required=True,
+        help="Deployment name to send 100%% of traffic to. Every sibling goes to 0.",
+    )
+    shift.add_argument(
+        "--allow-unfinished",
+        action="store_true",
+        help="Shift even if the deployment is not Succeeded. For a rollback to a "
+        "deployment mid-update; never for a first cutover.",
+    )
+
     batch = sub.add_parser("deploy-batch", help="Batch endpoint on the LowPriority cluster.")
     batch.add_argument("--endpoint", default="ffsft-batch")
     batch.add_argument("--model-uri", required=True)
@@ -1341,6 +1358,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "check":
         return cmd_check(args)
+    if args.cmd == "shift":
+        from ..azure_ml import AzureTarget, get_ml_client
+        from .traffic import shift_traffic
+
+        client = get_ml_client(AzureTarget.from_env())
+        after = shift_traffic(
+            client,
+            args.endpoint,
+            args.to,
+            require_succeeded=not args.allow_unfinished,
+        )
+        print(f"{args.endpoint} now routes to {args.to}: {after}")
+        return 0
     if args.cmd == "deploy-online":
         # Exactly one weight source. None leaves vLLM with nothing to serve;
         # more than one is a contradiction the deployment would resolve silently.
