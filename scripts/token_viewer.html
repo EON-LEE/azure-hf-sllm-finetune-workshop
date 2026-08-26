@@ -1,0 +1,466 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>token viewer</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f26; --line: #2b2f38;
+    --fg: #e6e8ec; --dim: #878d9a;
+    --content: #4ea1ff; --think: #f0a04b; --bad: #ff6b6b; --ok: #55d187;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-size: 13px; }
+  header { padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+  .sub { color: var(--dim); font-size: 12px; }
+  main { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 62px); }
+  aside { padding: 16px; border-right: 1px solid var(--line); }
+  section { padding: 16px; overflow: hidden; }
+  label { display: block; margin: 12px 0 4px; color: var(--dim); font-size: 11px;
+          text-transform: uppercase; letter-spacing: .06em; }
+  textarea, input, select {
+    width: 100%; background: var(--panel); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 5px; padding: 7px 8px;
+    font: inherit; font-size: 12px;
+  }
+  textarea { height: 74px; resize: vertical; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+  .row input[type=checkbox] { width: auto; }
+  .row label { margin: 0; text-transform: none; letter-spacing: 0; font-size: 12px;
+               color: var(--fg); }
+  button {
+    width: 100%; margin-top: 16px; padding: 9px; border: 0; border-radius: 5px;
+    background: var(--content); color: #08111c; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { background: var(--line); color: var(--dim); cursor: default; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+           gap: 8px; margin-bottom: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+          padding: 9px 10px; }
+  .card .k { color: var(--dim); font-size: 10px; text-transform: uppercase;
+             letter-spacing: .06em; }
+  .card .v { font-size: 17px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .card.warn { border-color: var(--bad); }
+  .card.warn .v { color: var(--bad); }
+  .legend { display: flex; gap: 14px; margin-bottom: 8px; color: var(--dim);
+            font-size: 11px; align-items: center; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px;
+         margin-right: 5px; vertical-align: -1px; }
+  #chips { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+           padding: 10px; min-height: 130px; max-height: 34vh; overflow-y: auto;
+           line-height: 2.1; }
+  .chip { display: inline-block; border-radius: 4px; padding: 1px 6px; margin: 0 3px 3px 0;
+          font-size: 12px; white-space: pre; border: 1px solid transparent; }
+  .chip.content { background: rgba(78,161,255,.16); border-color: rgba(78,161,255,.5); }
+  .chip.reasoning_content { background: rgba(240,160,75,.16);
+                            border-color: rgba(240,160,75,.5); }
+  .chip .gap { color: var(--dim); font-size: 9px; margin-left: 5px;
+               font-variant-numeric: tabular-nums; }
+  .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 14px; }
+  .pane h2 { margin: 0 0 6px; font-size: 11px; color: var(--dim);
+             text-transform: uppercase; letter-spacing: .06em; }
+  .pane .body { background: var(--panel); border: 1px solid var(--line);
+                border-radius: 6px; padding: 10px; min-height: 90px; max-height: 26vh;
+                overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+  .pane.think .body { color: var(--think); }
+  .empty { color: var(--dim); font-style: italic; }
+  #err { color: var(--bad); margin-top: 10px; white-space: pre-wrap; }
+  .note { margin-top: 14px; color: var(--dim); font-size: 11px; line-height: 1.6; }
+</style>
+
+<header>
+  <h1>token viewer</h1>
+  <div class="sub">
+    SSE 델타를 하나씩 그대로 보여줍니다. 색은 그 토큰이 실려온 <b>필드</b>입니다 —
+    파랑 <code>delta.content</code>, 주황 <code>delta.reasoning_content</code>.
+    upstream: <span id="up">…</span> · model: <span id="mdl">…</span>
+  </div>
+</header>
+
+<main>
+  <aside>
+    <label for="prompt">prompt</label>
+    <textarea id="prompt">세종대왕에 대해 한 문단으로 설명해줘.</textarea>
+
+    <label for="route">route</label>
+    <select id="route">
+      <option value="chat" selected>/chat/completions — 파서 통과 (클라이언트가 받는 것)</option>
+      <option value="raw">/completions — 파서 우회 (모델이 뱉은 원문, &lt;think&gt; 보임)</option>
+    </select>
+
+    <label for="dep">deployment</label>
+    <select id="dep">
+      <option value="" selected>(엔드포인트 기본 = 트래픽 분배)</option>
+      <option value="green">green — 파인튜닝, reasoning_parser=qwen3</option>
+      <option value="blue">blue — 베이스, 파서 없음</option>
+    </select>
+
+    <label for="maxtok">max_tokens</label>
+    <input id="maxtok" type="number" value="256" min="1" max="2048">
+
+    <label for="think">thinking</label>
+    <select id="think">
+      <option value="default">(안 보냄) = 서버 기본값 = ON</option>
+      <option value="empty">chat_template_kwargs: {}  = ON</option>
+      <option value="true">enable_thinking: true</option>
+      <option value="false" selected>enable_thinking: false (기본 — 유일하게 바로 보임)</option>
+    </select>
+
+    <div class="row">
+      <input id="stream" type="checkbox" checked>
+      <label for="stream">stream</label>
+    </div>
+
+    <button id="go">보내기</button>
+    <div id="err"></div>
+
+    <div class="note">
+      <b>사고 토큰의 필드 이름은 <code>reasoning</code> 입니다</b> —
+      <code>reasoning_content</code> 가 아닙니다. 이 배포에서 SSE 4921 프레임 중
+      4920 개가 <code>delta.reasoning</code> 이었고 옛 이름은 0 개였습니다.
+      옛 이름만 읽으면 4920 개가 도착하는 동안 화면이 빈 채로 남습니다 —
+      67 절이 "스트림이 침묵한다" 고 적은 게 그 오독이었습니다. 이 페이지는
+      두 철자를 다 읽습니다.
+      <br><br>
+      <b>thinking 은 고장나지 않았습니다.</b> ON 으로 실측하면 사고 첫 토큰까지
+      1.04 초, 답 첫 토큰까지 2.42 초, <code>finish=stop</code> 입니다. 순정
+      베이스(blue)와 파인튜닝(green)도 동일하게 동작합니다.
+      진짜 제약은 <b>예산</b>입니다 — 어려운 문제는 사고에만 4908 토큰을 씁니다.
+      max_tokens 를 작게 잡으면 <code>finish=length</code> 로 잘려 답이 시작조차
+      못 합니다. 이 리포가 <code>enable_thinking: false</code> 를 못박은 건
+      버그 우회가 아니라 그 비용 결정입니다.
+      <br><br>
+      <b>route = /completions</b> 는 템플릿도 파서도 안 거칩니다. 서버가
+      <code>/tokenize</code> 로 알려준 프레임을 그대로 재조립해 보내므로
+      <code>&lt;think&gt;</code> 태그까지 원문으로 보입니다. deployment 를
+      blue/green 으로 바꾸면 트래픽 분배와 무관하게 두 모델을 직접 비교합니다.
+      <br><br>
+      <b>max_tokens 사용</b> 카드는 청크 수가 아니라 서버가 청구한
+      <code>usage.completion_tokens</code> 입니다. 빨개지면 finish_reason=length —
+      모델이 끝낸 게 아니라 상한에 잘린 것입니다. VERIFIED 68.
+    </div>
+  </aside>
+
+  <section>
+    <div class="cards">
+      <div class="card"><div class="k">TTFT</div><div class="v" id="m-ttft">–</div></div>
+      <div class="card"><div class="k">chunks</div><div class="v" id="m-n">0</div></div>
+      <div class="card"><div class="k">gap p50</div><div class="v" id="m-p50">–</div></div>
+      <div class="card"><div class="k">gap p95</div><div class="v" id="m-p95">–</div></div>
+      <div class="card"><div class="k">tok/s</div><div class="v" id="m-tps">–</div></div>
+      <div class="card"><div class="k">e2e</div><div class="v" id="m-e2e">–</div></div>
+      <div class="card" id="c-cap"><div class="k">max_tokens 사용</div>
+        <div class="v" id="m-cap">–</div></div>
+      <div class="card"><div class="k">finish</div><div class="v" id="m-fin">–</div></div>
+      <div class="card" id="c-old"><div class="k">old meter</div>
+        <div class="v" id="m-old">0</div></div>
+      <div class="card"><div class="k">new meter</div>
+        <div class="v" id="m-new">0</div></div>
+    </div>
+
+    <div class="legend">
+      <span><i class="dot" style="background:var(--content)"></i>content</span>
+      <span><i class="dot" style="background:var(--think)"></i>reasoning_content</span>
+      <span>· 칩 옆 작은 숫자는 직전 청크 이후 경과 ms</span>
+    </div>
+    <div id="chips"><span class="empty">아직 아무것도 안 왔습니다.</span></div>
+
+    <div class="panes">
+      <div class="pane think">
+        <h2>사고 토큰 — reasoning_content / &lt;think&gt; 블록</h2>
+        <div class="body" id="p-think"><span class="empty">–</span></div>
+      </div>
+      <div class="pane">
+        <h2>content (사용자가 보는 답)</h2>
+        <div class="body" id="p-content"><span class="empty">–</span></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+// Verbatim from GET /tokenize on this endpoint (identical on blue and green, so
+// it comes from the base Qwen3 template, not from the fine-tune). thinking ON
+// costs 40 prompt tokens before the user says anything -- and it is an explicit
+// instruction to reason at length, which is why `</think>` never arrives.
+const THINK_SYS = 'Reasoning effort is set to xhigh. Please think carefully through '
+  + 'the task, validate key assumptions, consider plausible alternatives, and '
+  + 'prioritize correctness, consistency, and clarity in the final answer.';
+let MODEL = 'local';
+fetch('/upstream').then(r => r.json()).then(j => {
+  $('up').textContent = j.upstream;
+  MODEL = j.model || 'local';
+  $('mdl').textContent = MODEL;
+})
+  .catch(() => { $('up').textContent = '?'; });
+
+function pct(sorted, p) {
+  if (!sorted.length) return null;
+  const i = Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)));
+  return sorted[i];
+}
+const ms = (s) => s === null ? '–' : (s * 1000).toFixed(0) + ' ms';
+
+// Deliberately two counters, not one. `old` is what bench_job counted before the
+// fix -- delta.content only. `new` counts any field that carried text. When they
+// disagree, the gap between them IS the bug.
+let st;
+function reset() {
+  st = { t0: 0, ttft: null, last: 0, gaps: [], n: 0, old: 0, tot: 0,
+         think: '', content: '', finish: null,
+         usage: null, raw: '', closed: false };
+  $('chips').innerHTML = '<span class="empty">…</span>';
+  $('p-think').innerHTML = '<span class="empty">–</span>';
+  $('p-content').innerHTML = '<span class="empty">–</span>';
+  for (const k of ['ttft', 'p50', 'p95', 'tps', 'e2e', 'cap', 'fin']) $('m-' + k).textContent = '–';
+  $('c-cap').classList.remove('warn');
+  $('m-n').textContent = '0'; $('m-old').textContent = '0'; $('m-new').textContent = '0';
+  $('c-old').classList.remove('warn');
+  $('err').textContent = '';
+}
+
+function paint() {
+  const g = [...st.gaps].sort((a, b) => a - b);
+  $('m-ttft').textContent = ms(st.ttft);
+  $('m-n').textContent = st.n;
+  $('m-p50').textContent = ms(pct(g, 0.5));
+  $('m-p95').textContent = ms(pct(g, 0.95));
+  const el = (performance.now() - st.t0) / 1000;
+  $('m-e2e').textContent = el.toFixed(2) + ' s';
+  $('m-tps').textContent = el > 0 ? (st.tot / el).toFixed(1) : '–';
+  $('m-old').textContent = st.old;
+  $('m-new').textContent = st.tot;
+  $('c-old').classList.toggle('warn', st.tot > 0 && st.old === 0);
+
+  // The cap matters because hitting it is invisible otherwise: the answer just
+  // stops mid-sentence, and under the reasoning parser it does not arrive at
+  // all. `completion_tokens` comes from the server, not from counting chips --
+  // chips are chunks, and a chunk is not a token.
+  const mt = Number($('maxtok').value);
+  const ct = st.usage ? st.usage.completion_tokens : null;
+  if (ct === null || ct === undefined) {
+    $('m-cap').textContent = st.tot ? '≥' + st.tot + ' / ' + mt : '–';
+  } else {
+    $('m-cap').textContent = ct + ' / ' + mt + '  (' + Math.round(100 * ct / mt) + '%)';
+  }
+  $('c-cap').classList.toggle('warn', st.finish === 'length');
+  $('m-fin').textContent = st.finish || '–';
+}
+
+function chip(field, text) {
+  const now = performance.now();
+  if (st.ttft === null) {
+    st.ttft = (now - st.t0) / 1000;
+    $('chips').innerHTML = '';
+  } else {
+    st.gaps.push((now - st.last) / 1000);
+  }
+  st.last = now;
+  st.n += 1; st.tot += 1;
+  if (field === 'content') { st.old += 1; st.content += text; }
+  else { st.think += text; }
+
+  const el = document.createElement('span');
+  el.className = 'chip ' + field;
+  el.textContent = text === '' ? '␀' : text;
+  const gap = document.createElement('span');
+  gap.className = 'gap';
+  gap.textContent = st.gaps.length ? (st.gaps.at(-1) * 1000).toFixed(0) : '0';
+  el.appendChild(gap);
+  const box = $('chips');
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+
+  $('p-think').textContent = st.think || '–';
+  $('p-content').textContent = st.content || '–';
+  paint();
+}
+
+function bodyFor() {
+  const raw = $('route').value === 'raw';
+  const mode = $('think').value;
+  const b = {
+    model: MODEL,
+    max_tokens: Number($('maxtok').value),
+    stream: $('stream').checked,
+  };
+  // Ask the server for the token count. Without this a streamed response
+  // carries no `usage` at all and the cap card can only say "at least N
+  // chunks", which is not the same number.
+  if (b.stream) b.stream_options = { include_usage: true };
+
+  if (raw) {
+    // /completions applies no chat template, so the frame is rebuilt here to
+    // match byte for byte what /tokenize reports the template emitting. Getting
+    // this wrong is not a cosmetic difference: a hand-written frame that omits
+    // the system prompt and the open `<think>` makes the model close the block
+    // immediately, which reads as "the model does not think" when in fact it
+    // was never told to. Both halves are measured -- VERIFIED S68.
+    let prompt = '';
+    if (mode !== 'false') prompt += '<|im_start|>system\n' + THINK_SYS + '<|im_end|>\n';
+    prompt += '<|im_start|>user\n' + $('prompt').value + '<|im_end|>\n<|im_start|>assistant\n';
+    // ON opens the block and leaves it open; OFF closes it before the model
+    // ever runs. That single difference is the whole behaviour.
+    prompt += mode === 'false' ? '<think>\n\n</think>\n\n' : '<think>\n';
+    b.prompt = prompt;
+  } else {
+    b.messages = [{ role: 'user', content: $('prompt').value }];
+    // Four distinct wire shapes, because absent / {} / true / false are four
+    // distinct things to the server and collapsing them is how the bug hid.
+    if (mode === 'empty') b.chat_template_kwargs = {};
+    else if (mode === 'true') b.chat_template_kwargs = { enable_thinking: true };
+    else if (mode === 'false') b.chat_template_kwargs = { enable_thinking: false };
+  }
+  return b;
+}
+
+// On /completions the field distinction does not exist on the wire -- there is
+// one `text` stream. Reasoning is whatever precedes `</think>`, so the split is
+// done here, from the tag, and coloured the same as the parsed route so the two
+// routes can be read side by side.
+function rawChunk(text) {
+  if (!text) return;
+  if (st.closed) { chip('content', text); return; }
+  st.raw += text;
+  const i = st.raw.indexOf('</think>');
+  if (i < 0) { chip('reasoning_content', text); return; }
+  st.closed = true;
+  const tail = st.raw.slice(i + 8);
+  const head = text.slice(0, Math.max(0, text.length - tail.length));
+  if (head) chip('reasoning_content', head);
+  if (tail) chip('content', tail);
+}
+
+async function send() {
+  reset();
+  $('go').disabled = true;
+  st.t0 = performance.now();
+  try {
+    const raw = $('route').value === 'raw';
+    const headers = { 'Content-Type': 'application/json' };
+    // Routes to one deployment regardless of the traffic split, so blue and
+    // green answer the same prompt without anything being shifted.
+    if ($('dep').value) headers['X-Deployment'] = $('dep').value;
+    const res = await fetch(raw ? '/v1/completions' : '/v1/chat/completions', {
+      method: 'POST', headers, body: JSON.stringify(bodyFor()),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t.slice(0, 800));
+    }
+    if (!$('stream').checked) {
+      const j = await res.json();
+      const c = (j.choices && j.choices[0]) || {};
+      st.usage = j.usage || null;
+      st.finish = c.finish_reason || null;
+      if (raw) {
+        rawChunk(c.text || '');
+      } else {
+        const m = c.message || {};
+        const r = m.reasoning ?? m.reasoning_content;
+        if (r) chip('reasoning_content', r);
+        if (m.content) chip('content', m.content);
+      }
+      paint();
+      diagnose();
+      return;
+    }
+    const rd = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') continue;
+        let j;
+        try { j = JSON.parse(data); } catch { continue; }
+        // The final `include_usage` frame has an empty choices list -- read
+        // usage before touching choices[0] or it is lost.
+        if (j.usage) st.usage = j.usage;
+        const c = (j.choices && j.choices[0]) || {};
+        if (raw) {
+          rawChunk(c.text || '');
+        } else {
+          const d = c.delta || {};
+          // Two spellings, because the server picks one and the page cannot
+          // choose for it. This deployment sends `reasoning`; earlier vLLM sent
+          // `reasoning_content`. Reading only the second is exactly how the
+          // stream looked silent while 4920 deltas were arriving (VERIFIED 68).
+          // `??` not `||`: an empty-string delta is a delta.
+          const r = d.reasoning ?? d.reasoning_content;
+          // One chip per field present, so a chunk carrying both shows as both
+          // rather than being silently attributed to whichever we checked first.
+          if (r) chip('reasoning_content', r);
+          if (d.content) chip('content', d.content);
+        }
+        if (c.finish_reason) st.finish = c.finish_reason;
+      }
+    }
+    paint();
+    diagnose();
+  } catch (e) {
+    $('err').textContent = String(e.message || e);
+  } finally {
+    $('go').disabled = false;
+  }
+}
+
+// A stream that ends with nothing in it is the one failure this page must never
+// render as a blank screen: there is no error, no chip, and no way to tell a
+// slow model from a stuck one. So the page says why itself.
+function diagnose() {
+  const raw = $('route').value === 'raw';
+  const mode = $('think').value;
+  const mt = Number($('maxtok').value);
+  const ct = st.usage ? st.usage.completion_tokens : null;
+
+  // A blank screen with a non-zero token count used to mean "the parser ate
+  // them". It did not -- it meant this page was reading the wrong field name.
+  // Now that both spellings are read, a blank screen with tokens billed is a
+  // field name nobody here knows about, and saying so is more useful than
+  // repeating the old explanation.
+  if (st.tot === 0 && ct) {
+    $('err').textContent =
+      '청크 0개인데 서버는 completion_tokens ' + ct + ' 을 청구했습니다 — 이 페이지가 '
+      + '읽는 두 필드(reasoning, reasoning_content, content) 중 어디에도 안 실려 왔습니다. '
+      + '응답의 delta 키를 직접 확인하세요. VERIFIED 68.1 이 같은 방법으로 reasoning 을 찾았습니다.';
+    return;
+  }
+  if (st.n === 0) {
+    $('err').textContent =
+      '청크 0개 — 응답 자체가 비었습니다'
+      + (st.finish ? ' (finish_reason=' + st.finish + ')' : '') + '.';
+    return;
+  }
+  if (st.finish === 'length') {
+    $('err').textContent =
+      'finish_reason=length — max_tokens ' + mt + ' 를 다 썼습니다'
+      + (st.old === 0 ? ', 그리고 답(content)은 시작도 못 했습니다. 사고가 상한 안에서 안 끝난 것입니다'
+                      : ', 답이 중간에 잘렸습니다')
+      + '. 어려운 질문은 사고에만 4908 토큰을 쓴 사례가 있습니다 (VERIFIED 68.6) — '
+      + '모델이 멈춘 게 아니라 상한에 부딪힌 것입니다.';
+    return;
+  }
+  if (raw && st.tot > 0 && !st.closed) {
+    $('err').textContent =
+      '</think> 가 끝까지 안 나왔습니다 — 출력 전체가 사고 블록 안에 있습니다.';
+    return;
+  }
+  if (st.old === 0 && st.n > 0) {
+    $('err').textContent =
+      '사고 토큰만 ' + st.n + ' 개 도착하고 답(content) 은 0 입니다 — 사고가 아직 안 끝났습니다.';
+  }
+}
+
+reset();
+$('go').addEventListener('click', send);
+</script>

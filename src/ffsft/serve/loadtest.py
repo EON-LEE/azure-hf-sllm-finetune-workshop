@@ -117,6 +117,7 @@ async def _one_request(
     temperature: float,
     headers: dict[str, str],
     timeout: float,
+    chat_template_kwargs: dict[str, object] | None = None,
 ) -> RequestResult:
     """Issue one streaming chat completion and time the token stream.
 
@@ -134,6 +135,13 @@ async def _one_request(
         # instead of one inferred from the number of SSE frames.
         "stream_options": {"include_usage": True},
     }
+    if chat_template_kwargs:
+        # The registry declares these per model -- `enable_thinking: false` for
+        # Qwen3 -- and `bench_job.serving_env` already flags the server to match.
+        # Sending them is not a convenience: `train/qlora.py` renders the
+        # training prompts through the same kwargs, so omitting them here
+        # measures the model in a different mode than the one that was tuned.
+        body["chat_template_kwargs"] = dict(chat_template_kwargs)
     started = time.perf_counter()
     ttft = 0.0
     tokens = 0
@@ -166,7 +174,28 @@ async def _one_request(
                     usage_tokens = chunk["usage"].get("completion_tokens", 0) or usage_tokens
                 for choice in chunk.get("choices", []):
                     delta = choice.get("delta") or {}
-                    if delta.get("content"):
+                    # `reasoning_content` counts. With `--reasoning-parser`
+                    # active the server routes a Qwen3 <think> block there
+                    # rather than into `content`, and those tokens are decoded
+                    # on the GPU like any other. Counting only `content` scored
+                    # a request whose thinking had not closed within
+                    # `max_tokens` as "no tokens streamed" -- 40 of 64 at every
+                    # concurrency level in `plum_wall_318nsvlvt6`, identical at
+                    # concurrency 1 and 32 because it is a property of the
+                    # prompt, not of the queue. See VERIFIED 55.
+                    # ...and so does `reasoning`. The image serving this
+                    # endpoint streams the thinking block under `reasoning`,
+                    # NOT `reasoning_content`: 4920 of 4921 SSE frames from
+                    # `ffsft-plc/green` carried `delta.reasoning` and not one
+                    # carried `delta.reasoning_content`. The bundled mock emits
+                    # `reasoning_content`, so every test here passed while the
+                    # real server was scoring 0 -- the same shape of mistake as
+                    # VERIFIED 55, one field name later. See VERIFIED 68.
+                    if (
+                        delta.get("content")
+                        or delta.get("reasoning_content")
+                        or delta.get("reasoning")
+                    ):
                         if tokens == 0:
                             ttft = time.perf_counter() - started
                         tokens += 1
@@ -231,6 +260,7 @@ async def run_level(
     temperature: float = 0.0,
     api_key: str | None = None,
     timeout: float = 300.0,
+    chat_template_kwargs: dict[str, object] | None = None,
 ) -> LevelResult:
     """Drive `requests` requests through the endpoint at a fixed concurrency."""
     import httpx
@@ -258,6 +288,7 @@ async def run_level(
                     temperature,
                     headers,
                     timeout,
+                    chat_template_kwargs,
                 )
 
         started = time.perf_counter()
@@ -335,6 +366,12 @@ def main() -> int:
         default=None,
         help="Defaults to $FFSFT_ENDPOINT_KEY. Never hardcode this.",
     )
+    ap.add_argument(
+        "--chat-template-kwargs",
+        default=None,
+        help="JSON object forwarded as `chat_template_kwargs`, e.g. "
+        '\'{"enable_thinking": false}\'. Must match what training rendered.',
+    )
     ap.add_argument("--output", default=None, help="Write the full JSON report here.")
     args = ap.parse_args()
 
@@ -342,6 +379,12 @@ def main() -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)-5s %(name)s | %(message)s"
     )
     levels = [int(x) for x in args.concurrency.split(",") if x.strip()]
+    # An unparseable value is fatal rather than ignored: silently dropping it
+    # would run the whole sweep against a model in the wrong mode and publish
+    # the numbers as if they were comparable.
+    ctk = json.loads(args.chat_template_kwargs) if args.chat_template_kwargs else None
+    if ctk is not None and not isinstance(ctk, dict):
+        raise SystemExit("--chat-template-kwargs must be a JSON object")
 
     results = asyncio.run(
         sweep(
@@ -353,6 +396,7 @@ def main() -> int:
             temperature=args.temperature,
             api_key=args.api_key or os.environ.get("FFSFT_ENDPOINT_KEY"),
             timeout=args.timeout,
+            chat_template_kwargs=ctk,
         )
     )
 
@@ -372,6 +416,10 @@ def main() -> int:
         "base_url": args.base_url,
         "model": args.model,
         "max_tokens": args.max_tokens,
+        # Recorded because it changes what the model does. Two sweeps with
+        # different values are not comparable, and without this the report does
+        # not say which one it is.
+        "chat_template_kwargs": ctk,
         "ttft_slo_s": args.ttft_slo,
         "levels": [asdict(r) for r in results],
         "knee_concurrency": knee.concurrency if knee else None,
