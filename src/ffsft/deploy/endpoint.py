@@ -21,18 +21,73 @@ the pattern that works today and the right one for evaluation and bulk scoring.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import logging
-import math
 import os
-import re
 import time
-from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from ..azure_ml import image_tag
+from .probes import (
+    SkuProbe,
+    StoreProbe,
+    check_pattern,
+    classify_cluster_error,
+    classify_store,
+    probe_model_store,
+    probe_sku,
+    quota_family_for,
+    read_dedicated_quota,
+)
+from .readiness import (
+    AZURE_DEFAULT_FAILURE_THRESHOLD,
+    AZURE_MAX_FAILURE_THRESHOLD,
+    IN_FLIGHT_QUANTIZATION_FACTOR,
+    PROBE_INITIAL_DELAY,
+    PROBE_PERIOD,
+    params_from_hf_id,
+    probe_settings_for,
+    resolve_params_b,
+    startup_grace_for,
+)
 from .registry import get_serving_registry
-from .spec import ServingSpec, Surface
+from .spec import Surface
+
+#: Re-exported so that the names this module has always exposed keep resolving
+#: from here after the split. `check_pattern` and the probes now live in
+#: `probes.py`; the startup-budget arithmetic in `readiness.py`. A test that
+#: fakes one of the probes must patch it on the module the caller reaches for
+#: -- `probes`, not this one.
+__all__ = [
+    "AZURE_DEFAULT_FAILURE_THRESHOLD",
+    "AZURE_MAX_FAILURE_THRESHOLD",
+    "IN_FLIGHT_QUANTIZATION_FACTOR",
+    "MODEL_MOUNT",
+    "PROBE_INITIAL_DELAY",
+    "PROBE_PERIOD",
+    "SERVE_ENVIRONMENT_NAME",
+    "SERVE_ENVIRONMENT_VERSION",
+    "SERVE_IMAGE",
+    "SkuProbe",
+    "StoreProbe",
+    "check_pattern",
+    "classify_cluster_error",
+    "classify_store",
+    "deploy_batch",
+    "deploy_online",
+    "egress_for",
+    "ensure_endpoint",
+    "get_serving_registry",
+    "params_from_hf_id",
+    "probe_model_store",
+    "probe_settings_for",
+    "probe_sku",
+    "quota_family_for",
+    "read_dedicated_quota",
+    "resolve_params_b",
+    "serve_environment",
+    "serving_env",
+    "startup_grace_for",
+]
 
 if TYPE_CHECKING:
     from azure.ai.ml import MLClient
@@ -124,541 +179,6 @@ def serve_environment(client: MLClient) -> Environment:
     )
 
 
-def read_dedicated_quota(subscription_id: str, location: str, family: str) -> int:
-    """Read the *measured* dedicated-core limit for one VM family.
-
-    Uses the Microsoft.Quota provider rather than the AML usages API on purpose:
-    the AML usages endpoint reports `-1` for families that have no dedicated
-    allocation, which reads like 'unlimited' and is the opposite of the truth.
-    """
-    import requests
-    from azure.identity import DefaultAzureCredential
-
-    cred = DefaultAzureCredential()
-    token = cred.get_token("https://management.azure.com/.default").token
-    scope = (
-        f"subscriptions/{subscription_id}/providers/Microsoft.MachineLearningServices"
-        f"/locations/{location}"
-    )
-    url = (
-        f"https://management.azure.com/{scope}/providers/Microsoft.Quota"
-        f"/quotas/{family}?api-version=2023-02-01"
-    )
-    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=60)
-    if resp.status_code == 404:
-        log.warning("quota family '%s' is not defined in %s", family, location)
-        return 0
-    resp.raise_for_status()
-    return int(resp.json()["properties"]["limit"]["value"])
-
-
-@dataclasses.dataclass(frozen=True)
-class SkuProbe:
-    """What the control plane said when actually asked to create the cluster."""
-
-    sku: str
-    tier: str
-    creatable: bool
-    code: str
-    detail: str
-
-    @property
-    def blocker(self) -> str | None:
-        if self.creatable:
-            return None
-        return f"{self.code}. {self.detail}"
-
-
-def classify_cluster_error(message: str) -> tuple[str, str]:
-    """Turn an AmlCompute create failure into a code plus an actionable reason.
-
-    The two responses differ in what they ask of you -- one is a support
-    ticket, the other is 'pick a different SKU' -- so collapsing them into
-    'deployment failed' throws away the only useful part.
-
-    `InvalidPropertyValue` arrives with a list of "supported VM sizes" that is
-    old enough to omit `Standard_NC24ads_A100_v4`, the SKU this project trains
-    on every day. Repeating it would send the reader looking for a K80. The
-    honest summary is that the control plane refuses this SKU here regardless
-    of what the catalogue and the quota say.
-    """
-    if "ClusterMinNodesExceedCoreQuota" in message:
-        family = re.search(r"Standard\s+(\w+)\s+family", message)
-        quota = re.search(r"quota of (\d+)", message)
-        detail = (
-            f"dedicated quota for {family.group(1) if family else 'this family'} is "
-            f"{quota.group(1) if quota else '0'}. Managed online endpoints are always "
-            "dedicated, so no amount of retrying helps -- request a quota increase."
-        )
-        return "ClusterMinNodesExceedCoreQuota", detail
-    if "InvalidPropertyValue" in message:
-        sku = re.search(r"value (\S+) for property", message)
-        detail = (
-            f"{sku.group(1) if sku else 'this SKU'} cannot be created in this "
-            "workspace at either tier, however many cores the catalogue and the "
-            "usage APIs advertise. Choose a SKU that a real create call accepts."
-        )
-        return "InvalidPropertyValue", detail
-    return "Unknown", message.strip()[:300]
-
-
-def probe_sku(client, sku: str, tier: str, *, name: str = "ffsft-probe") -> SkuProbe:
-    """Ask the control plane to create the cluster, then take it straight back.
-
-    Scope, stated first because this function was read as answering a broader
-    question than it does: this creates an **AmlCompute cluster**, so it answers
-    "can a training job run on this SKU". It says nothing about a managed online
-    endpoint, which is a different resource type on a different control plane.
-
-    Reading it as a deployment probe inverts its answer. In koreacentral all six
-    A10 v5 SKUs are MIR-only -- their `supportedComputeTypes` lists MIR and not
-    AmlCompute -- so this call refuses precisely the SKUs a managed endpoint
-    accepts. JOURNAL 43 concluded "every GPU SKU is NotAvailableForSubscription"
-    from exactly that inversion; JOURNAL 51 retracts it, having created an
-    endpoint in 69 seconds. For the deployment question, attempt a
-    `ManagedOnlineDeployment` -- nothing else is evidence.
-
-    Within its own scope it is the honest answer, and that part still holds:
-    quota says yes for A10 v5 and the create call says no; the catalogue lists
-    all sixteen GPU SKUs and the create call still says no.
-
-    Free: a refusal returns in about two seconds having created nothing, and an
-    acceptance is a `min_instances=0` cluster that allocates no node before it
-    is deleted.
-    """
-    from azure.ai.ml.entities import AmlCompute
-
-    try:
-        client.compute.begin_create_or_update(
-            AmlCompute(
-                name=name,
-                size=sku,
-                min_instances=0,
-                max_instances=1,
-                tier=tier,
-                idle_time_before_scale_down=120,
-            )
-        ).result()
-    except Exception as exc:  # noqa: BLE001 - the message is the whole point
-        code, detail = classify_cluster_error(str(exc))
-        # A refused create still leaves a compute record in `Failed`. It holds no
-        # nodes and bills nothing, but it accumulates, and this project's whole
-        # teardown story is that nothing is left behind.
-        _discard_probe(client, name)
-        return SkuProbe(sku=sku, tier=tier, creatable=False, code=code, detail=detail)
-
-    _discard_probe(client, name)
-    return SkuProbe(sku=sku, tier=tier, creatable=True, code="", detail="")
-
-
-def _discard_probe(client, name: str) -> None:
-    try:
-        client.compute.begin_delete(name)
-    except Exception:  # noqa: BLE001 - a leaked min=0 cluster allocates nothing
-        log.warning("probe cluster %s could not be deleted; it holds no nodes", name)
-
-
-@dataclasses.dataclass(frozen=True)
-class StoreProbe:
-    """Whether a model asset can be created at all, and why not.
-
-    Azure exposes no API that answers "can I register a model?", so this
-    reconstructs the answer from the two properties that decide it on the
-    workspace's default datastore account.
-    """
-
-    account: str
-    public_access: str
-    private_endpoints: int
-    reachable: bool
-    detail: str
-    key_auth_refused: bool = False
-    key_based_datastores: tuple[str, ...] = ()
-
-
-def classify_store(
-    account: str,
-    public_access: str,
-    private_endpoints: int,
-    *,
-    allow_shared_key: bool | None = None,
-    key_based_datastores: Sequence[str] = (),
-) -> StoreProbe:
-    """Decide whether a storage account is reachable by anything.
-
-    Two ways to be reachable, and they are the only two:
-
-    * the public endpoint is on -- then `networkAcls` decides who gets in, and
-      an `Allow` default action lets in the compute node and this laptop alike;
-    * the public endpoint is off but a private endpoint exists -- the designed
-      hardened posture, where traffic arrives over a private link instead.
-
-    Off with no private endpoint is not a posture, it is an outage. Measured on
-    this subscription (§24): three finished training runs each uploaded zero
-    artifacts, `mount_outputs=True` fails during node setup, and registering a
-    model from a job output returns `NoMatchingArtifactsFoundFromJob` -- all one
-    cause. An ARM `PATCH` setting `publicNetworkAccess: Enabled` returns 200 and
-    changes nothing, and a *newly created* account asked for `Enabled` comes
-    back `Disabled`, so this is enforced above the subscription and cannot be
-    fixed from here.
-
-    Network reachability is necessary and *not* sufficient. A datastore also
-    names how to authenticate, and that is a separate axis this check was blind
-    to until polandcentral (S57.8): `mlw-ffsft-plc` sat behind two working
-    private endpoints -- reachable by the rule above, and this function said so
-    -- while every write still failed, because all four of its datastores were
-    created with `credentialsType: AccountKey` against a storage account with
-    `allowSharedKeyAccess: false`. The account refuses the key the datastore
-    insists on presenting, so job log upload, artifact upload, output mounts and
-    client-side `jobs.download()` all return `KeyBasedAuthenticationNotPermitted`
-    -- the *same* zero-artifact symptom as an unreachable account, from a cause
-    no amount of private endpoints or RBAC can fix. Two workspaces created the
-    same way disagreed on this: koreacentral came up `None`, polandcentral came
-    up `AccountKey`, so it cannot be assumed from the deployment path either.
-
-    Anything this function cannot read reports reachable. A probe that cannot
-    see is not the same as a resource that is broken, and the expensive mistake
-    in this project has consistently been turning the former into the latter.
-    That is why `allow_shared_key=None` (unread) never fails the check: only a
-    measured `False` alongside a measured `AccountKey` datastore does.
-    """
-    key_based = tuple(key_based_datastores)
-
-    if public_access != "Disabled":
-        net_ok, net_detail = True, ""
-    elif private_endpoints > 0:
-        net_ok, net_detail = (
-            True,
-            (f"{account}: public access off, reached over {private_endpoints} private endpoint(s)"),
-        )
-    else:
-        net_ok, net_detail = (
-            False,
-            (
-                f"no reachable datastore: '{account}' has publicNetworkAccess=Disabled "
-                f"and 0 private endpoints, so neither this client nor the Azure ML "
-                f"compute node can open a session against it. Job outputs never upload "
-                f"(artifacts=0 on every finished run), so there is nothing to register "
-                f"as a model -- and every hosted pattern deploys a model asset. "
-                f"Fix: attach a private endpoint to the account and put the compute in "
-                f"that VNet. Turning public access back on is rejected silently by "
-                f"tenant-level enforcement."
-            ),
-        )
-
-    if allow_shared_key is False and key_based:
-        # Reported even when the network posture passes, because it is
-        # orthogonal to it: the key is refused on the public endpoint and over a
-        # private link alike, so a green network answer says nothing about this.
-        detail = (
-            f"datastore credential mismatch: '{account}' has "
-            f"allowSharedKeyAccess=false, but datastore(s) {', '.join(key_based)} "
-            f"authenticate with credentialsType=AccountKey. Every write fails "
-            f"with KeyBasedAuthenticationNotPermitted -- job logs, artifacts, "
-            f"output mounts and jobs.download() alike -- so runs finish with "
-            f"artifacts=0 and there is nothing to register as a model. Private "
-            f"endpoints and role assignments do not fix this. Fix: PUT each "
-            f"datastore with credentials.credentialsType='None' (identity-based) "
-            f"and grant the workspace MSI, the cluster identity and yourself "
-            f"Storage Blob Data Contributor on the account. Keep isDefault=true "
-            f"on the workspace default datastore or the PUT is rejected."
-        )
-        if not net_ok:
-            # Both broken at once (measured on `mlw-ffsft-jpe`). Reporting only
-            # the first sends the caller through a fix-verify-fix round trip for
-            # a blocker that was already visible here.
-            detail += f" A second, independent blocker is also present -- {net_detail}"
-        return StoreProbe(account, public_access, private_endpoints, False, detail, True, key_based)
-
-    return StoreProbe(
-        account, public_access, private_endpoints, net_ok, net_detail, False, key_based
-    )
-
-
-def _key_based_datastores(root: str, workspace: str, head: dict) -> list[str]:
-    """Names of datastores that authenticate with an account key.
-
-    Read separately from the account so an unreadable datastore list degrades to
-    "no key-based datastores found" rather than to a false blocker -- the same
-    reason `probe_model_store` reports reachable when it cannot see.
-    """
-    import requests
-
-    try:
-        page = requests.get(
-            f"{root}/Microsoft.MachineLearningServices/workspaces/"
-            f"{workspace}/datastores?api-version=2024-10-01",
-            headers=head,
-            timeout=60,
-        ).json()
-        return sorted(
-            d["name"]
-            for d in (page.get("value") or [])
-            if ((d.get("properties") or {}).get("credentials") or {}).get("credentialsType")
-            == "AccountKey"
-        )
-    except Exception as exc:  # noqa: BLE001 - an unreadable list must not block
-        log.warning("could not read datastore credentials: %s", exc)
-        return []
-
-
-def probe_model_store(target) -> StoreProbe:
-    """Read the live posture of the workspace's default datastore.
-
-    Free and read-only: three ARM GETs, no resource is created or touched. Two
-    independent things can make the datastore unusable -- the account being
-    unreachable, and the datastore presenting a credential the account refuses
-    -- so both are read here and both are handed to `classify_store`.
-    """
-    import requests
-    from azure.identity import AzureCliCredential
-
-    cred = AzureCliCredential()
-    tok = cred.get_token("https://management.azure.com/.default").token
-    head = {"Authorization": f"Bearer {tok}"}
-    root = (
-        f"https://management.azure.com/subscriptions/{target.subscription_id}"
-        f"/resourceGroups/{target.resource_group}/providers"
-    )
-    try:
-        ws = requests.get(
-            f"{root}/Microsoft.MachineLearningServices/workspaces/"
-            f"{target.workspace_name}?api-version=2024-10-01",
-            headers=head,
-            timeout=60,
-        ).json()
-        account_id = ws["properties"]["storageAccount"]
-        account = account_id.rsplit("/", 1)[-1]
-        sa = requests.get(
-            f"https://management.azure.com{account_id}?api-version=2023-05-01",
-            headers=head,
-            timeout=60,
-        ).json()["properties"]
-        return classify_store(
-            account,
-            sa.get("publicNetworkAccess", "Unknown"),
-            len(sa.get("privateEndpointConnections") or []),
-            allow_shared_key=sa.get("allowSharedKeyAccess"),
-            key_based_datastores=_key_based_datastores(root, target.workspace_name, head),
-        )
-    except Exception as exc:  # noqa: BLE001 - an unreadable probe must not block
-        log.warning("could not read the datastore posture: %s", exc)
-        return classify_store("unknown", "Unknown", 0)
-
-
-def quota_family_for(sku: str | None) -> str | None:
-    """Dedicated quota family `sku` bills against, or None if unknown.
-
-    Unknown returns None rather than a guess so the caller falls back to the
-    pattern's declared family -- the same reason `required_dedicated_cores`
-    raises instead of assuming a core count.
-    """
-    if not sku:
-        return None
-    from ffsft.azure_ml import GPU_SKUS
-
-    entry = GPU_SKUS.get(sku)
-    return entry.get("family") if entry else None
-
-
-def check_pattern(
-    pattern_key: str,
-    subscription_id: str,
-    location: str,
-    *,
-    sku: str | None = None,
-    instances: int = 1,
-    store: StoreProbe | None = None,
-    from_hub: bool = False,
-) -> tuple[ServingSpec, str | None]:
-    """Return the spec plus a human-readable blocker, or None if it can deploy.
-
-    `from_hub` declares that the weights will come from the Hugging Face Hub at
-    container start. For a pattern whose server resolves its own model that
-    takes the datastore out of the picture entirely, so the storage check is
-    skipped -- see `ServingSpec.can_serve_from_hub`.
-    """
-    spec = get_serving_registry().get(pattern_key)
-    needs_store = spec.requires_model_asset and not (from_hub and spec.can_serve_from_hub)
-    if store is not None and needs_store and not store.reachable:
-        # Checked before quota on purpose: no model asset means no deployment of
-        # any kind, so leading with a quota number would imply that raising the
-        # quota would help.
-        return spec, store.detail
-    if spec.allows_low_priority or not spec.quota_family:
-        return spec, None
-    # A `--sku` override can cross quota families. The pattern names the family
-    # of its *default* SKU, but Azure bills the family the *chosen* SKU belongs
-    # to, so reading `spec.quota_family` here measures a pool the deployment
-    # never touches: an A100 SKU was refused in a region with 48 A100 cores
-    # granted because the A10 pool it would never use read 0.
-    family = quota_family_for(sku or spec.default_sku) or spec.quota_family
-    available = read_dedicated_quota(subscription_id, location, family)
-    return spec, spec.blocked_reason(available, instances=instances, sku=sku, quota_family=family)
-
-
-#: Seconds before the first probe fires. Small and fixed on purpose.
-#:
-#: This constant used to be the whole startup budget, and that was the wrong
-#: knob -- see JOURNAL §38. A probe that fails costs nothing; Azure simply
-#: tries again `period` seconds later. So every second spent here is a second
-#: the deployment cannot go healthy in *even when the container is already
-#: serving*, while `failure_threshold` buys the same patience for free in the
-#: success case. Azure's own defaults have this shape (`initial_delay 10`,
-#: `failure_threshold 30`) and the inverted version here was local invention.
-#:
-#: 120 s covers image start and the entrypoint reaching the point where it binds
-#: a port. Probing before that yields connection refusals, which are noise.
-PROBE_INITIAL_DELAY = 120
-
-#: Seconds between probes. Azure's default is 10; 15 halves the request volume
-#: against a loading container while still noticing readiness within a quarter
-#: of a minute of it becoming true.
-PROBE_PERIOD = 15
-
-#: Azure's own documented default for `failure_threshold`, used here as a floor.
-#: A vLLM container holding tens of gigabytes of weights is strictly harder to
-#: start than the generic deployment that default was chosen for, so being *less*
-#: patient than the platform default is never the right answer. The value that
-#: shipped before this comment existed was 10.
-AZURE_DEFAULT_FAILURE_THRESHOLD = 30
-
-#: Hard server-side ceiling on `failure_threshold`, discovered by hitting it.
-#:
-#: The YAML schema reference documents a minimum of 1 and a default of 30 for
-#: this field and states no maximum at all, so the first version of
-#: `probe_settings_for` put the whole budget here and sent 125. Azure rejected
-#: the deployment in 61 seconds:
-#:
-#:     LivenessProbe.FailureThreshold: Invalid value provided for Failure
-#:     Threshold for Probe: <125>. The value should be less than 120.
-#:
-#: "less than 120" means 119 is the largest accepted value. Cheap failure --
-#: a 400 before any node was allocated -- but only because it is validated at
-#: request time; the same mistake in a field validated later would have cost
-#: another rollout. See JOURNAL §38.6.
-AZURE_MAX_FAILURE_THRESHOLD = 119
-
-
-#: How much longer a container takes to start when vLLM quantises on the way to
-#: the card instead of loading weights that are already in their served format.
-#:
-#: It reads the whole bf16 checkpoint and converts every tensor to NF4 during
-#: load, so the work is proportional to the *unquantised* size while the benefit
-#: only shows up afterwards. On one A10 that is compute-bound, which is why it
-#: does not appear anywhere in the per-billion download estimate. It also repeats
-#: on every container start -- a restart or a scale-out pays it again.
-IN_FLIGHT_QUANTIZATION_FACTOR = 2.5
-
-
-def startup_grace_for(params_b: float | None, *, quantization: str | None = None) -> int:
-    """Total seconds a container may take to become healthy.
-
-    A budget, not a delay -- `probe_settings_for` decides how it is spent.
-    Startup is dominated by moving weights onto the GPU, which scales with
-    parameter count: roughly 2 GB of bf16 weights per billion parameters, and a
-    download sustaining on the order of 100 MB/s into an Azure ML node, works out
-    near 25 s per billion. The fixed 120 s covers image start and CUDA graph
-    capture.
-
-    The cap is 3600 rather than the 1800 it was, because in-flight quantisation
-    is not download-bound and so is not covered by the per-billion estimate: vLLM
-    reads the full bf16 checkpoint and quantises to NF4 on the way to the card,
-    and on a single A10 that is compute, not bandwidth. A cap still exists,
-    because a budget large enough never to be exceeded can never report a
-    failure -- and Azure withholds the container logs until the deployment
-    reaches a terminal state, so "never fails" also means "never readable".
-    """
-    factor = IN_FLIGHT_QUANTIZATION_FACTOR if quantization else 1.0
-    if params_b is None:
-        return int(min(3600, 600 * factor))
-    return int(min(3600, max(120, (120 + params_b * 25) * factor)))
-
-
-def probe_settings_for(grace_seconds: int) -> dict[str, int]:
-    """Split a startup budget into the three fields Azure actually accepts.
-
-    The budget goes into `failure_threshold` for as long as it fits, because
-    that is the spelling that lets the deployment go healthy the moment the
-    container does, instead of holding it in `Creating` for a fixed term sized
-    for the worst case.
-
-    It stops fitting at `AZURE_MAX_FAILURE_THRESHOLD`, which a 27B model with
-    in-flight quantisation exceeds. Past that point the remainder goes into
-    `period` instead. The cost of a longer period is bounded and small: it is
-    how late readiness can be *noticed* after it becomes true, so stretching 15 s
-    to 16 s to buy 33 minutes of patience is a second of latency for half an hour
-    of budget. Widening `initial_delay` would buy the same patience by making
-    every start slower, which is the trade this function exists to refuse.
-    """
-    remaining = max(0, grace_seconds - PROBE_INITIAL_DELAY)
-    period = PROBE_PERIOD
-    retries = math.ceil(remaining / period)
-    if retries > AZURE_MAX_FAILURE_THRESHOLD:
-        period = math.ceil(remaining / AZURE_MAX_FAILURE_THRESHOLD)
-        retries = math.ceil(remaining / period)
-    return {
-        "initial_delay": PROBE_INITIAL_DELAY,
-        "period": period,
-        "failure_threshold": min(
-            AZURE_MAX_FAILURE_THRESHOLD,
-            max(AZURE_DEFAULT_FAILURE_THRESHOLD, retries),
-        ),
-    }
-
-
-#: A parameter count written as a size suffix: `-8B`, `-0.6b`, `-70B`.
-#: The trailing guard is what stops `-4bit`, `-8bit` and `-7Base` from reading
-#: as sizes, and requiring the `B` is what stops the `3.1` in `Llama-3.1-8B`
-#: from being mistaken for one.
-_SIZE_SUFFIX = re.compile(r"(\d+(?:\.\d+)?)[Bb](?![A-Za-z0-9])")
-
-#: Mixture-of-experts shorthand: `8x7B` is eight 7B experts on disk, not 7B.
-_MOE_SUFFIX = re.compile(r"(\d+)\s*[xX]\s*(\d+(?:\.\d+)?)[Bb](?![A-Za-z0-9])")
-
-
-def params_from_hf_id(hf_id: str | None) -> float | None:
-    """Recover a parameter count from a Hugging Face repo id, or None.
-
-    Exists so that a model swapped in by repo id -- the whole point of this
-    repo -- still gets a probe sized for it, without a registry entry and
-    without a network call. Hub naming is consistent enough to rely on: the
-    size is a B-suffixed number, and everything else in the id is a version, a
-    quantisation, or a variant tag.
-
-    The largest candidate wins rather than the last one. `Qwen3-30B-A3B` names
-    both its total and its active parameters; startup pays for the download, so
-    the total is the honest input. Picking the last match would read 3B there
-    and under-size the grace period by a factor of ten.
-
-    Returning None is a real answer, not a failure: it is what keeps the probe
-    on its conservative default instead of acting on a guess.
-    """
-    if not hf_id:
-        return None
-    candidates = [float(a) * float(b) for a, b in _MOE_SUFFIX.findall(hf_id)]
-    candidates += [float(m) for m in _SIZE_SUFFIX.findall(hf_id)]
-    return max(candidates) if candidates else None
-
-
-def resolve_params_b(
-    *,
-    explicit: float | None,
-    spec: ModelSpec | None,
-    hf_model: str | None,
-) -> float | None:
-    """Pick the most trustworthy parameter count available.
-
-    Ordered by how much the number was actually looked at: an operator flag
-    beats a curated registry entry, which beats a string parsed out of a repo
-    id. A registry entry that simply has no size recorded falls through rather
-    than blocking the inference behind it.
-    """
-    if explicit is not None:
-        return explicit
-    if spec is not None and getattr(spec, "params_b", None) is not None:
-        return spec.params_b
-    return params_from_hf_id(hf_model)
 
 
 def serving_env(

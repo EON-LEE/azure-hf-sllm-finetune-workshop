@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 uv sync --extra dev          # dev extra is enough for the whole test suite
-uv run pytest                # 725 tests, ~10s, no network and no Azure calls
+uv run pytest                # 730 tests, ~9s, no network and no Azure calls
 uv run pytest tests/test_aml_job.py::test_preflight_runs_the_self_test_and_nothing_else
 uv run pytest -k lora        # substring selection
 uv run ruff check .          # line-length 100, target py310, rules E/F/I/UP/B
@@ -109,6 +109,20 @@ push it there, never the reverse without a `subtree pull --squash`.
 job output; `deploy/merge.py` folds LoRA into bf16 base weights; `deploy/endpoint.py` and
 `deploy/lifecycle.py` create and destroy the endpoint. `eval/run.py` always scores base against
 tuned on identical items — the delta is the unit of work, a single absolute score is not.
+
+The deploy path is four files, split by what each one is allowed to touch:
+
+| file | contains | touches Azure |
+|---|---|---|
+| `probes.py` | `check_pattern` and the live "would this work?" calls — quota read, min=0 cluster, storage properties | yes |
+| `preflight.py` | pure classifiers turning a read state into a blocker string | no |
+| `readiness.py` | startup budget → the three probe fields Azure accepts | no |
+| `endpoint.py` | environment, `serving_env`, `ensure_endpoint`, `deploy_online`, `deploy_batch`, CLI | yes |
+
+`endpoint.py` re-exports every name that moved, so old imports resolve. **Patching a re-export
+is silent**, though: `check_pattern` reads `read_dedicated_quota` as a `probes` global, so a
+`monkeypatch.setattr(endpoint, "read_dedicated_quota", …)` fakes a name nobody reads and the real
+call leaves the machine. `tests/test_deploy_module_split.py` pins both halves of that seam.
 
 ### Two images, never one
 

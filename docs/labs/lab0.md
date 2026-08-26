@@ -32,7 +32,7 @@ uv run pytest -q
 기대 출력:
 
 ```
-725 passed in 10.29s
+730 passed in 8.51s
 ```
 
 테스트는 **네트워크도 Azure 도 건드리지 않습니다.** 여기서 실패하면 Azure 문제가 아닙니다.

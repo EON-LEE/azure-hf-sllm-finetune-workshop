@@ -148,8 +148,13 @@ def test_batch_cannot_serve_from_hub():
 
 def test_from_hub_clears_the_store_blocker_for_online(monkeypatch):
     from ffsft.deploy import endpoint as ep
+    from ffsft.deploy import probes
 
-    monkeypatch.setattr(ep, "read_dedicated_quota", lambda *a, **k: 9999)
+    # Patched on `probes`, not on `ep`: that is the module `check_pattern`
+    # reaches for. Patching the re-export instead is silent -- the call went
+    # out to management.azure.com for real when the probes moved out of
+    # endpoint.py and this line still said `ep`.
+    monkeypatch.setattr(probes, "read_dedicated_quota", lambda *a, **k: 9999)
     _, blocked = ep.check_pattern(
         "aml_online_vllm", "sub", "koreacentral", store=_dead()
     )
@@ -162,8 +167,9 @@ def test_from_hub_clears_the_store_blocker_for_online(monkeypatch):
 
 def test_from_hub_does_not_rescue_batch(monkeypatch):
     from ffsft.deploy import endpoint as ep
+    from ffsft.deploy import probes
 
-    monkeypatch.setattr(ep, "read_dedicated_quota", lambda *a, **k: 9999)
+    monkeypatch.setattr(probes, "read_dedicated_quota", lambda *a, **k: 9999)
     _, blocked = ep.check_pattern(
         "aml_batch", "sub", "koreacentral", store=_dead(), from_hub=True
     )
