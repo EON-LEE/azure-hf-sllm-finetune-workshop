@@ -44,3 +44,7 @@ hf_cache/
 Thumbs.db
 .vscode/
 .idea/
+
+# Stray perf-test reruns at repo root (the real ones live in docs/results/)
+/my-loadtest.json
+/*.svg
