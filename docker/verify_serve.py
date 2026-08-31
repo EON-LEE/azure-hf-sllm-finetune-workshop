@@ -108,13 +108,36 @@ def main() -> int:
 
     package_root = Path(vllm.__file__).parent
     corpus = []
+    unreadable: list[str] = []
     for path in package_root.rglob("*.py"):
         try:
             corpus.append(path.read_text(encoding="utf-8", errors="ignore"))
-        except OSError:
-            continue
+        except OSError as exc:
+            # A file we could not open is a file whose flags we did not see, and
+            # `flag_present` below states a NEGATIVE over this corpus. The
+            # direction is safe -- an unread file makes a flag look absent, so
+            # the build fails rather than shipping an image whose entrypoint
+            # passes an unknown flag -- but "scanned N" on its own is an
+            # omission claim, and the wrong build to debug is the one that
+            # failed for a reason nothing printed. Reported in three rounds and
+            # fixed in none, because this file sits outside the `_SRC` root the
+            # except-handler guard walks; that root now includes `docker/`.
+            unreadable.append(f"{path.relative_to(package_root)} ({type(exc).__name__})")
     blob = "\n".join(corpus)
-    print(f"scanned {len(corpus)} vllm source files")
+    if unreadable:
+        shown = ", ".join(unreadable[:5])
+        more = f", and {len(unreadable) - 5} more" if len(unreadable) > 5 else ""
+        print(
+            f"scanned {len(corpus)} vllm source files; "
+            f"{len(unreadable)} could NOT be read: {shown}{more}"
+        )
+        print(
+            "      the flag check below is a negative over the files that WERE "
+            "read, so it is incomplete by that many.",
+            file=sys.stderr,
+        )
+    else:
+        print(f"scanned {len(corpus)} vllm source files, 0 unreadable")
 
     def flag_present(flag: str) -> bool:
         return flag in blob or flag.lstrip("-").replace("-", "_") in blob

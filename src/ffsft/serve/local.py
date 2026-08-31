@@ -34,6 +34,8 @@ import uuid
 
 from pydantic import BaseModel, Field
 
+from ..logging_setup import quiet_azure_sdk_logs
+
 log = logging.getLogger("ffsft.serve.local")
 
 #: Kept small on purpose. CPU decoding is slow enough that a large default
@@ -291,6 +293,10 @@ def main() -> int:
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # After basicConfig, never before: the filter half of this attaches to the
+    # root handlers, and basicConfig is what creates them (ffsft/logging_setup.py).
+    quiet_azure_sdk_logs()
+
     app = build_app(LocalEngine(args.model, args.adapter, args.dtype))
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0

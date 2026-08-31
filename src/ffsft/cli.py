@@ -75,6 +75,27 @@ app.add_typer(eval_app, name="bench")
 console = Console()
 
 
+@app.callback()
+def _main() -> None:
+    """Runs before every `ffsft` command, registry ones included.
+
+    The delegates each quiet the SDK themselves, but `ffsft deploy ...` imports
+    `azure.ai.ml` through `_module_main` *before* that delegate's `main()` gets
+    to run, and that import writes its own INFO handler on the way in. Quieting
+    here means the import itself is already covered.
+
+    The import is function-local like every other one below it: this module has
+    to import with only the registry deps present, and `tests/test_cli_delegates
+    .py::test_the_cli_module_imports_nothing_heavy_at_module_level` walks the
+    module body to prove it. `logging_setup` is stdlib-only and would pass that
+    walk, but adding a name to the allowlist to make room for it would loosen
+    the guard for the next import too.
+    """
+    from .logging_setup import quiet_azure_sdk_logs
+
+    quiet_azure_sdk_logs()
+
+
 def _fmt_params(spec) -> str:
     if spec.params_b is None:
         return "-"

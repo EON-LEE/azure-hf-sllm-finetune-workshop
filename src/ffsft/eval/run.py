@@ -30,6 +30,7 @@ import time
 
 from .. import mlflow_report
 from ..hf_cache import free_hf_download_cache
+from ..logging_setup import quiet_azure_sdk_logs
 from .registry import BenchmarkSpec, get_benchmark_registry
 
 log = logging.getLogger("ffsft.eval")
@@ -458,6 +459,10 @@ def main() -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)-5s %(name)s | %(message)s"
     )
+    # After basicConfig, never before: the filter half of this attaches to the
+    # root handlers, and basicConfig is what creates them (ffsft/logging_setup.py).
+    quiet_azure_sdk_logs()
+
     report = evaluate(
         args.model, args.adapter, args.suite,
         limit=args.limit, num_fewshot=args.num_fewshot, skip_base=args.skip_base,

@@ -63,24 +63,48 @@ STORAGE_WRITE = "Storage Blob Data Contributor"
 
 @dataclass
 class IdentityGrants:
-    """What the endpoint's managed identity can actually do, as measured."""
+    """What the endpoint's managed identity can actually do, as measured.
+
+    Each role list is tri-state, and the third state is the point:
+
+      * ``[...]``  ARM listed the assignments and these are they;
+      * ``[]``     ARM listed them and there are none -- a measurement;
+      * ``None``   the listing was never completed, so nothing is known.
+
+    The default stays ``[]`` so a record built by hand still means "looked, saw
+    none"; only :func:`read_identity_grants` sets ``None``, and only when a read
+    it started did not finish. Before S79 the third state did not exist, and a
+    listing ARM had truncated arrived here as ``[]`` -- which is why the two
+    scopes now travel with the listing, so a caller can name which read is
+    missing instead of doubting all of them.
+    """
 
     endpoint_name: str
     principal_id: str | None = None
-    acr_roles: list[str] = field(default_factory=list)
-    storage_roles: list[str] = field(default_factory=list)
+    acr_roles: list[str] | None = field(default_factory=list)
+    storage_roles: list[str] | None = field(default_factory=list)
     #: True when the image registry is the workspace-linked ACR, in which case
     #: Azure grants pull rights itself and a missing explicit role is fine.
     acr_is_workspace_linked: bool = False
+    #: The ARM ids the two lists above are about. Carried so an unread listing
+    #: can be reported against the resource it failed on -- and so the `az`
+    #: command that closes the gap can be printed with the scope filled in.
+    acr_scope: str = ""
+    storage_scope: str = ""
 
     @property
-    def can_pull_image(self) -> bool:
+    def can_pull_image(self) -> bool | None:
+        """True / False / None, where None means the listing was not read."""
         if self.acr_is_workspace_linked:
             return True
+        if self.acr_roles is None:
+            return None
         return any(r in {ACR_PULL, "Owner", "Contributor"} for r in self.acr_roles)
 
     @property
-    def can_read_artifacts(self) -> bool:
+    def can_read_artifacts(self) -> bool | None:
+        if self.storage_roles is None:
+            return None
         return any(
             r
             in {
@@ -103,18 +127,62 @@ def identity_blocker(grants: IdentityGrants) -> str | None:
     if grants.principal_id is None:
         return None  # unknown identity: never block on missing information
 
-    missing = []
-    if not grants.can_pull_image:
-        missing.append(
-            f"  - {ACR_PULL} on the container registry (cannot pull the image)"
+    # `is False`, not `not ...`: None means the roleAssignments listing was
+    # never completed, and a role nobody measured may not become a finding.
+    # Executed both ways against the same fake registry, the only variable
+    # being whether ARM paged the two assignments (S79):
+    #     one page  -> acr_roles ['Reader', 'AcrPull'] -> deploys
+    #     paginated -> acr_roles ['Reader']            -> BLOCKS
+    # The grant was there. `identity_unread_note` is what says so out loud.
+    #
+    # Round 9: ONE list drives both the bullets and the commands. They used to
+    # be built separately -- per-scope bullets under a fixed `Fix it with:`
+    # paragraph naming both roles -- so the footer prescribed a grant the
+    # bullets had just refused to claim was missing. Executed pre-fix over a
+    # hand-built record with the registry listing unread:
+    #
+    #   --- storage missing, registry listing NEVER READ ---
+    #      FINDINGS : ['- Storage Blob Data Reader on the workspace storage ...']
+    #      PRESCRIBES: ['--role "AcrPull" --scope <acr-resource-id>',
+    #                   '--role "Storage Blob Data Reader" --scope <storage...>']
+    #
+    # `acr_roles is None` is "the listing did not finish". An `az role
+    # assignment create` printed over it is the sign-flipped invariant with an
+    # action stapled on: the operator runs it, ARM grants a role that may have
+    # been there all along, and the tool has produced a finding it never
+    # measured. The milder half is the same shape -- prescribing a blob
+    # data-plane grant this function just measured as already present. S81.5.
+    gaps: list[tuple[str, str, str, str]] = []
+    if grants.can_pull_image is False:
+        gaps.append(
+            (
+                ACR_PULL,
+                "on the container registry (cannot pull the image)",
+                grants.acr_scope,
+                "<acr-resource-id>",
+            )
         )
-    if not grants.can_read_artifacts:
-        missing.append(
-            f"  - {STORAGE_READ} on the workspace storage (cannot read artifacts)"
+    if grants.can_read_artifacts is False:
+        gaps.append(
+            (
+                STORAGE_READ,
+                "on the workspace storage (cannot read artifacts)",
+                grants.storage_scope,
+                "<storage-resource-id>",
+            )
         )
 
-    if not missing:
+    if not gaps:
         return None
+
+    missing = [f"  - {role} {why}" for role, why, _scope, _ph in gaps]
+    commands: list[str] = []
+    for role, _why, scope, placeholder in gaps:
+        commands += [
+            f"  az role assignment create --assignee-object-id {grants.principal_id} \\",
+            "    --assignee-principal-type ServicePrincipal \\",
+            f'    --role "{role}" --scope {scope or placeholder}',
+        ]
 
     return "\n".join(
         [
@@ -130,18 +198,65 @@ def identity_blocker(grants: IdentityGrants) -> str | None:
             "after an hour or more of GPU billing.",
             "",
             "Fix it with:",
-            f"  az role assignment create --assignee-object-id {grants.principal_id} \\",
-            "    --assignee-principal-type ServicePrincipal \\",
-            f'    --role "{ACR_PULL}" --scope <acr-resource-id>',
-            f"  az role assignment create --assignee-object-id {grants.principal_id} \\",
-            "    --assignee-principal-type ServicePrincipal \\",
-            f'    --role "{STORAGE_READ}" --scope <storage-resource-id>',
+            *commands,
             "",
             "Role assignments can take a few minutes to propagate.",
             "",
             "Pass force=True to deploy anyway.",
         ]
     )
+
+
+def identity_unread_note(grants: IdentityGrants) -> str | None:
+    """Name the grants this tool could not read, or None if it read them all.
+
+    The other half of :func:`identity_blocker`, and it exists because the two
+    answers are not opposites. A roleAssignments listing that stopped early
+    cannot show a grant ABSENT, so the blocker must not refuse over it --
+    CLAUDE.md prices that direction exactly: "refusing on a value nobody
+    measured ... blocks a deployment that would have worked". But *not*
+    refusing is not the same as saying the grant is there, and passing in
+    silence is the first half of the same invariant.
+
+    So the gap is stated, against the scope it is about, with the command that
+    closes it. Same vocabulary as `probe_report` for a SKU it never probed and
+    `format_inventory` for a listing that raised: the word is UNKNOWN, and no
+    verdict is printed beside it.
+    """
+    if grants.principal_id is None:
+        return None  # no identity, so no listing was owed in the first place
+
+    gaps: list[tuple[str, str, str]] = []
+    # A workspace-linked registry needs no explicit grant, so an unread listing
+    # there leaves nothing unknown that matters.
+    if grants.acr_roles is None and not grants.acr_is_workspace_linked:
+        gaps.append(("the container registry", grants.acr_scope, ACR_PULL))
+    if grants.storage_roles is None:
+        gaps.append(("the workspace storage", grants.storage_scope, STORAGE_READ))
+    if not gaps:
+        return None
+
+    lines = [
+        f"endpoint '{grants.endpoint_name}': the role assignments of identity "
+        f"{grants.principal_id} could NOT be read to the end, so:",
+    ]
+    for what, scope, role in gaps:
+        where = scope or "scope could not be resolved, nothing was queried"
+        lines.append(f"  - {role} on {what} is UNKNOWN ({where})")
+    lines += [
+        "",
+        "UNKNOWN is not 'missing'. This tool cannot show the grant is absent, so it is",
+        "not refusing the deploy over it -- and it cannot show the grant is present",
+        "either, so it is not claiming that. If the rollout sits in Creating with no",
+        "container logs, this is the first thing to rule out:",
+    ]
+    for _what, scope, _role in gaps:
+        if scope:
+            lines.append(
+                f"  az role assignment list --assignee {grants.principal_id} "
+                f"--scope {scope} --all -o table"
+            )
+    return "\n".join(lines)
 
 
 #: Role definition GUIDs, because listing assignments returns GUIDs and
@@ -170,6 +285,8 @@ def read_identity_grants(
     try:
         import requests
         from azure.identity import DefaultAzureCredential
+
+        from .preflight import read_all_arm_pages
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         log.debug("identity preflight skipped, azure libraries missing: %s", exc)
         return None
@@ -203,18 +320,67 @@ def read_identity_grants(
 
         sa_id = (ws_body.json().get("properties") or {}).get("storageAccount") or ""
 
-        def roles_on(scope: str) -> list[str]:
-            if not scope or not principal_id:
-                return []
-            resp = requests.get(
-                f"{arm}{scope}/providers/Microsoft.Authorization/roleAssignments"
-                f"?api-version=2022-04-01&$filter=principalId eq '{principal_id}'",
-                headers=headers,
-                timeout=30,
-            )
-            resp.raise_for_status()
+        def roles_on(scope: str) -> list[str] | None:
+            """Every role `principal_id` holds on `scope`, or None if unread.
+
+            This did ONE `requests.get` and iterated `.json().get("value", [])`.
+            Microsoft types that 200 as `RoleAssignmentListResult`, which
+            carries `nextLink` beside "The RoleAssignment items **on this
+            page**" -- so page 1 was being read as the whole list, and the same
+            `.get(..., [])` also turned a body that is not a list result at all
+            into "this identity holds no roles".
+
+            Both landed on `[]`, and `[]` here is a *finding*: it makes
+            `can_pull_image` False and `identity_blocker` refuse a deployment
+            whose AcrPull grant is sitting on page 2. Executed, same fake
+            registry and same two assignments, the only variable being whether
+            ARM paged them -- which is ARM's choice, not ours (S79):
+
+                one page   -> ['Reader', 'AcrPull'] -> deploys
+                paginated  -> ['Reader']            -> BLOCKS, "missing AcrPull"
+
+            `acr_id_for_image`, ~40 lines down this same file, already went
+            through `read_all_arm_pages`. This is that, plus the third state
+            the dataclass now has for a read that did not finish.
+            """
+            if not principal_id:
+                # Nothing to hold roles. `identity_blocker` exits on a null
+                # principal before it reads either list.
+                return None
+            if not scope:
+                # No ARM id, so no listing was made. `[]` here used to mean
+                # "measured, holds nothing" and refused the deploy over a
+                # resource id this tool had simply failed to build.
+                return None
+            try:
+                assignments = read_all_arm_pages(
+                    requests,
+                    f"{arm}{scope}/providers/Microsoft.Authorization/roleAssignments"
+                    f"?api-version=2022-04-01&$filter=principalId eq '{principal_id}'",
+                    headers=headers,
+                    timeout=30,
+                )
+            except Exception as exc:  # noqa: BLE001 - scoped unread, see below
+                # Scoped to ONE listing on purpose. The enclosing handler turns
+                # any failure into `return None` for the whole record, which
+                # loses the other scope's perfectly good reading -- a truncated
+                # registry listing would take a real, measured, missing storage
+                # role down with it. Catching here keeps the status next to the
+                # rows it explains, which is what `SectionScan` does for the
+                # same reason.
+                #
+                # A warning, not a debug line: this is the branch where the
+                # preflight stopped being able to answer, and it is rendered to
+                # the operator by `identity_unread_note`.
+                log.warning(
+                    "role assignments of %s on %s could not be listed to the end "
+                    "(%s); this preflight can no longer tell a missing grant from "
+                    "an unread one, and will not refuse the deploy over it",
+                    principal_id, scope, exc,
+                )
+                return None
             names = []
-            for a in resp.json().get("value", []):
+            for a in assignments:
                 rid = (a.get("properties") or {}).get("roleDefinitionId", "")
                 names.append(_ROLE_NAMES.get(rid.rsplit("/", 1)[-1], rid.rsplit("/", 1)[-1]))
             return names
@@ -227,6 +393,8 @@ def read_identity_grants(
             acr_is_workspace_linked=(
                 bool(linked_acr) and linked_acr.lower() == acr_id.lower()
             ),
+            acr_scope=acr_id,
+            storage_scope=sa_id,
         )
     except Exception as exc:  # noqa: BLE001 - never block on a failed read
         log.debug("identity preflight could not read grants: %s", exc)
@@ -249,6 +417,21 @@ def acr_id_for_image(
     `resource_group` stays the fallback for when the lookup cannot run (no
     azure libraries, no credential, a read the caller is not entitled to), so
     behaviour is unchanged in the same-resource-group case this repo builds.
+
+    What round 7 changed is which of those the fallback SAYS it is. The lookup
+    read one page of a paginated ARM list, so a registry sitting on page 2 was
+    indistinguishable from a registry that is not in the subscription at all,
+    and both fell through to `assumed` on a `log.debug` nobody reads. The three
+    outcomes are now three different log lines, and the one that means "this
+    guess may name the wrong resource group" is a warning. S78.4.
+
+    Round 9 found that it made only ONE of the two blind outcomes a warning:
+    the handler named `TruncatedListing`, so the paginator's own page cap was
+    loud while a listing that 403'd on page 2 fell two levels out to the
+    `log.debug` this paragraph is about. Both leave `assumed` a guess, so both
+    are now the same warning, told apart by the exception type in the message.
+    The DEBUG line survives for the case where the lookup never ran at all.
+    S81.4.
     """
     host = str(image).split("/", 1)[0]
     if not host.endswith(".azurecr.io"):
@@ -263,22 +446,75 @@ def acr_id_for_image(
         import requests
         from azure.identity import DefaultAzureCredential
 
+        from .preflight import read_all_arm_pages
+
         cred = credential or DefaultAzureCredential()
         token = cred.get_token("https://management.azure.com/.default").token
-        resp = requests.get(
-            f"https://management.azure.com/subscriptions/{subscription_id}"
-            f"/providers/Microsoft.ContainerRegistry/registries"
-            f"?api-version=2023-01-01-preview",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        for item in resp.json().get("value") or []:
+        try:
+            registries = read_all_arm_pages(
+                requests,
+                f"https://management.azure.com/subscriptions/{subscription_id}"
+                f"/providers/Microsoft.ContainerRegistry/registries"
+                f"?api-version=2023-01-01-preview",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+        except Exception as exc:  # noqa: BLE001 - re-reported at WARNING, never dropped
+            # Louder than the outer handler on purpose: this is the branch where
+            # `assumed` might name the wrong resource group and nobody looked.
+            #
+            # Round 9 widened it from `except TruncatedListing`. Round 7 made
+            # the paginator's own cap a warning and left every OTHER way for
+            # the same listing to stop short falling two levels out to
+            # `log.debug`. Executed against the pre-fix module with a fake
+            # `requests` (page 1 carries a `nextLink`, page 2 raises) and a
+            # fake credential returning the literal string "fake-token":
+            #
+            #   B: page 2 of the listing raises (mid-listing HTTP failure)
+            #      DEBUG: could not resolve ACR acrffsft by name, assuming
+            #             rg-fake: (AuthorizationFailed) fake 403 on page 2
+            #   A: the page cap is hit (TruncatedListing from the paginator)
+            #      WARNING: the registry listing for this subscription stopped
+            #             short (...)
+            #
+            # Same guess, same blindness, two volumes -- and `log.debug` is off
+            # in every shipped entry point, so B printed nothing at all. §80 is
+            # this exact failure one file over. The wording was the other half:
+            # "could not resolve ACR X by name" is what you say after looking.
+            #
+            # The exception TYPE goes in the message because that is how the
+            # rest of this codebase tells a truncation from a 403
+            # (`SectionScan.detail`); one level, still two stories. S81.4.
+            log.warning(
+                "the registry listing for this subscription did not complete "
+                "(%s: %s), so whether %s lives outside %s was never established; "
+                "assuming %s",
+                type(exc).__name__, exc, registry, resource_group, assumed,
+            )
+            return assumed
+
+        for item in registries:
             if str(item.get("name", "")).lower() == registry.lower() and item.get("id"):
                 return str(item["id"])
+
+        # Scanned every page and it is genuinely not there. Worth a line too:
+        # it used to be silent, and silence here reads the same as a hit.
+        log.info(
+            "ACR %s is not in subscription %s; assuming %s",
+            registry, subscription_id, assumed,
+        )
     except Exception as exc:  # noqa: BLE001 - a failed lookup must not block deploy
+        # What reaches here after round 9 is only the seam BEFORE the listing:
+        # the azure extra absent, or a credential that refuses. The lookup did
+        # not run, which is the case this fallback was designed around, and on
+        # both call paths (`deploy/endpoint.py::deploy_online`, `azure_ml.py`)
+        # the very next Azure call fails loudly with the same credential -- so
+        # a warning here would put a second line under every real auth failure
+        # and teach the operator to skip the one above. The wording no longer
+        # says "could not resolve ACR X by name": nothing was resolved because
+        # nothing was asked.
         log.debug(
-            "could not resolve ACR %s by name, assuming %s: %s",
+            "the ACR lookup for %s did not run, so %s is assumed to hold it: %s",
             registry, resource_group, exc,
         )
 
@@ -331,18 +567,40 @@ class ArmRoleAuth:
         return {"Authorization": f"Bearer {token}"}
 
     def list_roles(self, scope: str, principal_id: str) -> list[str]:
+        """Every role held on `scope`, or raise if the listing did not finish.
+
+        Raising is the contract `read_all_arm_pages` documents, and it lands
+        exactly where it should: `ensure_role`'s existing could-not-look
+        handler, which answers with the `az` command instead of a write.
+
+        Reading one page here was worse than in the preflight, because this
+        list decides whether to *write* RBAC. Executed against the same fake
+        (S79), before the fix, with AcrPull already held and sitting on page 2:
+
+            paginated  -> granted=True already_had=False PUTs=1
+            page 2 403 -> granted=True already_had=False PUTs=1
+
+        Both re-granted a role the principal already had, on the strength of
+        rows nobody read; the second did it over a page ARM had refused. ARM
+        answers the first with 409 RoleAssignmentExists, which `ensure_role`
+        then reports to the operator as a permissions problem that does not
+        exist -- and `deploy_online` believes `granted` enough to sleep 60s of
+        GPU billing waiting for a propagation that is not happening.
+        """
         import requests
 
-        resp = requests.get(
+        from .preflight import read_all_arm_pages
+
+        assignments = read_all_arm_pages(
+            requests,
             f"https://management.azure.com{scope}"
             f"/providers/Microsoft.Authorization/roleAssignments"
             f"?api-version=2022-04-01&$filter=principalId eq '{principal_id}'",
             headers=self._headers(),
             timeout=30,
         )
-        resp.raise_for_status()
         out = []
-        for a in resp.json().get("value", []):
+        for a in assignments:
             rid = (a.get("properties") or {}).get("roleDefinitionId", "")
             out.append(_ROLE_NAMES.get(rid.rsplit("/", 1)[-1], rid.rsplit("/", 1)[-1]))
         return out

@@ -34,6 +34,8 @@ import os
 import time
 from typing import Any
 
+from ..logging_setup import quiet_azure_sdk_logs
+
 log = logging.getLogger("ffsft.deploy.merge")
 
 
@@ -354,6 +356,10 @@ def main() -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)-5s %(name)s | %(message)s"
     )
+    # After basicConfig, never before: the filter half of this attaches to the
+    # root handlers, and basicConfig is what creates them (ffsft/logging_setup.py).
+    quiet_azure_sdk_logs()
+
     merge_adapter(
         args.model,
         args.adapter,

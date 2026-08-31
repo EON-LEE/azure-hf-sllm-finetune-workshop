@@ -22,6 +22,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import re
+import textwrap
 from collections.abc import Sequence
 
 from .registry import get_serving_registry
@@ -60,19 +61,137 @@ def read_dedicated_quota(subscription_id: str, location: str, family: str) -> in
 
 @dataclasses.dataclass(frozen=True)
 class SkuProbe:
-    """What the control plane said when actually asked to create the cluster."""
+    """What the control plane said when actually asked to create the cluster.
+
+    Two fields exist because the probe can end without an answer. `probed=False`
+    means the control plane was never asked -- the probe refused to touch a name
+    it did not own, or could not read whether it owned it -- so `creatable=False`
+    there records "not measured", never "refused"; the detail says so in words
+    because that is what a human reads. `leftover` is non-empty when a compute
+    this call created could not be confirmed gone.
+
+    Both reach the operator through `blocker` for any caller that wants one
+    string. `endpoint.cmd_check` no longer does: it prints `probe_report`
+    instead, because a table cell has to say which of the three things happened
+    and `blocker` deliberately flattens them into one.
+    """
 
     sku: str
     tier: str
     creatable: bool
     code: str
     detail: str
+    probed: bool = True
+    leftover: str = ""
 
     @property
     def blocker(self) -> str | None:
-        if self.creatable:
-            return None
-        return f"{self.code}. {self.detail}"
+        """Everything the operator must act on before trusting this line.
+
+        Wider than "this SKU cannot be created", and deliberately so: a probe
+        cluster whose delete failed is a resource left behind by a command whose
+        `--help` calls itself free, and `log.warning` is not a channel `check`
+        prints. A leftover therefore blocks the line it is attached to even when
+        the create itself succeeded.
+        """
+        if not self.creatable:
+            base = f"{self.code}. {self.detail}"
+            return f"{base} {self.leftover}" if self.leftover else base
+        return self.leftover or None
+
+
+def _absence_is_proven(exc: BaseException) -> bool:
+    """True only when Azure actually said the thing is not there.
+
+    Moved here from `endpoint.py` with the other classifiers (`classify_store`,
+    `classify_cluster_error`), which is also what paid for the lines the
+    pre-delete cleanup needed to stop reporting a refused DELETE as a failed
+    GET -- `endpoint.py` sits under a deliberate line ratchet.
+
+    A 404 is an answer; a 403, a timeout or a DNS failure is the absence of
+    one, and they all arrive at the same `except` clause. Unknown is not empty
+    -- the inversion `lifecycle.EXIT_COULD_NOT_LOOK` exists for.
+
+    Two checks because a `ResourceNotFoundError` built without an HTTP response
+    -- how the suite's fakes build one -- carries `status_code=None`, so the
+    duck-typed test alone would warn on every clean first run.
+    """
+    from azure.core.exceptions import ResourceNotFoundError
+
+    if isinstance(exc, ResourceNotFoundError):
+        return True
+    return getattr(exc, "status_code", None) == 404
+
+
+def _summary(text: str) -> str:
+    """One table cell's worth of a message that may be a paragraph.
+
+    Lives here rather than in `endpoint.py` because `probe_report` below needs
+    the same rule and `endpoint` already imports this module; the reverse import
+    would be a cycle.
+    """
+    return text if len(text) <= 110 else text[:107].rstrip() + "..."
+
+
+def _wrapped(text: str) -> list[str]:
+    """A probe's paragraph, indented under its row instead of inside its cell."""
+    return textwrap.fill(text, width=92, initial_indent="      ", subsequent_indent="      ").split(
+        "\n"
+    )
+
+
+def probe_report(probe: SkuProbe, key: str, width: int) -> tuple[list[str], str | None]:
+    """The `check --probe` line(s) for one probe, plus what it leaves unread.
+
+    Three states, and the caller rendered two of them with the same word. It was
+    `if probe.blocker: print(f"{key}  BLOCKED  {probe.blocker}")`, which turned a
+    probe that never ran into a verdict about the SKU. Executed against a
+    workspace that already owned a compute named `ffsft-probe-0`:
+
+        aks_vllm  BLOCKED  ProbeNameTaken. a compute named 'ffsft-probe-0'
+        already exists and this probe did not create it ...
+        Standard_NV36ads_A10_v5 was NOT tested at LowPriority
+
+    rc=0. The cell says BLOCKED, the sentence says NOT tested, and nothing was
+    added to `cmd_check`'s COULD NOT LOOK list because a blocker is an answer and
+    answers are deliberately not collected there. `check --probe && echo ok`
+    printed ok over a SKU nobody asked about. So the unread state gets its own
+    word and its own footer entry -- that is what the second return value is.
+
+    The third state is a create the control plane accepted whose probe cluster
+    could not be confirmed deleted. That was BLOCKED as well, which reads as "you
+    cannot deploy this pattern" over a SKU that had just been accepted, and sends
+    the operator to pick another SKU when the thing to do is delete a cluster. It
+    is an `ok` row now, with the leftover named under it -- and it counts as
+    unread too, because a delete that failed is not a resource anyone confirmed
+    is gone, which is what `_discard_probe`'s own message says in words.
+
+    Paragraphs are wrapped under the row rather than pasted into the cell. Every
+    other row in `cmd_check` runs through `_summary` for that reason; this one
+    did not, and a 400-character detail reflowed the column and buried the rows
+    that followed it.
+    """
+    cell = f"  {key:<{width}}  "
+    if not probe.probed:
+        return (
+            [
+                f"{cell}UNKNOWN   {probe.code}: {probe.sku} was not tested",
+                *_wrapped(probe.detail),
+            ],
+            f"whether {key} can create {probe.sku} at {probe.tier} ({probe.code})",
+        )
+
+    if not probe.creatable:
+        lines = [f"{cell}BLOCKED   {_summary(f'{probe.code}. {probe.detail}')}"]
+        if len(f"{probe.code}. {probe.detail}") > 110:
+            lines += _wrapped(f"{probe.code}. {probe.detail}")
+    else:
+        lines = [f"{cell}ok        {probe.tier} {probe.sku} (create accepted)"]
+
+    if probe.leftover:
+        lines += _wrapped(f"LEFTOVER: {probe.leftover}")
+        return lines, f"whether the probe cluster this run created for {key} is gone"
+    return lines, None
 
 
 def classify_cluster_error(message: str) -> tuple[str, str]:
@@ -130,38 +249,162 @@ def probe_sku(client, sku: str, tier: str, *, name: str = "ffsft-probe") -> SkuP
 
     Free: a refusal returns in about two seconds having created nothing, and an
     acceptance is a `min_instances=0` cluster that allocates no node before it
-    is deleted.
+    is deleted -- and the delete is now awaited, so "deleted" is something this
+    function observed rather than something it started.
+
+    This is a destructive caller, and it was read as a read-only one for a long
+    time. `begin_create_or_update` is an upsert and `name` comes from the caller
+    (`cmd_check` passes `ffsft-probe-{index}`), so against a workspace that
+    already owned a cluster of that name the old code re-sized it to the probe's
+    settings and then deleted it -- audited output was `created:
+    [('ffsft-probe-0', 'Standard_NV36ads_A10_v5', 0)]` followed by `DELETED:
+    ['ffsft-probe-0']`. So the name is read before it is written, only a name
+    this call created is ever deleted, and a delete that fails is returned to
+    the caller instead of being logged where nothing prints it.
     """
     from azure.ai.ml.entities import AmlCompute
 
+    # The one name this call is allowed to delete. It stays False through every
+    # refusal path, so a cluster this call did not create cannot reach
+    # `_discard_probe`. Ownership is tracked, never inferred from the resource:
+    # a cluster somebody else made and one this probe made look identical.
+    probe_owns_name = False
+
+    taken, unreadable = _name_is_taken(client, name)
+    if taken is not False:
+        return _refuse_name(sku, tier, name, unreadable)
+
+    entity = AmlCompute(
+        name=name,
+        size=sku,
+        min_instances=0,
+        max_instances=1,
+        tier=tier,
+        idle_time_before_scale_down=120,
+    )
+    # Claimed before the call, not after it: the create is an ARM PUT, so a
+    # refused create still leaves a compute record behind, and that record is
+    # this call's to remove (the cleanup below is exactly that case).
+    probe_owns_name = True
     try:
-        client.compute.begin_create_or_update(
-            AmlCompute(
-                name=name,
-                size=sku,
-                min_instances=0,
-                max_instances=1,
-                tier=tier,
-                idle_time_before_scale_down=120,
-            )
-        ).result()
+        client.compute.begin_create_or_update(entity).result()
+    except KeyboardInterrupt:
+        # `except Exception` does not catch this one, and `.result()` is the
+        # long wait in this function -- ~30s of polling against a name the PUT
+        # has already written. Ctrl-C there used to unwind straight past the
+        # discard below, leaving a real AmlCompute named `ffsft-probe-N` in a
+        # workspace, created by a command whose own help calls it free ("a
+        # refusal creates nothing, an acceptance is deleted"). It holds no nodes
+        # at min_instances=0, but it holds the name, so the NEXT `check --probe`
+        # refuses that pattern for `ProbeNameTaken` and reports it untested.
+        # The cleanup is the same call the normal paths make; the interrupt is
+        # re-raised, because swallowing it would mean Ctrl-C did nothing.
+        leftover = _discard_probe(client, name)
+        print(
+            f"\ninterrupted: removing the probe cluster '{name}' this run created."
+            + (f"\n{leftover}" if leftover else " it is gone.")
+        )
+        raise
     except Exception as exc:  # noqa: BLE001 - the message is the whole point
         code, detail = classify_cluster_error(str(exc))
         # A refused create still leaves a compute record in `Failed`. It holds no
         # nodes and bills nothing, but it accumulates, and this project's whole
         # teardown story is that nothing is left behind.
-        _discard_probe(client, name)
-        return SkuProbe(sku=sku, tier=tier, creatable=False, code=code, detail=detail)
+        leftover = _discard_probe(client, name) if probe_owns_name else ""
+        return SkuProbe(
+            sku=sku, tier=tier, creatable=False, code=code, detail=detail, leftover=leftover
+        )
 
-    _discard_probe(client, name)
-    return SkuProbe(sku=sku, tier=tier, creatable=True, code="", detail="")
+    leftover = _discard_probe(client, name) if probe_owns_name else ""
+    return SkuProbe(sku=sku, tier=tier, creatable=True, code="", detail="", leftover=leftover)
 
 
-def _discard_probe(client, name: str) -> None:
+def _name_is_taken(client, name: str) -> tuple[bool | None, str]:
+    """Is a compute called `name` already there? `(None, why)` when the read failed.
+
+    Read before write, because the write is an upsert and the teardown after it
+    is unconditional. A read that fails is not a free name, it is no answer at
+    all: this codebase's standing rule that "could not look" may never be
+    reported as "looked, saw nothing" applies with the sharpest edge here,
+    because acting on the wrong guess overwrites and then deletes a cluster
+    belonging to somebody who never ran this command.
+    """
+    from azure.core.exceptions import ResourceNotFoundError
+
     try:
-        client.compute.begin_delete(name)
-    except Exception:  # noqa: BLE001 - a leaked min=0 cluster allocates nothing
-        log.warning("probe cluster %s could not be deleted; it holds no nodes", name)
+        client.compute.get(name)
+    except ResourceNotFoundError:
+        return False, ""
+    except Exception as exc:  # noqa: BLE001 - an unreadable name is not a free one
+        log.warning("could not read whether compute '%s' already exists: %s", name, exc)
+        # The type carries the next move -- a 403 points at the identity, a
+        # timeout points at retrying -- the same reason `lifecycle._section`
+        # records the exception type next to the gap it explains.
+        return None, f"{type(exc).__name__}: {exc}"
+    return True, ""
+
+
+def _refuse_name(sku: str, tier: str, name: str, unreadable: str) -> SkuProbe:
+    """The probe declining to touch a name it cannot prove is free.
+
+    `probed=False` and the wording carry the same thing twice on purpose: the
+    control plane was never asked, so this result says nothing about the SKU. A
+    refusal rendered as "this SKU cannot be created" would be a finding invented
+    out of a value nobody measured, which costs as much as the opposite error.
+    """
+    if unreadable:
+        code = "ProbeNameUnreadable"
+        opening = (
+            f"could not read whether a compute named '{name}' already exists "
+            f"({unreadable}), so nothing was created and nothing was deleted."
+        )
+    else:
+        code = "ProbeNameTaken"
+        opening = (
+            f"a compute named '{name}' already exists and this probe did not create "
+            f"it, so nothing was created and nothing was deleted."
+        )
+    detail = (
+        f"{opening} {sku} was NOT tested at {tier} -- this line is about the name, "
+        f"not the SKU. Re-run the probe against a name nobody owns, or remove "
+        f"'{name}' yourself first: the create call is an upsert, so it would have "
+        f"replaced that cluster's size, tier and scale settings, and the teardown "
+        f"that follows it would then have deleted the cluster outright."
+    )
+    return SkuProbe(sku=sku, tier=tier, creatable=False, code=code, detail=detail, probed=False)
+
+
+def _discard_probe(client, name: str) -> str:
+    """Delete a probe cluster *this call created*; return "" or why it is still there.
+
+    Both halves were paid for. The poller is awaited like all four delete sites
+    in `deploy/lifecycle.py`: without `.result()` this returns while the delete
+    is still in flight or has already failed server-side, and `check --probe`
+    then prints "an acceptance is deleted" on no evidence. And the failure is
+    returned rather than logged, because `log.warning` is not a channel
+    `ffsft-deploy check` prints -- a leftover nobody is told about is precisely
+    the leak the teardown story exists to prevent.
+    """
+    from azure.core.exceptions import ResourceNotFoundError
+
+    try:
+        client.compute.begin_delete(name).result()
+    except ResourceNotFoundError:
+        # Already absent is the end state this function exists to reach, not a
+        # leftover: a create refused before the record was written leaves
+        # nothing behind, and reporting that as a leak sends the operator
+        # hunting a cluster that was never created.
+        return ""
+    except Exception as exc:  # noqa: BLE001 - reported to the caller, never swallowed
+        log.warning("probe cluster %s could not be deleted: %s", name, exc)
+        return (
+            f"the probe cluster '{name}' this run created is still there: the delete "
+            f"failed with {type(exc).__name__}: {exc}, and nothing here can confirm "
+            f"it is gone. It was created with min_instances=0 so it holds no nodes, "
+            f"but it does hold the name -- check it with `ffsft-lifecycle status` and "
+            f"delete it."
+        )
+    return ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -178,8 +421,17 @@ class StoreProbe:
     private_endpoints: int
     reachable: bool
     detail: str
-    key_auth_refused: bool = False
-    key_based_datastores: tuple[str, ...] = ()
+    #: `True` refused, `False` not refused, `None` the question was not
+    #: answered -- the account said `allowSharedKeyAccess=false` and the
+    #: datastore listing that decides the other half did not come back. `None`
+    #: is not a verdict about the account and must not be rendered as one; it
+    #: belongs in `cmd_check`'s COULD NOT LOOK list. Kept the same shape as
+    #: `preflight.StorageReachability.key_auth_refused` on purpose: the same
+    #: swallow existed in both files and was fixed in one round.
+    key_auth_refused: bool | None = False
+    #: `None` means the listing was not read; `()` means it was read and found
+    #: nothing. Those were the same value until round 6.
+    key_based_datastores: tuple[str, ...] | None = None
 
 
 def classify_store(
@@ -188,7 +440,7 @@ def classify_store(
     private_endpoints: int,
     *,
     allow_shared_key: bool | None = None,
-    key_based_datastores: Sequence[str] = (),
+    key_based_datastores: Sequence[str] | None = None,
 ) -> StoreProbe:
     """Decide whether a storage account is reachable by anything.
 
@@ -227,8 +479,18 @@ def classify_store(
     in this project has consistently been turning the former into the latter.
     That is why `allow_shared_key=None` (unread) never fails the check: only a
     measured `False` alongside a measured `AccountKey` datastore does.
+
+    Reporting reachable is not the same as reporting nothing, and that is what
+    the third `key_auth_refused` state is for. `key_based_datastores=None` means
+    the listing was not read at all; next to a measured `allowSharedKeyAccess:
+    false` the credential axis then has no answer, and this returns
+    `key_auth_refused=None` for `cmd_check` to put in its COULD NOT LOOK list.
+    `reachable` deliberately stays the network answer there -- flipping it would
+    print UNREACHABLE, which is a claim about the account nothing here measured.
+    An unread listing next to anything other than a measured `false` is not
+    reported at all: it cannot change the answer, so it is not a blind spot.
     """
-    key_based = tuple(key_based_datastores)
+    key_based = None if key_based_datastores is None else tuple(key_based_datastores)
 
     if public_access != "Disabled":
         net_ok, net_detail = True, ""
@@ -251,6 +513,15 @@ def classify_store(
                 f"tenant-level enforcement."
             ),
         )
+
+    if allow_shared_key is False and key_based is None:
+        # Could not look. Not a blocker (nothing measured says the datastores
+        # present a key) and not a pass (nothing measured says they do not).
+        # The row, the COULD NOT LOOK block and the exit code are `cmd_check`'s
+        # to print -- it branches on `store.key_auth_refused is None`, inlined
+        # there rather than given a helper because endpoint.py is under a line
+        # ratchet (tests/test_deploy_module_split.py).
+        return StoreProbe(account, public_access, private_endpoints, net_ok, net_detail, None, None)
 
     if allow_shared_key is False and key_based:
         # Reported even when the network posture passes, because it is
@@ -281,31 +552,62 @@ def classify_store(
     )
 
 
-def _key_based_datastores(root: str, workspace: str, head: dict) -> list[str]:
-    """Names of datastores that authenticate with an account key.
+def _key_based_datastores(root: str, workspace: str, head: dict) -> list[str] | None:
+    """Names of datastores that authenticate with an account key, or None.
 
-    Read separately from the account so an unreadable datastore list degrades to
-    "no key-based datastores found" rather than to a false blocker -- the same
-    reason `probe_model_store` reports reachable when it cannot see.
+    `None` is "could not look" and `[]` is "looked, none are key-based". This
+    returned `[]` for both, and `classify_store` reads the empty list as the
+    measured absence of the S57.8 blocker, so a 403 on this one GET rendered a
+    workspace nobody could see as strictly cleaner than a broken one. Executed
+    with everything else stubbed clean, the listing the only variable:
+
+        listing readable = True   -> datastore  UNREACHABLE  stffsftkc ...
+        listing readable = False  -> no datastore line at all, rc=0, `check &&
+                                     echo ok` printed ok
+
+    `raise_for_status` is here for the same reason and was the worse half: with
+    no status check a 403 whose body still parses as JSON never raised at all,
+    so `page.get("value")` returned `[]` and not even the `log.warning` below
+    fired. And `log.warning` is stderr -- not the structured report, not the
+    COULD NOT LOOK block whose own prose claims exhaustiveness, and not the exit
+    code -- so it was never the whole answer either way.
     """
     import requests
 
+    from .preflight import read_all_arm_pages
+
     try:
-        page = requests.get(
-            f"{root}/Microsoft.MachineLearningServices/workspaces/"
-            f"{workspace}/datastores?api-version=2024-10-01",
-            headers=head,
-            timeout=60,
-        ).json()
+        # `page` was the right name and the wrong number of them. An ARM list
+        # answers one page at a time and says `nextLink` when there are more;
+        # reading only the first is a successful read of part of the list, and
+        # it landed on `[]` -- the value the sentinel above reserves for
+        # "measured, and none of them present an account key". Executed, the
+        # only variable being whether ARM paged the same four datastores:
+        #
+        #     one page   -> `check` printed  datastore  UNREACHABLE  ...
+        #     paginated  -> no datastore row at all, rc 0, `check && echo ok`
+        #                   printed ok
+        #
+        # `read_all_arm_pages` raises on a listing it cannot finish, so a
+        # truncation lands in the same handler a 403 does and answers None.
+        # S78.2.
         return sorted(
             d["name"]
-            for d in (page.get("value") or [])
+            for d in read_all_arm_pages(
+                requests,
+                f"{root}/Microsoft.MachineLearningServices/workspaces/"
+                f"{workspace}/datastores?api-version=2024-10-01",
+                headers=head,
+                timeout=60,
+            )
             if ((d.get("properties") or {}).get("credentials") or {}).get("credentialsType")
             == "AccountKey"
         )
     except Exception as exc:  # noqa: BLE001 - an unreadable list must not block
+        # Still not a blocker, and no longer a clean pass either: None makes the
+        # caller say it could not look. See the docstring.
         log.warning("could not read datastore credentials: %s", exc)
-        return []
+        return None
 
 
 def probe_model_store(target) -> StoreProbe:

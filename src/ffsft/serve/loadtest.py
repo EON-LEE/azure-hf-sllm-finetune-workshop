@@ -35,6 +35,8 @@ import os
 import time
 from dataclasses import asdict, dataclass, field
 
+from ..logging_setup import quiet_azure_sdk_logs
+
 log = logging.getLogger("ffsft.loadtest")
 
 #: Korean prompts of deliberately different lengths. Prompt length drives prefill
@@ -378,6 +380,10 @@ def main() -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)-5s %(name)s | %(message)s"
     )
+    # After basicConfig, never before: the filter half of this attaches to the
+    # root handlers, and basicConfig is what creates them (ffsft/logging_setup.py).
+    quiet_azure_sdk_logs()
+
     levels = [int(x) for x in args.concurrency.split(",") if x.strip()]
     # An unparseable value is fatal rather than ignored: silently dropping it
     # would run the whole sweep against a model in the wrong mode and publish

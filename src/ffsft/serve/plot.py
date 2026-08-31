@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+from ..logging_setup import quiet_azure_sdk_logs
+
 BLUE = "#2563eb"
 GREEN = "#16a34a"
 LIMIT = "#dc2626"
@@ -407,6 +409,12 @@ def main() -> int:
         help="a scripts/compare_deployments.py report -> tokens-per-prompt.svg",
     )
     args = ap.parse_args()
+
+    # This one renders JSON to SVG and never opens a socket, so it has nothing
+    # of its own to quiet. It is wired anyway because the guarantee that is
+    # worth having is "every entry point", not "the entry points we remembered"
+    # -- tests/test_logging_setup_wiring.py is what enforces that.
+    quiet_azure_sdk_logs()
 
     reports: dict[str, dict] = {}
     for item in args.reports:

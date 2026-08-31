@@ -27,13 +27,20 @@ import time
 from typing import TYPE_CHECKING
 
 from ..azure_ml import image_tag
+from ..logging_setup import quiet_azure_sdk_logs
+from .batch import BATCH_DEPLOYMENT_NAME, deploy_batch, ensure_batch_endpoint
+from .lifecycle import EXIT_COULD_NOT_LOOK
+from .preflight import QUOTA_SCOPE, scope_lines
 from .probes import (
     SkuProbe,
     StoreProbe,
+    _absence_is_proven,
+    _summary,
     check_pattern,
     classify_cluster_error,
     classify_store,
     probe_model_store,
+    probe_report,
     probe_sku,
     quota_family_for,
     read_dedicated_quota,
@@ -67,6 +74,7 @@ __all__ = [
     "SERVE_ENVIRONMENT_NAME",
     "SERVE_ENVIRONMENT_VERSION",
     "SERVE_IMAGE",
+    "SERVE_IMAGE_ENV_VAR",
     "SkuProbe",
     "StoreProbe",
     "check_pattern",
@@ -75,6 +83,7 @@ __all__ = [
     "deploy_batch",
     "deploy_online",
     "egress_for",
+    "ensure_batch_endpoint",
     "ensure_endpoint",
     "get_serving_registry",
     "params_from_hf_id",
@@ -84,6 +93,7 @@ __all__ = [
     "quota_family_for",
     "read_dedicated_quota",
     "resolve_params_b",
+    "resolve_serve_image",
     "serve_environment",
     "serving_env",
     "startup_grace_for",
@@ -118,13 +128,42 @@ SERVE_ENVIRONMENT_NAME = "ffsft-serve"
 #: passed no version at all, which is how `ffsft-serve` ended up with versions
 #: 1 and 2 holding images `:2` and `:3` -- a numbering that tells a reader
 #: nothing about which image a version holds.
+#:
+#: It is the version of `SERVE_IMAGE` and of nothing else. Now that the image
+#: is a runtime value (`--image` / `FFSFT_SERVE_IMAGE`), nothing on the deploy
+#: path may read this name: an immutable version pinned at import time to an
+#: image chosen at call time is the silent-wrong-code failure the derivation
+#: exists to prevent -- Azure ML hands back the version already holding the
+#: authors' `:5`. `tests/test_serve_image_is_parameterised.py` pins that.
 SERVE_ENVIRONMENT_VERSION = image_tag(SERVE_IMAGE)
+
+#: Set once per shell instead of passing `--image` to every deploy.
+SERVE_IMAGE_ENV_VAR = "FFSFT_SERVE_IMAGE"
+
+
+def resolve_serve_image(image: str | None = None) -> str:
+    """Which serving image to deploy: `--image`, then the env var, then the default.
+
+    `SERVE_IMAGE` is the authors' private registry, which nobody else can pull
+    from: lab4 has a participant `az acr build` their own `ffsft-serve:1` and
+    there was then no supported way to deploy it -- the end of the
+    managed-online track for anyone outside this subscription.
+
+    One resolver per deploy, because the image settles three things that must
+    agree -- environment version, environment image, and the registry the
+    endpoint identity gets AcrPull on -- and two of those disagree silently.
+    """
+    explicit = (image or "").strip()
+    if explicit:
+        return explicit
+    return os.environ.get(SERVE_IMAGE_ENV_VAR, "").strip() or SERVE_IMAGE
+
 
 #: Where Azure ML mounts a registered model inside the inference container.
 MODEL_MOUNT = "/var/azureml-app/azureml-models"
 
 
-def serve_environment(client: MLClient) -> Environment:
+def serve_environment(client: MLClient, image: str | None = None) -> Environment:
     """The serving environment, checked against what is already registered.
 
     Third of the three registrations in this repo, and until now the odd one:
@@ -141,17 +180,19 @@ def serve_environment(client: MLClient) -> Environment:
     becomes healthy after Azure has spent an hour trying to allocate a node for
     it. Noticing here is free.
 
+    The version is derived from the `image` passed in, never from
+    `SERVE_ENVIRONMENT_VERSION`: a participant's `ffsft-serve:1` registered
+    under version `5` collides with the version holding the authors' `:5`.
+
     Returns the entity rather than registering it: it is passed inline to the
     `ManagedOnlineDeployment`, which is what performs the registration.
     """
     from azure.ai.ml.entities import Environment
     from azure.core.exceptions import ResourceNotFoundError
 
-    name, version, image = (
-        SERVE_ENVIRONMENT_NAME,
-        SERVE_ENVIRONMENT_VERSION,
-        SERVE_IMAGE,
-    )
+    name = SERVE_ENVIRONMENT_NAME
+    image = resolve_serve_image(image)
+    version = image_tag(image)
     try:
         registered = client.environments.get(name, version=version)
     except ResourceNotFoundError:
@@ -162,7 +203,8 @@ def serve_environment(client: MLClient) -> Environment:
             f"environment '{name}:{version}' is already registered against "
             f"'{registered.image}', not '{image}'. An Azure ML environment version "
             f"is immutable, so this cannot be re-pointed -- build a new tag and "
-            f"bump SERVE_IMAGE, which moves the version with it."
+            f"pass it with --image (or {SERVE_IMAGE_ENV_VAR}), which moves the "
+            f"version with it."
         )
 
     return Environment(
@@ -177,8 +219,6 @@ def serve_environment(client: MLClient) -> Environment:
             "scoring_route": {"port": 8000, "path": "/v1/chat/completions"},
         },
     )
-
-
 
 
 def serving_env(
@@ -333,6 +373,7 @@ def deploy_online(
     pattern_key: str = "aml_online_vllm",
     instance_count: int = 1,
     sku: str | None = None,
+    image: str | None = None,
     served_model_name: str = "ffsft",
     max_model_len: int = 4096,
     gpu_memory_utilization: float = 0.90,
@@ -366,6 +407,10 @@ def deploy_online(
       parse time -- so the container fetches the weights itself instead. See
       `docker/fetch_model.py`.
 
+    `image` names the serving container (`--image`, then `FFSFT_SERVE_IMAGE`,
+    then `SERVE_IMAGE`); it drives the environment version *and* the AcrPull
+    grant, so a participant's own registry works end to end.
+
     `request_timeout_ms` defaults far above Azure ML's 5s default: a 27B model
     generating 128 tokens takes tens of seconds, and the default silently turns
     every real request into a 504.
@@ -379,6 +424,13 @@ def deploy_online(
     from ffsft.azure_ml import AzureTarget, get_ml_client
 
     target = AzureTarget.from_env()
+
+    # Resolved once, then reused for the environment *and* the AcrPull grant.
+    # `image_tag` also refuses an untagged reference here, where it is free,
+    # rather than after Azure spends 15-30 minutes allocating a node.
+    serve_image = resolve_serve_image(image)
+    log.info("serving image %s (environment version %s)", serve_image, image_tag(serve_image))
+
     spec, blocker = check_pattern(
         pattern_key,
         target.subscription_id,
@@ -456,10 +508,11 @@ def deploy_online(
         acr_id_for_image,
         ensure_acr_pull,
         identity_blocker,
+        identity_unread_note,
         read_identity_grants,
     )
 
-    acr_id = acr_id_for_image(SERVE_IMAGE, target.subscription_id, target.resource_group)
+    acr_id = acr_id_for_image(serve_image, target.subscription_id, target.resource_group)
     if acr_id:
         principal = getattr(
             getattr(client.online_endpoints.get(name=endpoint_name), "identity", None),
@@ -481,6 +534,13 @@ def deploy_online(
             )
 
         grants = read_identity_grants(target, endpoint_name, acr_id)
+        # The blocker only ever speaks about grants that were MEASURED absent.
+        # A roleAssignments listing that stopped early is neither a finding nor
+        # a clean bill of health, so it travels on its own channel rather than
+        # being folded into either -- S79.
+        unread = identity_unread_note(grants) if grants else None
+        if unread:
+            log.warning("%s", unread)
         identity_issue = identity_blocker(grants) if grants else None
         if identity_issue and not force:
             raise RuntimeError(identity_issue)
@@ -501,13 +561,45 @@ def deploy_online(
                 deployment_name,
                 state,
             )
-            client.online_deployments.begin_delete(
-                name=deployment_name, endpoint_name=endpoint_name
-            ).result()
-    except Exception as exc:  # noqa: BLE001 - absence is the normal first-run case
-        log.debug("no existing deployment to clean up: %s", exc)
+            try:
+                client.online_deployments.begin_delete(
+                    name=deployment_name, endpoint_name=endpoint_name
+                ).result()
+            except Exception as exc:  # noqa: BLE001 - a refused DELETE is not a failed GET
+                # This call sat inside the GET's `try`, so a refused delete was
+                # logged as "could not check whether deployment 'blue' already
+                # exists" -- the one thing that had just been checked. It
+                # exists, it is in `Failed`, and Azure will refuse this deploy
+                # with the unrecoverable-state message above.
+                log.warning(
+                    "deployment '%s' of endpoint '%s' is in '%s' and could NOT be "
+                    "deleted (%s). Azure refuses to update a deployment in this state, "
+                    "so this deploy is expected to fail on it; delete it by hand.",
+                    deployment_name,
+                    endpoint_name,
+                    state,
+                    exc,
+                )
+    except Exception as exc:  # noqa: BLE001 - the classification is in _absence_is_proven
+        if _absence_is_proven(exc):
+            log.debug("no existing deployment to clean up: %s", exc)
+        else:
+            # A 403 is not a 404, and this branch used to spell both `debug`.
+            # A refused GET is the one case where "nothing is there, so create
+            # freely" is unverified, and it was the case the operator could not
+            # see: the deploy went out clean and Azure refused it 20 minutes
+            # later with the unrecoverable-state message above.
+            log.warning(
+                "could not check whether deployment '%s' of endpoint '%s' already "
+                "exists (%s). That is not evidence that it does not. Deploying "
+                "anyway; if a previous attempt left one in a failed state, Azure "
+                "will refuse this update and it has to be deleted by hand.",
+                deployment_name,
+                endpoint_name,
+                exc,
+            )
 
-    env = serve_environment(client)
+    env = serve_environment(client, serve_image)
 
     if not model_uri and not hf_model and not model_blob_uri:
         raise ValueError(
@@ -622,67 +714,17 @@ def deploy_online(
     return scoring_uri
 
 
-def deploy_batch(
-    endpoint_name: str,
-    model_uri: str,
-    *,
-    pattern_key: str = "aml_batch",
-    compute_name: str | None = None,
-    instance_count: int = 1,
-    max_concurrency_per_instance: int = 1,
-    mini_batch_size: int = 8,
-):
-    """Create/update a batch endpoint backed by the LowPriority training cluster.
+def _store_posture_unread(store) -> bool:
+    """True when `probe_model_store` never managed to read the account.
 
-    Reuses the existing cluster deliberately: it already has the system-assigned
-    identity and ACR pull rights that this workspace's storage configuration
-    requires, and a second cluster would double the quota footprint for nothing.
+    It swallows its own errors and returns `classify_store("unknown",
+    "Unknown", 0)`, on purpose: a probe that cannot see must not become a
+    broken resource. But "Unknown" is not "Disabled", so that sentinel comes
+    back `reachable=True` -- `check` then printed no datastore line at all and
+    rated every pattern `ok?` over a workspace it had read nothing from. A
+    posture that WAS read is "Enabled" or "Disabled".
     """
-    from azure.ai.ml.entities import (
-        BatchEndpoint,
-        ModelBatchDeployment,
-        ModelBatchDeploymentSettings,
-    )
-
-    from ffsft.azure_ml import AzureTarget, get_ml_client
-
-    target = AzureTarget.from_env()
-    spec = get_serving_registry().get(pattern_key)
-    if not spec.allows_low_priority:
-        raise ValueError(f"pattern '{pattern_key}' is an online pattern; use deploy_online instead")
-
-    client = get_ml_client(target)
-    compute = compute_name or target.compute_name
-
-    log.info("ensuring batch endpoint %s", endpoint_name)
-    client.batch_endpoints.begin_create_or_update(
-        BatchEndpoint(name=endpoint_name, description="ffsft offline scoring")
-    ).result()
-
-    deployment = ModelBatchDeployment(
-        name="default",
-        endpoint_name=endpoint_name,
-        model=model_uri,
-        compute=compute,
-        settings=ModelBatchDeploymentSettings(
-            instance_count=instance_count,
-            max_concurrency_per_instance=max_concurrency_per_instance,
-            mini_batch_size=mini_batch_size,
-            output_action="append_row",
-            output_file_name="predictions.csv",
-            retry_settings={"max_retries": 3, "timeout": 3000},
-            error_threshold=-1,
-            logging_level="info",
-        ),
-    )
-    log.info("creating batch deployment on %s", compute)
-    client.batch_deployments.begin_create_or_update(deployment).result()
-
-    endpoint = client.batch_endpoints.get(endpoint_name)
-    endpoint.defaults = {"deployment_name": "default"}
-    client.batch_endpoints.begin_create_or_update(endpoint).result()
-    log.info("batch endpoint ready: %s", endpoint.scoring_uri)
-    return endpoint.scoring_uri
+    return getattr(store, "public_access", None) == "Unknown"
 
 
 def cmd_check(args) -> int:
@@ -691,14 +733,47 @@ def cmd_check(args) -> int:
 
     target = AzureTarget.from_env()
     registry = get_serving_registry()
-    print(f"subscription {target.subscription_id} / {target.location}\n")
+    # The header `ffsft-lifecycle status` prints, from the same helper. This was
+    # `subscription <id> / <location>`, which named the one value get_ml_client
+    # never sends and omitted the resource group and workspace that are most of
+    # what the lines below query -- under a lab that says to trust it. See
+    # `preflight.scope_lines`.
+    print("\n".join(scope_lines(target, QUOTA_SCOPE)) + "\n")
+
+    # Reads that came back with no answer at all. A blocker is an answer and is
+    # deliberately NOT collected here: `check` exiting non-zero because a
+    # pattern is legitimately out of quota would make the exit code useless for
+    # the thing it is being fixed for.
+    blind: list[str] = []
 
     store = probe_model_store(target)
-    if not store.reachable:
+    if _store_posture_unread(store):
+        blind.append("the workspace storage account's network posture")
+        print(
+            "  datastore  UNKNOWN      could not read the posture of the workspace "
+            "storage account\n"
+        )
+    elif not store.reachable:
         print(
             f"  datastore  UNREACHABLE  {store.account} "
             f"(publicNetworkAccess={store.public_access}, "
             f"{store.private_endpoints} private endpoints)\n"
+        )
+    if store.key_auth_refused is None:
+        # The third state, and the one this report used to render as a clean
+        # pass: allowSharedKeyAccess=false was measured, the datastore listing
+        # that decides the other half was not, so the S57.8 credential blocker
+        # was never evaluated at all. `probes._key_based_datastores` used to
+        # return `[]` for that, which reads as measured-empty -- the unread
+        # workspace printed no datastore line and exited 0, cleaner than the
+        # broken one it may well be. It answers `None` now (S78.2 extended that
+        # to a truncated listing as well), which is what makes this branch
+        # reachable at all. Deliberately its own `if`: a posture that went
+        # unread leaves this False, so the two never both fire.
+        blind.append("whether any workspace datastore still authenticates with an account key")
+        print(
+            f"  datastore  UNKNOWN      {store.account}: allowSharedKeyAccess=false and "
+            "the datastore list could not be read\n"
         )
 
     client = get_ml_client(target) if args.probe else None
@@ -707,18 +782,33 @@ def cmd_check(args) -> int:
         if spec.surface is Surface.LOCAL:
             print(f"  {spec.key:<{width}}  n/a       (local, no Azure quota involved)")
             continue
-        _, blocker = check_pattern(spec.key, target.subscription_id, target.location, store=store)
+        try:
+            _, blocker = check_pattern(
+                spec.key, target.subscription_id, target.location, store=store
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed read is a row, not a traceback
+            # `check_pattern` reads dedicated quota for every non-LowPriority
+            # pattern, so a 403 on Microsoft.Quota ended the report in a
+            # traceback partway down the table, leaving the rows already printed
+            # to read as the whole answer.
+            blind.append(f"whether {spec.key} can deploy ({_summary(str(exc))})")
+            print(f"  {spec.key:<{width}}  UNKNOWN   the read failed: {_summary(str(exc))}")
+            continue
         if blocker and spec.can_serve_from_hub and not store.reachable:
             # The datastore is dark, but this server resolves its own weights.
             # Re-ask without the storage constraint before calling it blocked --
             # ffsft-a10 deployed exactly this way while storage stayed dark.
-            _, hub_blocker = check_pattern(
-                spec.key,
-                target.subscription_id,
-                target.location,
-                store=store,
-                from_hub=True,
-            )
+            try:
+                _, hub_blocker = check_pattern(
+                    spec.key,
+                    target.subscription_id,
+                    target.location,
+                    store=store,
+                    from_hub=True,
+                )
+            except Exception as exc:  # noqa: BLE001 - same reason as the first ask
+                blind.append(f"whether {spec.key} can deploy from the Hub ({_summary(str(exc))})")
+                hub_blocker = blocker
             if hub_blocker is None:
                 print(
                     f"  {spec.key:<{width}}  ok        via --hf-model "
@@ -726,8 +816,7 @@ def cmd_check(args) -> int:
                 )
                 continue
         if blocker:
-            summary = blocker if len(blocker) <= 110 else blocker[:107].rstrip() + "..."
-            print(f"  {spec.key:<{width}}  BLOCKED   {summary}")
+            print(f"  {spec.key:<{width}}  BLOCKED   {_summary(blocker)}")
             continue
 
         if client is not None:
@@ -735,18 +824,33 @@ def cmd_check(args) -> int:
             # A distinct name per pattern: the delete is asynchronous, so reusing
             # one name races the next create against the previous teardown.
             probe = probe_sku(client, spec.default_sku, tier, name=f"ffsft-probe-{index}")
-            if probe.blocker:
-                print(f"  {spec.key:<{width}}  BLOCKED   {probe.blocker}")
-            else:
-                print(
-                    f"  {spec.key:<{width}}  ok        {tier} {spec.default_sku} (create accepted)"
-                )
+            # A probe has three outcomes and this printed two words for them.
+            # `probe_report` owns the split, and hands back the subject to add
+            # here when the probe ended without asking anything -- rendering an
+            # unasked question as BLOCKED, rc=0, is JOURNAL §75.
+            rows, unread = probe_report(probe, spec.key, width)
+            print("\n".join(rows))
+            if unread:
+                blind.append(unread)
             continue
 
         if spec.allows_low_priority:
             print(f"  {spec.key:<{width}}  ok?       LowPriority pool ({spec.default_sku})")
         else:
-            cores = read_dedicated_quota(target.subscription_id, target.location, spec.quota_family)
+            try:
+                cores = read_dedicated_quota(
+                    target.subscription_id, target.location, spec.quota_family
+                )
+            except Exception as exc:  # noqa: BLE001 - a failed read is a row, not a traceback
+                blind.append(
+                    f"dedicated {spec.quota_family} quota in {target.location} "
+                    f"({_summary(str(exc))})"
+                )
+                print(
+                    f"  {spec.key:<{width}}  UNKNOWN   could not read dedicated "
+                    f"{spec.quota_family} quota"
+                )
+                continue
             print(
                 f"  {spec.key:<{width}}  ok?       dedicated {spec.quota_family}="
                 f"{cores} cores ({spec.default_sku})"
@@ -762,6 +866,18 @@ def cmd_check(args) -> int:
             "  online endpoints (measured 2026-08-21, ffsft-a10 on "
             "Standard_NV12ads_A10_v5)."
         )
+    if blind:
+        print("\nCOULD NOT LOOK: these reads returned no answer, so nothing above")
+        print("covers them -- an unread row is neither ok nor blocked:")
+        for subject in blind:
+            print(f"  - {subject}")
+        print("fix the errors above and re-run before trusting this report.")
+        # Round 4 made the prose honest and left this `return 0`, so
+        # `ffsft-deploy check && echo ok` still printed ok over a workspace whose
+        # datastore probe and quota reads had all failed. `lifecycle.cmd_status`
+        # settled this split already; its constant is reused rather than a second
+        # scheme invented, and 2 there is the usage refusal, not this.
+        return EXIT_COULD_NOT_LOOK
     return 0
 
 
@@ -810,6 +926,15 @@ def build_parser() -> argparse.ArgumentParser:
         "served. --hf-model infers this from the repo id; --model-blob-uri "
         "cannot, and a missing spec means --mamba-cache-mode goes out empty "
         "-- which for Qwen3.8 is not a default but a crash.",
+    )
+    online.add_argument(
+        "--image",
+        default=None,
+        help="Serving container image, e.g. myacr.azurecr.io/ffsft-serve:1. The "
+        "default sits in a private registry you cannot pull from: build your own "
+        f"with `az acr build` (lab 4), then pass it here or export "
+        f"{SERVE_IMAGE_ENV_VAR}. The tag becomes the immutable Azure ML "
+        "environment version, so a rebuild needs a new tag.",
     )
     online.add_argument(
         "--deployment",
@@ -863,6 +988,15 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--endpoint", default="ffsft-batch")
     batch.add_argument("--model-uri", required=True)
     batch.add_argument("--compute", default=None)
+    # The name the PUT lands on. It was hardcoded, so an operator whose batch
+    # endpoint already had a `default` deployment had no way to ask for another
+    # one and no way to see which resource was about to be replaced.
+    batch.add_argument("--deployment", default=BATCH_DEPLOYMENT_NAME)
+    batch.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing batch deployment that runs a different model or cluster.",
+    )
     batch.add_argument("--instance-count", type=int, default=1)
     batch.add_argument("--mini-batch-size", type=int, default=8)
 
@@ -875,6 +1009,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)-5s %(name)s | %(message)s"
     )
+    quiet_azure_sdk_logs()
 
     if args.cmd == "check":
         return cmd_check(args)
@@ -917,6 +1052,7 @@ def main(argv: list[str] | None = None) -> int:
             args.model_uri,
             hf_model=args.hf_model,
             sku=args.sku,
+            image=args.image,
             model_blob_uri=args.model_blob_uri,
             model_spec=spec,
             deployment_name=args.deployment,
@@ -932,8 +1068,10 @@ def main(argv: list[str] | None = None) -> int:
         args.endpoint,
         args.model_uri,
         compute_name=args.compute,
+        deployment_name=args.deployment,
         instance_count=args.instance_count,
         mini_batch_size=args.mini_batch_size,
+        force=args.force,
     )
     return 0
 

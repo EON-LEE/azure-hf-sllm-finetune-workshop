@@ -110,7 +110,23 @@ def test_the_split_left_endpoint_readable():
     1423 lines was the state that motivated the split. The number is a ratchet,
     not a target -- it exists so that re-growing the file is a deliberate act
     that edits this line, rather than a drift nobody notices.
+
+    Moved once, deliberately: 1000 -> 1006 when `cmd_check` started printing the
+    scope header (six lines, five of them the comment saying what the old
+    `subscription <id> / <location>` line got wrong). The file had been sitting
+    at 999, so the bound could not absorb even the import; raising it is the act
+    this docstring asks for. It is not a budget to spend -- the next addition
+    edits this line again, or moves code out.
+
+    Moved again, 1006 -> 1110, when `cmd_check` stopped returning 0 over reads
+    that had failed and the pre-delete cleanup stopped spelling a 403 the way it
+    spells a 404 (`test_check_exit_code_agrees_with_what_it_could_read.py`).
+    That is 103 lines for two exit-code fixes, which is the ratchet doing its
+    job rather than a claim the growth was free: most of it is the failed-read
+    handling now wrapped around three call sites that used to be bare, and the
+    next person to touch this file should be looking to move `cmd_check` out
+    rather than to raise this number a third time.
     """
     with open(ep.__file__) as fh:
         n = sum(1 for _ in fh)
-    assert n < 1000, f"endpoint.py is back up to {n} lines"
+    assert n < 1110, f"endpoint.py is back up to {n} lines"
