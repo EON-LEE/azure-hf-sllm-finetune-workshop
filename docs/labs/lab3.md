@@ -1,48 +1,50 @@
-# Lab 3 — 평가: base 대 tuned
+# Lab 3 — 델타 읽기: base 대 tuned
 
-> **Track A · 선행: [Lab 2](lab2.md)**
+> **Track A · 선행: [Lab 2](lab2.md) 의 잡을 `--eval-suite` 로 제출해 `Completed`**
+> · 새 셸이면 `source ~/.ffsft-env` 부터 (배너가 `TRAIN` 이어야 합니다)
 
-> ## 💸 이 Lab 은 GPU 과금이 발생합니다
-> 학습과 **같은 잡 안에서** 채점합니다. §23 실측 기준 학습+평가 합쳐 약 **$1.5**,
-> 약 **50분**. 평가만 따로 돌리면 54 GB 다운로드가 한 번 더 발생합니다.
+> ## 💰 GPU 과금은 없습니다
+> **채점은 Lab 2 의 잡 안에서 이미 끝났습니다.** 이 Lab 은 아무것도 제출하지 않습니다.
+> §23.5 의 **약 $1.5** 는 그 한 잡(학습 + base 채점 + tuned 채점) 전체 요금이고,
+> 여기서 추가로 나가는 돈은 없습니다.
 
 ## 목표
 
 - **델타가 작업 단위**임을 이해한다 — 단일 절대 점수는 아무 말도 하지 않는다
+- 리포트를 어디서 어떻게 읽는지 안다 (MLflow `eval.*`, `eval_report.json`)
 - 이 리포가 만든 것이 **점수가 아니라 측정 장치**라는 것을 확인한다
 - n=25 의 +0.16 을 "성능 향상"이라 부르면 안 되는 이유를 계산으로 안다
 
 ## 선행조건
 
-- Lab 2 의 학습이 `Completed` 이고 어댑터가 실재함이 확인됨
+- Lab 2 §4 의 잡(`--eval-suite ko_fast --eval-limit 25`)이 `Completed`
+- Lab 2 §5 의 `verify_output_path.py` 가 통과 — 어댑터가 실재함
+
+> `eval.*` 메트릭이 하나도 없다면 `--eval-suite` 없이 제출된 잡입니다.
+> **평가만 나중에 붙일 수는 없습니다** — Lab 2 §4 로 돌아가 두 플래그를 붙여
+> 다시 제출하거나, 이미 있는 어댑터를 다시 채점하려면 아래 §6 을 보세요.
 
 ## 소요·비용
 
-**50분** (학습 42분 + 채점 8분), 약 $1.5.
+**20분, 읽기만. GPU 과금 없음.**
 
 ---
 
-## 1. 학습과 평가를 한 잡으로
+## 1. 왜 이 Lab 에 제출 명령이 없나
 
-```bash
-uv run python scripts/submit_training.py \
-   --subscription $FFSFT_SUBSCRIPTION_ID \
-   --resource-group $FFSFT_RESOURCE_GROUP \
-   --workspace $FFSFT_WORKSPACE \
-   --location $FFSFT_LOCATION \
-   --model qwen3.8-27b --mix ko_commercial_safe \
-   --max-steps 30 --max-seq-length 1024 --rank 16 \
-   --eval-suite ko_fast --eval-limit 25
-```
+`JobSpec` 은 `build_command` 에서 `train && eval` 을 **한 노드 안에서** 이어 붙입니다.
+그래서 Lab 2 의 잡 하나가 어댑터와 채점 리포트를 **둘 다** 냅니다.
 
-`build_command` 가 `train && eval` 로 이어 붙입니다. `;` 가 아니라 `&&` 인 이유:
-**학습이 실패하면 어댑터가 없고, 그 상태로 base 를 "tuned" 라벨로 채점하면
-아무것도 보고 안 하느니만 못하기 때문**입니다.
+- `;` 가 아니라 `&&` 인 이유: 학습이 실패하면 어댑터가 없고, 그 상태로 base 를
+  "tuned" 라벨로 채점하면 아무것도 보고 안 하느니만 못합니다.
+- 쪼갤 수 없는 이유 (§21.6): 어댑터를 다음 잡으로 넘기려면 `workspaceblobstore` 를
+  거쳐야 하는데, 그 경로가 §17 에서 실패가 증명된 바로 그 경로입니다.
+- 부수 효과: 노드 할당 1회, 이미지 풀 1회, **54 GB 다운로드 1회**.
 
-한 잡으로 묶으면 노드 할당 1회, 이미지 풀 1회, 54 GB 다운로드 1회로 끝나고
-어댑터가 로컬 디스크를 벗어나지 않습니다.
+**평가를 별도 잡으로 돌리는 Lab 은 이 자산에 없습니다.** 그건 설계를 거스르는 것이고,
+27B 를 한 번 더 내려받는 값을 냅니다.
 
-## 2. 스위트 고르기
+## 2. 어떤 스위트가 채점됐나
 
 ```bash
 uv run ffsft bench suites
@@ -51,7 +53,7 @@ uv run ffsft bench list
 
 | 스위트 | 벤치마크 | 쓰임 |
 |---|---|---|
-| `ko_fast` | kobest | 학습 반복 중 회귀 확인 — **이 Lab** |
+| `ko_fast` | kobest | 학습 반복 중 회귀 확인 — **Lab 2 가 쓴 것** |
 | `ko_core` | kmmlu, hae_rae_1_1, ifeval_ko, logickor | 기본 4축 |
 | `ko_full` | + kmmlu_hard, kobest, hrm8k | 전면 측정 |
 
@@ -59,19 +61,48 @@ uv run ffsft bench list
 > 학습 믹스에 절대 못 들어갑니다** — 테스트로 고정돼 있습니다. LogicKor 심사 문항은
 > 라이선스가 없어 벤더링하지 않았습니다.
 
-## 3. 기대 출력 (§23 실측, `heroic_fennel_085y2rwm3s`)
+## 3. 리포트를 어디서 읽나
 
-학습이 재현됩니다:
+채널이 두 개고, 워크스테이션에서 **실제로 읽히는 쪽은 MLflow** 입니다.
 
-```
-train.train_loss  = 1.2638      ← 직전 27B 런은 1.2637
-train.wall_seconds = 2540.2     (42.3분)
-train.vram_peak_gb = 28.19
+```bash
+uv run bash scripts/watch_jobs.sh LAB2:heroic_fennel_085y2rwm3s
 ```
 
-소수 넷째 자리까지 일치 — **한 번 우연히 된 게 아니라는 가장 싼 증거**입니다.
+`LAB2` 는 **여러분이 정하는 출력 표식**이고 뒤가 **잡 이름**입니다. 인자 모양
+(`[라벨:]<잡이름>`, 여러 개 나열 가능, 콜론 금지, 리포 루트에서 실행)은
+[Lab 2 §3](lab2.md) 에 한 번만 적어놨습니다. 위 이름은 §23.2 실측 런입니다 —
+**여러분의 잡 이름으로 바꿔서** 돌리세요.
 
-채점 결과 (태스크당 n=25, 눈금 0.04):
+태스크마다 세 개가 올라옵니다 — `eval.<task>.base`, `eval.<task>.tuned`, `eval.<task>.delta`.
+`eval.model` / `eval.adapter` / `eval.benchmarks` 는 태그로 붙습니다.
+
+> 일부 테넌트는 스토리지 계정 shared-key 인증을 정책으로 막습니다(`allowSharedKeyAccess:
+> false`). 이 경우 `log_metric` 값 쓰기만 `RestException: Authentication to workspace
+> storage account failed` 로 실패하고, `eval.<task>.*` 가 `-METRIC` 대신 `-TAG` 로 찍힙니다
+> — `set_tag` 는 스토리지를 타지 않아 계속 동작하고, `mlflow_report.py::publish` 가 실패한
+> 메트릭을 같은 이름의 태그로 다시 보내기 때문입니다. `watch_jobs.sh` 는 두 채널을 모두
+> 읽으므로 값 자체는 어느 쪽으로 찍혀도 유효합니다.
+
+JSON 원본은 잡 출력 안 `model_dir/eval/eval_report.json` 이고, `comparison` 배열이
+태스크당 `base` / `tuned` / `delta` / `delta_pct` 를 담습니다. 잡 stdout 에는 같은 내용이
+표로 찍히지만 **stdout 은 이 워크스테이션에서 안 읽힙니다** → [GOTCHAS #9](../GOTCHAS.md#9)
+
+```
+task                              base     tuned     delta   delta %
+--------------------------------------------------------------------
+kobest_boolq                    0.7200    0.8800    0.1600     22.22
+kobest_sentineg                 0.9600    1.0000    0.0400      4.17
+```
+
+**세 열이 항상 같이 나오는 것이 핵심입니다.** `eval/run.py` 는 `--adapter` 가 있으면
+base 와 tuned 를 **동일한 항목·동일한 양자화·동일한 하네스·동일한 노드**에서 채점합니다.
+`--skip-base` 로 base 를 건너뛰면 런타임이 절반이 되지만 `delta` 가 `-` 로 비고,
+그러면 이 Lab 이 말하는 모든 것이 사라집니다. 그래서 학습 잡은 그 플래그를 안 씁니다.
+
+## 4. 실측 결과 (§23.2, `heroic_fennel_085y2rwm3s`)
+
+태스크당 n=25 → **눈금 0.04**.
 
 | 태스크 | base | tuned | delta |
 |---|---|---|---|
@@ -80,8 +111,13 @@ train.vram_peak_gb = 28.19
 | `kobest_copa` | 0.84 | 0.84 | 0.00 |
 | `kobest_hellaswag` | 0.80 | 0.80 | 0.00 |
 | `kobest_wic` | 0.48 | 0.48 | 0.00 |
+| `kobest` (그룹) | 0.80 | 0.80 | 0.00 |
 
-## 4. ⚠️ 이 숫자로 "좋아졌다"고 말하면 안 된다
+**그룹 행이 안 움직인 이유** (§23.4): `kobest` 는 그룹이라 하위 5개와 **별도로 자기 표본**을
+채점합니다. 하위에서 `boolq` 만 움직였으므로 그룹 평균이 눈금(0.04) 아래로 희석된 것으로
+보입니다. 표본을 늘리기 전에는 이 이상 말할 근거가 없습니다.
+
+## 5. ⚠️ 이 숫자로 "좋아졌다"고 말하면 안 된다
 
 ```
 p ≈ 0.8, n = 25  →  표준오차 = sqrt(0.8 × 0.2 / 25) = 0.08
@@ -96,18 +132,44 @@ p ≈ 0.8, n = 25  →  표준오차 = sqrt(0.8 × 0.2 / 25) = 0.08
 그것을 증명하지 못합니다.** 주장을 하려면 `--eval-limit` 을 빼고 전체 스플릿으로
 돌려야 하고, 27B 를 두 번 적재해 채점하면 A100 LowPriority 로 2~4시간입니다.
 
-**이 Lab 이 실제로 증명하는 것**: base 와 tuned 가 동일한 양자화·동일한 하네스·
+**이 잡이 실제로 증명하는 것**: base 와 tuned 가 동일한 양자화·동일한 하네스·
 동일한 노드에서 채점되고, 델타가 MLflow 로 자동 기록되며, 27B 두 벌을 순차 적재해도
 85 GB 카드에서 OOM 이 없다는 것. **표본만 늘리면 그대로 유효한 실험이 됩니다.**
 
-## 5. 결과 읽기
+그래서 델타를 늘리는 방법은 이 Lab 을 다시 도는 게 아니라 Lab 2 의 잡을
+**`--eval-limit` 을 키우거나 빼고** 다시 내는 것입니다. 시간이 그만큼 늡니다.
+
+## 6. 이미 있는 어댑터를 나중에 다시 채점해야 한다면
 
 ```bash
-uv run bash scripts/watch_jobs.sh EVAL:<run-name>
+uv run ffsft eval --model qwen3.8-27b --adapter <어댑터 디렉터리> --suite ko_fast --limit 25
 ```
 
-`eval.*` 메트릭이 MLflow 로 옵니다. 잡 stdout 은 여전히 안 읽힙니다
-→ [GOTCHAS #9](../GOTCHAS.md#9)
+**먼저 알아야 할 것: Track A 만 했다면 `<어댑터 디렉터리>` 에 넣을 값이 없습니다.**
+
+`--adapter` 는 `PeftModel.from_pretrained(model, adapter)` 로 그대로 들어갑니다
+(`eval/run.py:198`). 즉 **그 프로세스가 열 수 있는 디렉터리 경로**여야 합니다 —
+`azureml:` URI 도, 잡 출력 URI 도 아닙니다. 그런데 Track A 의 어댑터는 잡 출력 안,
+`azureml://datastores/workspaceblobstore/paths/azureml/<잡이름>/model_dir/` 에만
+존재합니다. 워크스테이션에는 **그 폴더가 없고**, 있어도 이 워크스페이스의 blob 은
+VNet 밖에서 안 열립니다 (§17, §19.1). 게다가 27B 두 벌을 적재하므로 **GPU 가 있는
+곳**이어야 합니다.
+
+그래서 이 명령이 실제로 도는 자리는 셋뿐입니다.
+
+| 어디 | `<어댑터 디렉터리>` 가 되는 것 | 이 워크샵에 있나 |
+|---|---|---|
+| 학습 잡 **안** | 방금 학습이 쓴 로컬 폴더 | **예 — 정상 경로.** [Lab 2 §4](lab2.md) 의 `--eval-suite` 가 이걸 씁니다 |
+| 어댑터를 마운트한 **다른 GPU 잡** | 마운트 지점의 로컬 경로 | **아니오.** 자산 등록까지는 [Lab 8 §1](lab8.md) 이 하지만, 그걸 마운트해 채점만 하는 잡은 이 자산에 없습니다 |
+| 어댑터를 손에 들고 있는 **내 GPU 머신** | 직접 내려받은 폴더 | **아니오.** 여기 blob 이 밖에서 안 열립니다 |
+
+**결론: Track A 참가자에게 이 절은 탈출구가 아니라 설명입니다.** 델타를 다시/더
+넓게 얻는 길은 하나입니다 — [Lab 2 §4](lab2.md) 를 `--eval-limit` 을 키우거나 빼고
+**다시 제출**하는 것. 그러면 어댑터와 GPU 와 채점 코드가 다시 한 노드 안에 모입니다
+(§1 이 없앤 54 GB 재다운로드와 `workspaceblobstore` 왕복이 바로 이 조건입니다).
+
+`--adapter` 로 로컬 폴더를 줄 수 있는 건 **자기 GPU 워크스테이션에서 학습한 사람**
+입니다. 이 워크샵의 산출물로는 그 상태가 만들어지지 않습니다.
 
 ---
 
@@ -115,22 +177,39 @@ uv run bash scripts/watch_jobs.sh EVAL:<run-name>
 
 | 증상 | 항목 |
 |---|---|
+| `eval.*` 메트릭이 아예 없다 | Lab 2 에서 `--eval-suite` 를 안 준 잡입니다. 재제출은 학습부터 다시 돕니다 |
 | 평가만 `HFLM.__init__` 에서 터진다 | §21 — lm-eval 로더를 이 리포가 직접 감쌌습니다 |
 | 코드를 고쳤는데 옛 트레이스백 줄번호 | [#12](../GOTCHAS.md#12) — 소스는 이미지에 구워져 있습니다 |
-| `train_loss` 는 정상인데 평가가 없다 | `--eval-suite` 를 안 준 경우. 기본은 학습만 |
-| 델타가 전부 0.00 | 정상일 수 있습니다. §4 를 읽으세요 |
+| `delta` 열이 전부 `-` | base 를 안 돌린 경우 (`--skip-base`). 델타는 두 열이 다 있어야 나옵니다 |
+| 델타가 전부 0.00 | 정상일 수 있습니다. §5 를 읽으세요 |
 
 > **§21 이 비싼 이유**: 평가는 학습이 **성공한 뒤에야** 실행됩니다. 평가 버그 하나의
 > 값 = 이미지 빌드(7~13분) + 학습 완주(27B 42분). 세 번 그렇게 냈습니다.
-> 그래서 이 리포는 **평가 경로도 0.8B 스모크로 먼저 밟습니다.**
+> 그래서 Lab 2 의 스모크 런이 **0.8B 로 평가 경로까지 먼저 밟습니다** (§21.5).
 
 ## 정리
 
-학습 잡은 끝나면 노드를 반납합니다. 클러스터 `min_nodes=0` 만 확인하세요.
+이 Lab 은 아무것도 켜지 않았습니다. Lab 2 의 잡이 끝나면서 노드는 이미 반납됐습니다.
+확인만 하세요.
 
 ```bash
-uv run ffsft-lifecycle status
+uv run ffsft lifecycle status
 ```
 
-**다음**: Track A 는 여기서 끝납니다. 배포까지 가려면 [Lab 4 — vLLM 이미지](lab4.md),
-학습한 어댑터를 실제로 서빙하려면 [Lab 8 — 풀사이클](lab8.md).
+## 다음
+
+- **Track A 만 할 거면 여기가 끝입니다.** 이 Lab 은 아무것도 안 켰지만 **Lab 2 가
+  켰습니다** — [Lab 7](lab7.md) 을 한 번 돌아 클러스터가 0 노드인지 눈으로 보세요.
+- **학습한 어댑터를 실제로 서빙까지 하려면 순서는
+  [Lab 4](lab4.md) → [Lab 5](lab5.md) → ([Lab 6](lab6.md)) → [Lab 8](lab8.md) →
+  [Lab 7](lab7.md)** 입니다.
+
+> ⚠️ **여기서 [Lab 8](lab8.md) 로 바로 갈 수 없습니다.** Lab 8 의 선행조건 중 두 개가
+> 아직 없습니다 — **Lab 4 의 서빙 이미지**와 **Lab 5 가 띄워 둔 살아 있는 `blue`**.
+> Lab 8 은 그 `blue` 옆에 green 을 올려 갈아타는 실습이라, 첫 확인이
+> `uv run ffsft lifecycle status` 에 `!!online-deployment ffsft-lab/blue` 줄이 보이는
+> 것입니다. Track A 만 마친 시점에는 **그 줄이 없고, 그래서 시작 자체가 안 됩니다.**
+>
+> Lab 4·5 는 **Track B 의 시작점이라 학습 잡을 전제하지 않습니다.** Lab 3 을 마친
+> 사람이 그대로 이어서 하면 됩니다 — 다만 [Lab 5](lab5.md) 부터는 **시간당 $4.959**
+> 이고, 리전이 갈릴 수 있어 프로필 파일이 하나 더 생깁니다 ([Lab 0 §3](lab0.md)).

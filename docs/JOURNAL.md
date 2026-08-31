@@ -709,6 +709,11 @@ REPLAY of the real leak -> [('vm-a10-ffsft_OsDisk_1', 38.01), ('vm-a10-ffsftPubl
 TOTAL $/month: 41.66
 ```
 
+> **철회 (§81.1).** 아래 "`read_orphans` 는 어떤 실패에도 `[]` 를 돌려주므로"는 라운드 9
+> 부터 사실이 아니다. 세 목록을 독립적으로 읽으므로, 한 목록이 절단돼도 **완결된 목록이
+> 읽어 낸 행은 그대로 반환된다**. 섹션은 잰 행과 못 읽은 목록을 동시에 가질 수 있다.
+> 이 문단이 원래 잡아낸 것 — 200/0 이어야 "진짜로 없는 것"이라는 판정 — 은 그대로 유효하다.
+
 `http=200 count=0` 이 중요하다. `read_orphans` 는 어떤 실패에도 `[]` 를 돌려주므로
 "고아 없음"이 "인증 실패"를 가리고 있을 수 있다. 200/0 이니 **진짜로 없는 것**이다.
 
@@ -1552,6 +1557,13 @@ A100 LowPriority 로 대략 2~4시간이다.
 | 학습 | 2540.2초 (42.3분) |
 | 전체 잡 | 54 GB 다운로드 + 학습 + 27B 2회 적재·채점 |
 | 요금 | A100 LowPriority, 대략 **$1.5** |
+
+> **[72 절에서 주석 붙임]** 이 **$1.5 는 잡 1회의 총 요금이고, 요율이 아니다.**
+> `docs/PERFORMANCE.md` 가 이 값을 "학습 LowPriority 약 $1.5/시" 로 옮겨 적고 있었고
+> `lab8.md` 두 곳이 그걸 그대로 받아 썼다 (§72.4 에 철회). 이 표에 **잡 전체의 노드
+> 점유 시간이 없다**는 점을 같이 읽어야 한다 — 위의 42.3분은 **학습 구간**의 벽시계일
+> 뿐이라, 이 $1.5 를 시간으로 나눠 요율을 만들 수 있는 나눗셈은 여기 없다.
+> 요율은 §72.1 에 따로 적었다.
 
 평가를 별도 잡으로 쪼갰다면 54 GB 다운로드가 한 번 더 일어나고
 어댑터가 `workspaceblobstore` 를 거쳐야 했다 — §17 에서 실패가 증명된 경로다.
@@ -4921,6 +4933,15 @@ PE 존재. plc 는 후자로 통과했다. 세 번째 실패 방식이 빠져 �
 * `_key_based_datastores` 는 목록을 못 읽으면 `[]` 를 돌려준다 — 이 모듈의
   기존 규칙("못 보는 프로브 ≠ 고장난 리소스")을 자격증명 축에도 그대로 적용.
   `allow_shared_key=None`(안 읽힘)은 절대 차단하지 않는다.
+
+  > ⛔ **철회(§78.2).** 이 줄은 더 이상 맞지 않고, **한 회차가 아니라 여러 회차 동안
+  > 맞지 않은 채로 있었다.** 못 읽은 목록을 `[]` 로 답하는 것이 바로 "못 봤다"를
+  > "없다"로 적는 것이고, `[]` 는 `classify_store` 가 S57.8 차단 요소의 **측정된
+  > 부재**로 읽는 값이다. 코드는 그 뒤 어느 회차에서 `None` 으로 바뀌었는데 이 절에는
+  > 철회가 붙지 않았다 — §78 이 그 누락을 메운다. §78.2 는 여기에 더해 **잘린 목록**
+  > (ARM 이 `nextLink` 와 함께 첫 페이지만 준 경우)도 같은 `None` 으로 답하게 했다.
+  > 어느 회차가 `[]` 를 `None` 으로 바꿨는지는 이 게이트에서 **재구성하지 않았다**;
+  > 현재 값만 실행으로 확인했다.
 * 두 축이 동시에 고장이면 **둘 다 보고한다.** jpe 가 그 경우다(PE 0 + AccountKey 4).
   하나만 알려주면 고치고 다시 막히는 왕복이 생긴다.
 
@@ -6023,6 +6044,12 @@ peak tok/s가 204.3 → 189.0으로 **7.5% 낮다.** 이걸 성능 저하로 적
 - **req/s는 green이 오히려 높다** (c=16에서 1.71 vs 1.68).
 - 차이는 전부 **응답 길이**다. blue 121.8 tok/req vs green 110.6 — 9.2% 짧다.
 
+> **[71 절에서 정정됨]** 위 목록 **첫 줄의 표현이 틀렸다.** 괄호 안의 값이 이미
+> 반증한다 — `0.0363` 과 `0.0364` 는 넷째 자리에서 다르다. 다섯 레벨 중 정확히 같은
+> 것은 c=16 하나뿐이고 나머지 넷은 0.0001 씩 어긋난다. 맞는 문장은 "**같거나 0.0001
+> 차이**" 다. 그 줄이 떠받치던 **결론(토큰 하나 뽑는 비용은 안 변했다)은 그대로
+> 유효하다** — 어긋남의 부호가 c=8 에서 뒤집히므로 방향이 있는 차이가 아니다 (§71.5).
+
 > **[70 절에서 정정됨]** 아래 문단의 **원인 설명은 틀렸다.** 길이 차이 자체와
 > TPOT·req/s 결론은 유효하다. 필드 이름도 `reasoning_content` 가 아니라
 > `reasoning` 이다(§68).
@@ -6440,6 +6467,18 @@ P2 는 `"다음 문장을 정중한 존댓말로 바꿔줘: '내일 회의 몇�
 | 길이 차이의 원인이 blue 의 사고과정 누출 | **철회** — 그 조건에서 사고 블록은 생성되지 않는다 |
 | "파인튜닝이 응답을 9.2% 짧게 만들었다" | **철회** — 8개 중 1개 프롬프트, 나머지는 상한에 눌림 |
 
+> **[71 절에서 정정됨]** 위 표의 두 줄이 틀렸다. 판정 자체는 둘 다 살아남지만
+> 근거 문장이 틀렸으므로 여기 적어 둔다.
+>
+> ① **"TPOT 가 넷째 자리까지 같다 — 유효"** 는 유효가 아니다. 정확히 같은 것은 c=16
+> 뿐이고 c=1·2·4·8 은 0.0001 씩 다르다. 맞는 문장은 "같거나 0.0001 차이" 이며,
+> 이 줄이 떠받치던 결론(병합 가중치는 토큰당 연산량을 안 바꾼다)은 그대로 산다.
+>
+> ② **"나머지는 상한에 눌림"** 은 부정확하다. 8개를 쪼개면 **양쪽 다 눌림 5,
+> blue 만 눌림 1(P2), green 만 눌림 1(P5), 양쪽 다 `stop` 1(P0)** 이다. 그래도
+> **철회는 오히려 더 강해진다** — 두 응답이 모두 `stop` 이라 길이를 진짜로 비교할 수
+> 있는 프롬프트는 P0 하나뿐이고, 거기서는 green 이 **더 길다** (111 vs 101). (§71.5)
+
 ### 70.3 재발 방지
 
 - `scripts/compare_deployments.py` — 같은 프롬프트를 두 배포에 보내
@@ -6450,3 +6489,3426 @@ P2 는 `"다음 문장을 정중한 존댓말로 바꿔줘: '내일 회의 몇�
 - 교훈은 §67 과 같은 종류다. **어느 조건에서 잰 값인지 안 적으면, 맞는 숫자를
   틀린 문장에 붙이게 된다.** §67 은 필드 이름이었고 이번엔 `chat_template_kwargs`
   였다. 두 번 다 측정값 자체는 옳았다.
+
+---
+
+## 71. 워크샵을 문서 그대로 실행했다 — 계량기와 문서가 같이 틀려 있었다 (2026-08-27)
+
+이 회차는 새 실험이 아니라 **통과 주행**이다. 남아 있던 엔드포인트를 전부 내리고,
+`docs/labs/lab0.md` 부터 `lab8.md` 까지 적힌 명령을 그대로 쳤다. 나온 것은 두 종류다:
+**정리 도구가 돈을 잘못 찍고 있었다**는 것(§71.2, §71.3)과, **문서대로 따라가면
+막히는 지점이 아홉 개**라는 것(§71.4).
+
+### 71.1 먼저 정리 — 세 리전에 켜져 있었다
+
+| 리전 | 엔드포인트 | 배포 | 상태 | 시간당 |
+| --- | --- | --- | --- | ---: |
+| polandcentral | `ffsft-plc` | `green` + `blue` | 정상 서빙 (A100 2대) | **$9.918** |
+| koreacentral | `ffsft-live` | `blue` | **`Failed`** | **$4.320** |
+| japaneast | `ffsft-jpe-probe` | byoc | `Failed` | *(요율 미상)* |
+
+**전부 삭제했다.** 멈춘 것은 시간당 **$14.238** (= 9.918 + 4.320), 하루 $341.7.
+워크스페이스 3개에서 **엔드포인트 0개 / 실행 중 노드 0개**를 다시 읽어 확인했다.
+
+- `$9.918` 은 `Standard_NC24ads_A100_v4` $4.959 의 정확히 2배다 — 배포 두 개가 각자
+  인스턴스를 든다. 같은 엔드포인트에 blue/green 을 나란히 두면 **요금도 나란히** 든다.
+- `$4.320` 은 요율표의 `Standard_NV36ads_A10_v5` 와 같은 값이다. 즉 README 가 말하는
+  "NV36 기준 ~$103/일" 이 바로 이 줄이고, **그 배포는 `Failed` 상태였다.**
+  **`Failed` 는 "안 켜져 있다" 는 뜻이 아니다.** 뜨지 못한 컨테이너도 인스턴스를 잡고
+  있으면 정가로 청구된다. 실패한 배포는 고칠 대상이기 전에 **내릴 대상**이다.
+- japaneast 는 요율을 모른다. **그래서 합계에 넣지 않았고, 0 으로도 넣지 않았다.**
+  이 구분이 다음 절의 전부다.
+
+### 71.2 D-1 — `status` 가 켜져 있는 GPU 를 "$0.000/hr" 로 찍고 있었다
+
+정리하면서 `ffsft-lifecycle status` 를 살아 있는 `Standard_NV6ads_A10_v5` 에 대고
+돌렸더니 이렇게 나왔다:
+
+```
+BILLING NOW: 1 resource(s)  $0.000/hr  ~$0/month if left running
+```
+
+**한 줄 안에서 "과금 중이다" 라고 단정하고 그 값을 0 으로 찍는다.** 원인은
+`hourly_rate()` 가 `SKU_HOURLY_PAYG` 에 없는 SKU 에 `.get(sku, 0.0)` 으로 0.0 을
+돌려주고, 호출부가 그 0.0 을 "공짜" 와 구분하지 않은 것이다. 표에는 SKU 가 5개뿐이었다.
+
+같은 파일이 디스크에서는 이미 정직했다는 게 이 결함의 성격을 말해준다 —
+`disk_monthly_usd` 는 모르는 디스크에 `(price unknown for this SKU)` 를 붙이고
+주석에 이유까지 적어 뒀다: *"a made-up number in a cost report is worse than an
+admitted gap, because it gets believed."* **VM 경로만 그 규칙 밖에 있었다.**
+
+고친 형태 — 값이 아니라 **질문을 둘로 쪼갰다** (`rate_is_known()`):
+
+```
+!!online-deployment  ffsft-qwen/green   Standard_D8s_v5   ?  managed online endpoint: NO scale-to-zero, bills 24/7 (price unknown for this SKU)
+-------------------------------------------------------------------------------
+BILLING NOW: 2 resource(s)  $0.613/hr  ~$447/month if left running
+  the total EXCLUDES 1 resource(s) whose rate is unknown: ffsft-qwen/green [Standard_D8s_v5]
+```
+
+- 총계는 **모르는 것을 빼고, 뺐다는 사실과 이름을 같이 찍는다.**
+- 하나도 값을 못 매기면 금액을 아예 안 찍는다: `BILLING NOW: 1 resource(s) cost
+  UNKNOWN -- no rate for any of them, which is not the same as free`.
+- `down` 의 절감액도 같다: `stops an UNKNOWN amount per hour; EXCLUDES …`.
+
+요율은 Retail Prices API 를 다시 조회해 **11개를 추가해 16개**가 됐다. 기존 5개는
+자릿수까지 그대로 재현돼 손대지 않았다. 행 고르기 함정 세 개를 전부 통과한 값만 넣었다
+(`type` 이 `Consumption` 이 아니면 예약 총액이 섞이고 — ND96isr 은 744149.0 로 읽힌다 —,
+DevTestConsumption 이 일부 SKU 에서만 Linux 가격과 겹치고, NV/NC-T4/NC-H100/ND 계열의
+Linux 행에는 "Linux" 라는 단어가 아예 없어서 그 단어로 거르면 16개 중 13개가 조용히
+사라진다).
+
+**공백으로 남긴 것** — 채워 넣지 않은 이유가 각각 있다:
+
+| 남은 공백 | 왜 안 채웠나 |
+| --- | --- |
+| `Standard_ND96isr_H100_v5` LowPriority | koreacentral 에 그런 미터가 없다. PAYG 행(132.732)은 넣었고, **0.20 규칙 같은 것으로 유도하지 않았다** |
+| 16개 SKU 전부의 Spot / LowPriority | 이 표는 **관리형 온라인 엔드포인트**의 값을 매긴다. 거기는 LowPriority 를 쓸 수 없고 Spot 도 아니다. 더 싼 층을 여기 적으면 **이 리포에서 유일하게 24/7 도는 자원을 과소 보고**한다. `test_the_table_holds_payg_rates_and_not_the_cheaper_tiers` 가 못 박는다 |
+| 16개 밖의 SKU (CPU SKU 등) | `hourly_rate()` 는 계속 0.0 을 돌려주되(호출부가 안 죽게), `rate_is_known()` 이 False 라 `?` 와 `(price unknown…)` 로 렌더된다 |
+
+> 딸린 관찰 하나. `src/ffsft/azure_ml.py` 의 `GPU_SKUS` 는 `Standard_ND96isr_H100_v5`
+> 에 `low_priority: True` 를 선언하는데 **가격표에는 그 미터가 없다.** 둘 중 하나가
+> 틀렸다는 뜻이다. 이번 회차에서 그 파일은 건드리지 않았고, 여기 적어만 둔다.
+
+### 71.3 D-2 — 그 표가 화면 밖으로 밀려나 있었다
+
+`status` 는 표를 찍기 전에 Azure SDK INFO 로그를 수백 줄 쏟았다. 정작 읽어야 할
+과금 표가 스크롤 위로 사라진다. 검증용 `/tmp` 스크립트들은 하나같이
+`logging.getLogger("azure").setLevel(ERROR)` 를 걸고 돌렸는데 **배포되는 CLI 만 안
+걸고 있었다** — 도구를 만든 사람만 읽을 수 있는 출력이었다는 뜻이다.
+
+`quiet_azure_sdk_logs()` 로 기본을 조용하게 바꾸고, 배포가 실패해서 HTTP 덤프가 필요할
+때만 `FFSFT_VERBOSE_AZURE=1` 로 되돌린다. **끄는 게 아니라 기본값을 뒤집은 것이다.**
+
+### 71.4 Lab 을 그대로 실행해서 막힌 지점 아홉 개
+
+전부 "읽어서 이상해 보였다" 가 아니라 **쳐 봤더니 막혔다**이다.
+
+| # | 어디 | 증상 | 성격 |
+| --- | --- | --- | --- |
+| 1 | `lab4.md:56` ↔ `endpoint.py` | 참가자에게 `az acr build` 로 이미지를 만들라고 시켜 놓고, `deploy-online` 에 `--image` 가 없었다. `SERVE_IMAGE` 는 저자들의 사설 ACR 상수. **저자 구독 밖에서는 Track B 가 통째로 죽는다** | 코드 |
+| 2 | `lab0.md:28` ↔ `:139/:141` | `uv sync --extra dev` 만 시키고 마지막 절에서 `probe_architecture.py`(`train` 필요)와 `deploy check --probe`(`azure` 필요)를 돌린다. **Lab 0 이 자기 마지막 절을 못 돈다** | 문서 |
+| 3 | `lab2.md:17` | 클러스터 `gpu-a100-lp` 를 전제하는데, 그걸 만드는 `provision_azure.py` 는 `lab0.md:129` 에 `--dry-run` 으로만 나온다 | 문서 |
+| 4 | `lab1.md:43` | `hangul_ratio('서울은 한국의 수도입니다')` 는 **1.0** 인데 문서는 "0.75 근처" 라고 적었다 | 문서 |
+| 5 | `lab4.md:108` | `ffsft serving show qwen3.8-27b` → `KeyError`. 서빙 패턴 키는 모델 키가 아니다 (`aks_vllm`, `aml_batch`, `aml_batch_vllm`, `aml_online_vllm`, `local_vllm`) | 문서 |
+| 6 | `lab1.md:101` ↔ 노트북 | 문서는 `Files/ffsft/train.jsonl` 를 기다리는데 노트북의 `OUTPUT_PATH` 는 `Files/ffsft/ko_sft` — Spark 출력 **디렉터리**다 | 문서 |
+| 7 | `lab8.md:10, :333` | "blue 를 지우세요" 라고 하는데 `lifecycle down` 에는 `--endpoint --all --yes` 뿐, **배포 단위 삭제가 없었다.** 엔드포인트를 지우면 green 이 같이 죽으므로 참가자는 아무것도 못 지운다 → $119/일 누수 | 코드 |
+| 8 | `lab6.md:128` | 헤더가 "선행: Lab 5" 인데 Lab 5 는 `blue` 하나만 만든다. 그 상태로 `compare_deployments.py --deployment blue --deployment green` 을 돌리면 스크립트가 **exit 2**. 엔드포인트가 $4.959/시로 도는 중에 막힌다 | 문서 |
+| 9 | `lab3.md:17` ↔ `:28` | "Lab 2 의 어댑터가 실재함" 을 선행조건으로 걸어 놓고 다시 `--max-steps 30` 으로 **처음부터 학습한다.** 자기 소요 줄이 "학습 42분 + 채점 8분" 이라고 자백한다 — A100 42분을 버린다 | 문서 |
+
+7·9 는 성격이 다르다. **7 은 코드에 없는 기능이었고, 9 는 코드에 이미 있는 설계를 문서가
+안 쓴 것이다.** `aml_job.py` 는 `JobSpec.eval_suite` / `eval_limit` 로 `train && eval` 을
+**한 잡에 묶고**, `submit_training.py:38` 이 그래서 이미지 pull 도 데이터스토어 왕복도
+한 번뿐이며 체인 전체가 ~$1.5 라고 적어 뒀다. 그러므로 9 의 답은 새 "평가 전용 잡" 이
+아니라 **문서 재배치**다: Lab 2 가 `--eval-suite` 로 제출해 어댑터와 평가 리포트를 한
+잡에서 받고, Lab 3 은 그 델타를 **읽고 해석하는** 랩이 된다.
+
+이번 회차에 코드로 메운 것은 1(`--image` / `FFSFT_SERVE_IMAGE`)과
+7(`down --endpoint E --deployment D`) 둘이며, 1 의 부작용으로
+`SERVE_ENVIRONMENT_VERSION` 이 **모듈 상수에서 호출 시점 계산으로** 내려왔다.
+런타임에 고르는 이미지에 모듈 상수에서 유도한 버전을 붙이면, 환경 버전은 불변이므로
+참가자의 `ffsft-serve:1` 이 **저자 태그의 버전을 집어 들고 아무 오류 없이 남의 이미지를
+띄운다.** `image_tag` 가 태그 없는/다이제스트 참조를 거절하는 지점도 `check_pattern`
+**앞으로** 옮겼다 — 애저를 부르기 전, 15~30분짜리 롤아웃 훨씬 전이다.
+
+### 71.5 숫자 — 다시 도출한 것들
+
+**① 테스트 수.** `uv run pytest` = **821 passed, 2 skipped, 11.35s**.
+`README.md:73` 은 680, `CLAUDE.md` 는 730 이었다. 둘 다 821 로 고쳤다.
+
+> **⛔ 정정 (§73.1).** ① 의 **821 은 기준선이 아니다.** 이 회차가 그때까지 쓴
+> 테스트가 이미 들어 있는 **자기 작업 중간값**이고, 여기서 "고쳤다"고 적은
+> `CLAUDE.md` 의 **730 이 맞는 값이었다** — 맞는 숫자를 틀린 숫자로 덮었다.
+> 실제 진행은 **730 → 843 → 855 → 869** 이다. 다시 재고 근거를 적은 것은 §73.1.
+> ②~⑦ 은 그대로 유효하다.
+
+**② TPOT "넷째 자리까지 같다" 는 틀렸다.** 원자료
+`docs/results/loadtest-blue-base.json` / `loadtest-green-tuned.json` 의 `tpot_p50`:
+
+| conc | 1 | 2 | 4 | 8 | 16 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| blue | 0.0364 | 0.0364 | 0.0371 | 0.0382 | **0.0407** |
+| green | 0.0363 | 0.0363 | 0.0370 | 0.0383 | **0.0407** |
+| green − blue | −0.0001 | −0.0001 | −0.0001 | **+0.0001** | **0** |
+
+**정확히 같은 레벨은 c=16 하나뿐이다.** 맞는 문장은 `PERFORMANCE.md:96` 이 이미 쓰고
+있던 "같거나 0.0001 차이" 이고, §4 아래 요약 목록의 그 줄(고치기 전 `:143`)만
+"넷째 자리까지 같다" 로 새고 있었다.
+다만 **결론은 그대로 산다**: 어긋남의 부호가 c=8 에서 뒤집힌다. 한쪽이 계속 빠른 게
+아니라 표기 자리수에서 흔들리는 것이므로, "병합 가중치는 토큰 하나 뽑는 연산량을 안
+바꾼다" 는 여전히 이 데이터가 지지하는 문장이다. §66.2 와 §70.2 에 철회를 붙였다.
+
+**③ 잘림 분해 — "나머지 6개는 양쪽 다 상한에 눌려" 는 틀렸다.**
+`docs/results/tokens-per-prompt.json` 의 `finish_reason` 8쌍을 세면:
+
+```
+양쪽 다 length : 5   (P1 P3 P4 P6 P7)
+blue 만 length : 1   (P2  blue 128 length / green 29 stop)
+green 만 length: 1   (P5  blue 106 stop   / green 128 length)
+양쪽 다 stop   : 1   (P0  blue 101        / green 111)
+```
+
+`PERFORMANCE.md` §6.1 ② 의 "**양쪽 다 6/8**"(blue 6, green 6, 16개 중 12개)은
+**맞다** — 같은 6/8 이 서로 다른 프롬프트 집합이라는 것을 그 아래 결론 인용문
+(고치기 전 `:217`)이 놓친 것이다.
+
+**§70 의 논지는 이 정정으로 무너지지 않고 더 강해진다.** 눌린 응답의 128 은 길이가
+아니라 하한이므로, **두 응답이 모두 `stop` 이라 길이를 진짜로 비교할 수 있는 프롬프트는
+P0 하나뿐이고 거기서는 green 이 더 길다**(111 vs 101). 격차를 만든 P2 조차 blue 쪽이
+하한이라 "blue 가 얼마나 더 길었나" 는 여전히 모른다. 즉 "파인튜닝이 응답을 9.2%
+짧게 만들었다" 는 **반증된 것이 아니라 애초에 측정되지 않았다** — 철회 사유가
+"1개 프롬프트 + 나머지는 눌림" 에서 "**비교 가능한 표본이 n=1 이고 그마저 반대 방향**"
+으로 바뀐다.
+
+**④ `lab6.md:135` 의 "9.3배" 는 계보가 섞였다.** $62.5 는 **blue** c=1(22.0 tok/s),
+$7.29 는 **green** c=16(189.01 tok/s) 이다. 그 둘의 비는 8.57배다. 9.3배는
+**blue 자신의** 처리량 비(22.0 → 204.29 = 9.27)이고, 그래서 `PERFORMANCE.md` §7
+의 "$62.5 — knee 대비 9.3배"(blue $62.5 vs blue $6.74)는 **맞다.** 한 계보로
+붙여 쓰고 어느 계보인지 적어야 한다.
+
+**⑤ 비용 표기가 없는 랩.** `lab2` `lab6` `lab8` 에 시간당 비용 줄이 아예 없다.
+9개 중 5개다 — 최상단 경고가 "반드시 내려라" 인 워크샵에서.
+
+**⑥ `AZURE_CONFIG_DIR` 은 `lab0.md:66` 에서 한 번만 export 된다.** 다른 랩이 다시
+말하지 않으므로, 새 셸에서 Lab 4 를 시작한 참가자는 전역 `~/.azure` 에 조용히 쓴다.
+
+**⑦ 전체 사이클 순서가 문서에 없다.** `lab6` 도 `lab8` 도 끝에서 Lab 7(정리)로
+보낸다. `lab6` 말을 따르면 **Lab 8 이 쓸 blue 가 사라진다.** 실제 순서는
+**0 → 1 → 2 → 3 → 4 → 5 → 6 → 8 → 7** 이다.
+
+### 71.6 이번에 배운 것
+
+- **`Failed` 와 "안 켜짐" 은 다른 축이다** (§71.1). 실패한 배포도 청구된다.
+- **0 은 두 가지 질문에 답한다** (§71.2). "공짜다" 와 "모른다" 를 한 값으로 찍으면
+  보고서는 조용히 틀린다. 같은 파일의 디스크 경로가 이미 정답을 갖고 있었는데
+  VM 경로가 그 규칙 밖에 있었다는 것이, 이런 결함이 **설계가 아니라 누락으로** 생긴다는
+  증거다.
+- **문서 결함은 읽어서 안 나온다** (§71.4). 아홉 개 전부 실행에서 나왔다. 1 과 7 은
+  `uv run <명령> --help` 한 줄, 5 는 `ffsft serving list` 한 줄이면 잡혔다.
+  **랩에 명령을 적기 전에 그 명령의 `--help` 를 친다.**
+- **맞는 숫자를 틀린 문장에 붙이는 실패가 또 나왔다** (§71.5②③). §67 은 필드 이름,
+  §70 은 측정 조건, 이번엔 **요약 문장이 원자료보다 한 칸 더 세게 말한 것**이다.
+  세 번 다 원자료는 옳았다.
+
+---
+
+## 72. 수리한 것을 다시 감사했다 — 문서가 코드보다 한 회차 뒤에 있었다 (2026-08-27)
+
+§71 은 워크샵을 **실행해서** 아홉 개를 찾았다. 이 회차는 그 수리 자체를 감사했다.
+나온 것은 세 종류다. **§71 이 새로 만든 플래그가 읽히지 않고 있었고**(72.2),
+**돈을 찍는 줄 세 개가 아직 조용하거나 틀렸으며**(72.2), **문서가 원자료를 손으로
+옮겨 적어 다섯 칸이 갈라져 있었다**(72.3). 그리고 이 리포가 가장 싫어하는 실패가
+하나 있었다 — **총액을 요율로 옮겨 적은 것**(72.4).
+
+### 72.1 요율 — LowPriority 표를 **여기** 남긴다 (§71.5 에는 없다)
+
+먼저 확인한 사실 하나. **§71.5 에는 LowPriority 요율표가 없다.** §71.2 는
+`SKU_HOURLY_PAYG` 를 5개 → 16개로 늘린 이야기이고, 거기에 LowPriority 를 **일부러 안
+넣었다**고 적혀 있다 — 그 표는 관리형 온라인 엔드포인트를 가격 매기는 표이고, 거기는
+LP 를 쓸 수 없으므로 더 싼 층을 적으면 24/7 도는 자원을 과소 보고한다. 그래서
+**학습 클러스터의 요율을 인용해야 하는 문서에는 가리킬 절이 없었다.** 여기가 그 절이다.
+
+| SKU | PAYG | LowPriority | Spot |
+| --- | ---: | ---: | ---: |
+| `Standard_NC24ads_A100_v4` | $4.959 | **$0.992** | $0.916423 |
+| `Standard_NV36ads_A10_v5` | $4.320 | $0.864 | — |
+| `Standard_NV12ads_A10_v5` | $1.226 | $0.245 | — |
+
+조회: Azure Retail Prices API, **koreacentral · Linux · Consumption**, 2026-08-27.
+행 고르기 함정 세 개는 §71.2 에 적힌 그대로다.
+
+- **LP = PAYG × 0.20 은 규칙이 아니라 관측이다.** koreacentral GPU SKU 중 LP 미터를
+  **가진** 15개에서 정확히 성립한다. 그러나 `Standard_ND96isr_H100_v5` 는 koreacentral
+  에 **LP 미터가 아예 없는데** `azure_ml.py::GPU_SKUS` 는 그 SKU 에 `low_priority: True`
+  를 선언한다 (§71.2 가 이미 적어 둔 불일치). **없는 미터를 0.20 배로 유도하지 말 것.**
+- **Spot ≠ LowPriority.** 다른 미터이고, 어느 쪽이 싼지는 패밀리마다 뒤집힌다.
+  A100 은 Spot($0.916)이 LP($0.992)보다 싸다. "spot 은 몇 % 할인" 같은 상수는 없다.
+- 이 표는 코드에 넣지 않는다. 이유는 §71.2 그대로 — `SKU_HOURLY_PAYG` 는 PAYG 전용이다.
+
+### 72.2 코드 — §71 의 수리가 남긴 구멍 셋
+
+**① `--all` 이 장식이었다.** `p_down` 이 `--all` 을 선언해 놓고 `cmd_down` 이 그걸
+읽지 않았다. 즉 `down --yes` 와 `down --all --yes` 가 **바이트 단위로 같은 동작**이었고,
+범위가 적힌 것처럼 읽히는 짧은 쪽이 워크스페이스 전체를 지웠다. 이제 범위가 **필수**다:
+
+```
+down needs a scope: --endpoint NAME for one endpoint, or --all for everything
+refusing to guess: --all deletes every billing resource in this workspace
+```
+
+exit 2, 그리고 **`get_ml_client` 를 만들기 전에** 찍힌다 — 애저에 아무것도 안 간다.
+더 구체적인 `--deployment` 거부(§71 의 7번)는 여전히 먼저 이긴다. 리포 전체에서
+범위 없는 `down` 은 `lab5.md:212` 하나뿐이었다.
+
+**② LEFTOVERS 총계가 값 못 매기는 고아를 0 으로 삼켰다.** §71.2 가 `BILLING NOW` 에
+적용한 규칙이 한 블록 아래에는 적용되지 않아, 요율 없는 디스크·IP 만 있는 경우
+`~$0.00/month for nothing` 이 나왔다. **"for nothing" 이 붙은 $0 은 "여기서 회수할 게
+없다"로 읽힌다** — 그 문장 하나가 붙어 있지 않은 디스크를 영원히 과금시킨다. 세 모양:
+
+```
+LEFTOVERS: 2 resource(s) from deleted VMs, cost UNKNOWN -- no rate for any of them, which is not the same as free.
+  the total EXCLUDES 2 resource(s) whose rate is unknown: osdisk [StandardSSD_LRS], leaked-ip [Weird]
+
+LEFTOVERS: 2 resource(s) from deleted VMs, ~$19.71/month for nothing.
+  the total EXCLUDES 1 resource(s) whose rate is unknown: leaked-ip [Weird]
+
+LEFTOVERS: 2 resource(s) from deleted VMs, ~$23.36/month for nothing.
+```
+
+`unpriced_note()` 를 재사용한다 — 같은 구멍에 두 번째 어휘를 만들지 않는다.
+
+**③ `up` 이 가장 흔한 호출에서 요금 줄을 아예 안 찍었다.** `--sku` 를 생략하면
+`deploy_online` 이 서빙 스펙의 `default_sku` 로 내려가는데, 요금 줄은 `args.sku` 만
+읽고 있었다. **침묵은 $0.000 만큼이나 크게 "공짜" 로 읽힌다.** 새 헬퍼
+`effective_sku(explicit, pattern_key)` 가 배포가 **실제로 쓰는** SKU 를 돌려주고,
+줄에는 언제나 SKU 이름이 박힌다:
+
+```
+billing Standard_NV12ads_A10_v5 $1.226/hr -> ~$895/month if left up
+billing rate for Standard_D8s_v5 is UNKNOWN to this tool -- it is billing anyway
+billing rate UNKNOWN to this tool -- this endpoint is billing anyway
+```
+
+$1.226 과 730시간은 리포 자신의 `SKU_HOURLY_PAYG` / `HOURS_PER_MONTH` 이고 895 는
+도구 자신의 산술이다. **SKU 를 두 군데서 유도하던 것이 보고와 배포를 어긋나게 했다** —
+테스트가 `effective_sku(None, "aml_online_vllm") == get_serving(...).default_sku` 와
+`endpoint.deploy_online` 소스의 `sku or spec.default_sku` 를 같이 못 박는다.
+
+### 72.3 `PERFORMANCE.md` 의 다섯 칸이 원자료와 달랐다 — **옮겨 적었기 때문이다**
+
+`CLAUDE.md:209` 와 `docs/labs/README.md:33` 은 랩의 "기대 출력" 을 `PERFORMANCE.md`
+에서 **잘라 오라**고 적는다. 그런데 `PERFORMANCE.md` 자신이 원자료 JSON 에서 손으로
+옮겨 적고 있었다. 다섯 칸이 **반올림 방향** 때문에 갈라져 있었다 (왼쪽이 문서, 오른쪽이
+`ffsft/serve/loadtest.py::format_table` 과 같은 포맷으로 다시 뽑은 값):
+
+| 자리 | 문서 | 원자료 | 포맷 출력 |
+| --- | ---: | ---: | ---: |
+| §2.1 blue c=8 TTFT p95 | 1.564 | 1.5635 | **1.563** |
+| §2.1 blue c=2 e2e p50 | 5.730 | 5.7295 | **5.729** |
+| §2.2 green c=4 TTFT p50 | 1.217 | 1.2165 | **1.216** |
+| §2.2 green c=4 TTFT p95 | 1.287 | 1.2865 | **1.286** |
+| §2.2 green c=16 TTFT p95 | 1.316 | 1.3155 | **1.315** |
+
+전부 half-up 으로 올린 값이고, CLI 는 half-even 으로 내린다. **그래서 `lab6.md:74` 의
+`1.563` 과 `PERFORMANCE.md` 의 `1.564` 가 서로 달랐다** — 랩이 잘라 온 값이 맞고,
+잘라 간 원본이 틀린 상태였다. `§3` 의 산문 두 곳(`p95 는 1.564`, `1.51 → 1.32초`)도
+같이 새고 있었다.
+
+**고친 방법은 다섯 칸을 손으로 바꾸는 게 아니라 두 표를 통째로 다시 뽑은 것이다.**
+다섯 칸만 고치면 나머지 105칸이 맞는지는 여전히 아무도 모른다. 다시 뽑은 결과
+**나머지는 전부 자릿수까지 재현됐다.** §12 에 그 규칙을 적어 뒀다.
+
+### 72.4 ⛔ 철회 — "학습 LowPriority 약 $1.5/시" 는 **요율로 잰 적이 없는 값**이다
+
+`PERFORMANCE.md:26` 이 시간당 비용 칸에 **"학습 LowPriority 약 $1.5/시"** 라고 적고
+있었다. 출처는 **§23.5 뿐이고, 거기서 $1.5 는 42.3분짜리 잡 1회의 총 요금이다.**
+요율이 아니다. 세 겹으로 틀렸다:
+
+1. **총액을 요율 칸에 적었다.** `lab2.md:10` 은 처음부터 "위 $1.5 는 잡 1회 실측이지
+   요율이 아닙니다" 라고 쓰고 있었으므로, **이 문서가 랩과 정면으로 어긋나 있었다.**
+2. **유도해도 안 맞는다.** $1.5 ÷ 0.705시간 = **$2.13/시** 이지 $1.5/시 가 아니다.
+3. **전파됐다.** `lab8.md:17` 과 `lab8.md:52` 가 받아 썼고, `:52` 는 그 값을
+   **`시간당` 이라는 열 머리 아래**에 놓았다. lab8 의 "약 $12" 합계 일부가 그래서
+   출처 없는 값이었다.
+
+**정정.** 요율은 §72.1 의 **$0.992/시** 다. 그리고 **$1.5 와 화해시키지 않는다**:
+
+- 학습 구간 42.3분(§23.1) × $0.992 = **$0.70**
+- §23.5 의 실측 총액 = **약 $1.5**
+- **차액 약 $0.8 이 무엇인지 이 리포는 모른다.** 그 잡은 학습만 한 게 아니라 54 GB
+  다운로드와 27B 2회 적재·채점을 같은 노드에서 했고, **잡 전체의 노드 점유 시간이
+  어디에도 기록돼 있지 않다.** 42.3분은 학습 구간의 벽시계일 뿐이다.
+
+두 값을 평균 내거나 한쪽을 반올림해 맞추면 **틀린 줄 하나가 맞는 줄 두 개를 잡아먹는다.**
+그래서 `PERFORMANCE.md` §1 과 `lab8.md` 의 비용 표에 요율·총액·차액을 **셋 다** 적었다.
+
+lab8 의 병합 잡 줄은 12분 53초 × $0.992 = **$0.21** 이 됐고(이전 $0.32), 합계는
+$12.03 → **약 $12** 로 그대로다. 합계가 안 움직였다는 사실이 이 결함을 오래 살려 둔
+이유이기도 하다 — **틀린 요율이 작은 항목에 붙어 있으면 총계가 알려주지 않는다.**
+
+### 72.5 Lab 7 이 검사하던 것은 "모든 리전" 이 아니라 "이 셸이 가리키는 한 리전" 이었다
+
+§71.1 은 **세 리전**에 켜 두고 시간당 $14.238 을 태웠다. 그 회차의 교훈으로 만든
+Lab 7 이 정작 **한 워크스페이스만** 본다. 원인은 도구가 아니라 문장이다:
+
+- `ffsft-lifecycle status` 는 플래그를 하나도 안 받는다 (`status [-h]`).
+  `AzureTarget.from_env()` 가 유일한 조향 장치다.
+- `format_inventory` 는 `BILLING NOW: nothing. No always-on compute in this
+  workspace.` 를 찍으면서 **어느 워크스페이스인지 한 글자도 안 적는다.**
+  즉 **자기 답을 자기가 귀속시키지 못한다.**
+- `lab0.md:123` 이 "Lab 1~8 의 첫 줄은 `source ~/.ffsft-env`" 라고 적었는데, Lab 5 는
+  서빙 리전 셋을 **셸에만** export 했다. 다음 터미널에서 그게 사라지므로 Lab 6·7·8 은
+  **오류 없이 학습 워크스페이스를 조회한다.**
+
+그래서 `BILLING NOW: nothing` 은 "아무 데서도 안 돈다" 가 아니라 "**여기서는** 안
+돈다" 였고, 다른 리전에서 도는 $4.959/시를 정확히 그 문장이 가려 줬다. 수리는 두 갈래다.
+
+- **프로필 파일 두 개.** `~/.ffsft-env`(TRAIN) 는 그대로, `~/.ffsft-serve-env`(SERVE)
+  를 Lab 5 가 만든다. 서빙 프로필이 **학습 프로필을 먼저 읽고 세 변수만 덮어쓴다** —
+  "둘을 순서대로 source 하라" 가 아니라, **순서를 틀릴 수 없는 모양**으로 만든 것이다.
+  두 파일 다 끝에 `profile: TRAIN|SERVE rg=… ws=… loc=…` 배너를 찍는다. 배너는
+  **반드시 따옴표 heredoc**(`<<'EOF'`)으로 써야 한다 — `<<EOF` 로 쓰면 오늘 값이
+  파일에 박히고 그 뒤로 영원히 같은 거짓말을 한다.
+- **Lab 7 은 두 파일을 서브셸 루프로 돈다.** 헤더(`==== <파일> rg=… ws=…`)는 루프가
+  직접 찍는다 — `status` 가 자기 답을 귀속 못 하기 때문이다. 서브셸인 이유는,
+  **확인 행위가 셸의 리전을 바꾸면 그다음 `down` 이 엉뚱한 워크스페이스로 가기**
+  때문이다. 읽을 수 없는 프로필은 `MISSING:` 으로 찍고 넘어간다 — **"안 봤음" 은
+  "0" 이 아니다** (`http=200 count=0` 과 같은 구분).
+
+> **코드 쪽 진짜 수리는 한 줄이다.** `cmd_status` 가 표 위에
+> `target.resource_group` / `target.workspace_name` 을 찍으면 위의 문서 쪽 에코가
+> 전부 불필요해진다. 이번 회차에 그 파일을 소유한 에이전트가 없어 **안 했다.**
+> 다음 회차의 첫 번째 항목이다.
+
+### 72.6 랩이 안 적은 것 셋 — `--image`, 엔드포인트 키, 워크스페이스 인자
+
+전부 "코드에 없다" 가 아니라 **"코드에 있는데 랩이 안 쓴다"** 이다.
+
+| 어디 | 무엇 | 결과 |
+| --- | --- | --- |
+| `lab8.md:182-189` | green 배포에 `--image` 가 없다 | `resolve_serve_image()` 가 `SERVE_IMAGE`(저자들 사설 ACR)까지 내려간다. `lab5.md:86` 은 "이 플래그가 없으면 이 트랙은 여기서 끝납니다" 라고 적어 놓고, `lab8.md:41` 은 Lab 4 이미지를 선행조건에 넣어 놓고, **정작 명령이 그 이미지를 참조하지 않았다.** Lab 5 에서 `--image` 를 쓴 참가자는 $4.959/시짜리 롤아웃 **20분째**에 pull 실패를 만난다 |
+| `lab6.md` / `lab8.md` | `$FFSFT_ENDPOINT_KEY` 를 채우는 방법이 어디에도 없다 | `ffsft-loadtest` 는 키가 없으면 **거부하지 않는다** — `Authorization` 헤더를 안 붙이고 그대로 돌아서 전 레벨이 실패한다. `compare_deployments.py` 만 `exit 2` 로 말해 준다. `verify_deployment.sh` 와 `run_token_viewer.sh` 는 **자기가 직접** 키를 가져오므로, **그 둘이 돌았다고 변수가 실린 것이 아니다** |
+| `lab6.md:53`, `lab8.md:299`, `PERFORMANCE.md:335` | `az ml online-endpoint show` 에 `-g/-w` 가 없다 | `az configure --defaults` 에 의존하는데 이 워크샵은 그걸 설정한 적이 없다 |
+
+키는 **환경변수로만** 받는다. 파일에 안 쓰는 이유가 하나 더 있다 — `~/.ffsft-env`
+계열은 `lab0` 이 "**자격증명은 이 파일에 없습니다**" 라고 약속한 파일이고, 그 약속이
+그 파일을 백업하거나 화면에 띄워도 되게 만든다. 키 한 줄이 그 약속을 깬다.
+조회는 `_common.sh` 의 `ffsft_endpoint_key` 를 **서브셸로** 부른다 (`bash -c`):
+그 파일은 스크립트용이라 구독이 어긋나면 `exit 1` 하고, 대화형 셸에 직접 source 하면
+**참가자의 터미널이 실습 중간에 닫힌다.** URL 이 `$FFSFT_RESOURCE_GROUP` /
+`$FFSFT_WORKSPACE` 로 조립되므로 **프로필이 틀리면 키가 아니라 404 가 온다** — 72.5 와
+같은 결함이 여기서는 **조용히 틀리는 대신 즉시 틀린다.**
+
+**키 길이는 적지 않았다.** 검증에 쓴 `length 32` 는 가짜 `az` 가 돌려준 값이고
+**이 리포에 실제 키 길이를 잰 기록이 없다.** 기대 출력에는 `length <0 이 아닌 수>` 로
+적고 "0 이 아니면 성공" 만 말한다.
+
+### 72.7 이번에 안 메운 구멍 — 적어만 둔다
+
+- **`az ml` 확장이 이 머신에 없다.** 설치는 네트워크 호출이라 금지되어 있어
+  `az ml online-endpoint list --help` / `az ml compute list --help` 를 **못 돌렸다.**
+  `-g/-w` 철자는 이 리포가 이미 싣고 있는 명령(`RUNBOOK.md:126-127, 245, 271`)에서
+  가져왔다. **확장이 있는 머신에서 확인한 뒤 배포할 것.**
+  더 안전한 대안이 리포 안에 이미 있다 — `_common.sh::ffsft_scoring_base` 는
+  `az rest` 로 `scoringUri` 를 읽고 `/score` 와 `/chat/completions` **두 모양을 다**
+  벗긴다. `${BASE%/chat/completions}` 는 `.../score` 를 못 벗기고, 그 결과가
+  GOTCHAS #14 의 "**응답이 오는데 빈 응답으로 읽힌다**" 이다. lab6·lab8·PERFORMANCE
+  세 곳을 그 함수로 통일하는 것이 다음 회차 후보다.
+- **리전이 둘이면 lab8 의 blob 수신은 실측이 없는 경로다.** §1 등록과 §2 병합은
+  **학습 워크스페이스**에서 돌아야 한다 — `model_asset.job_output_uri` 가 만드는
+  경로(`azureml://datastores/workspaceblobstore/paths/azureml/{잡}/model_dir/`)의
+  blobstore 는 그 잡이 돈 워크스페이스의 것이기 때문이다. 그러면 §3 의
+  `--model-blob-uri` 는 **학습 리전 스토리지**를 가리키고 컨테이너는 **서빙 리전**에
+  있다. §64.5 의 111초는 **같은 리전** 값이고, 리전이 다를 때는 **아무도 재지 않았다.**
+  레디니스 예산은 13.25분이다. lab8 §0 에 경고만 적고 **명령은 적지 않았다** —
+  없는 측정으로 절차를 쓰지 않는다.
+- **`lab2.md:10` 의 "LowPriority 요율은 이 리포에 기록이 없습니다" 는 이제 낡았다.**
+  §72.1 이 그 기록이다. lab2 를 소유한 회차가 그 표의 `기록 없음` 칸을 $0.992 로
+  바꾸고 **$1.5 는 총액이라는 문장은 그대로 둬야 한다** — 그 문장이 §72.4 를 처음부터
+  막고 있던 문장이다.
+- **`down --all --endpoint X` 는 거부하지 않는다.** `--endpoint` 필터가 이기므로
+  좁고 안전한 쪽으로 동작한다(과잉 삭제가 아니라 과소 삭제). 다음 회차의 결정 항목.
+- **`GPU_SKUS` 의 `Standard_ND96isr_H100_v5: low_priority: True`** 는 koreacentral
+  에 미터가 없다는 관측과 어긋난다 (§71.2 가 이미 적었고, 이번에도 안 건드렸다).
+
+### 72.8 이번에 배운 것
+
+- **틀린 요율이 작은 항목에 붙으면 총계가 안 알려준다** (§72.4). lab8 의 합계는
+  $12.14 → $12.03, 둘 다 "약 $12" 다. 검산으로는 절대 안 잡힌다. 잡히는 유일한 지점은
+  **그 숫자가 어디서 왔는지 묻는 것**이었고, 물었더니 출처가 **총액 한 개**였다.
+- **"잘라 붙여라" 는 규칙은 잘라 가는 쪽만 지켜서는 안 된다** (§72.3). 원본이 손으로
+  옮겨 적힌 값이면 랩과 원본이 갈라지고, 갈라진 뒤에는 **랩 쪽이 맞았다.**
+  표는 손으로 고치지 말고 **원자료에서 다시 뽑는다.**
+- **선언만 된 플래그는 문서에서 진짜처럼 보인다** (§72.2①). `--all` 은 `--help` 에
+  멀쩡히 나오고 있었다. §71.6 이 "랩에 명령을 적기 전에 `--help` 를 친다" 고 적었는데,
+  이번 것은 **`--help` 가 거짓말을 하는 경우**였다. `--help` 다음은 **그 인자를 읽는
+  코드가 있는지**다.
+- **자기 답을 귀속 못 하는 출력은 문서로 못 고친다 — 가려만 진다** (§72.5).
+  `BILLING NOW: nothing` 은 워크스페이스 이름을 안 적는다. 루프의 `====` 헤더는
+  응급처치이고, 진짜 수리는 `cmd_status` 의 `print` 한 줄이다.
+
+---
+
+## 73. 라운드 2·3 — 돈 찍는 경로에서 "못 봤다"가 다시 "없다"였다 (2026-08-27)
+
+§71 은 워크샵을 **실행해서** 아홉 개를 찾았고, §72 는 그 수리를 감사했다. 이 회차는
+코드 쪽 구멍 둘을 메웠고(73.2·73.3), 랩 쪽 공백 둘을 적었다(73.4·73.5). 그리고 그
+과정에서 **§71.5① 의 기준선이 자기 회차의 작업을 포함하고 있었다**는 것이 나왔다(73.1).
+
+이 장의 숫자는 **이 트리에서 다시 잰 것**이다. 다른 에이전트의 자기보고를 그대로
+옮긴 값은 없다 — 옮겼으면 틀렸을 자리가 하나 있었고 73.6 에 적었다.
+
+### 73.1 ⛔ 기준선 정정 — 821 은 기준선이 아니라 §71 자신의 중간값이었다
+
+§71.5① 은 `821 passed, 2 skipped` 를 재고 `README.md` 의 680 과 `CLAUDE.md` 의 730 을
+**둘 다 821 로** 고쳤다. **821 은 이 리포의 기준선이 아니다.**
+
+**측정** (`uv run ruff check .` = `All checks passed!`):
+
+| 무엇을 돌렸나 | 결과 |
+| --- | --- |
+| `uv run pytest -p no:warnings` | **869 passed, 2 skipped in 8.48s** |
+| 위에서 8월 27일자 테스트 파일 **7개**를 `--ignore` | **730 passed, 0 skipped in 7.94s** |
+| 위에서 라운드 2·3 파일 **2개**만 `--ignore` | **843 passed, 2 skipped in 9.06s** |
+
+7개는 이것이다 (괄호는 `pytest --collect-only` 로 센 개수):
+
+```
+라운드 1  test_azure_sdk_logs_do_not_bury_the_output.py        (26)
+          test_logging_setup_wiring.py                         (26)
+          test_cost_reporting_admits_unknown_rates.py          (23)
+          test_serve_image_is_parameterised.py                 (18)
+          test_down_needs_a_scope_and_up_names_its_rate.py     (22)   합 115
+라운드 2  test_env_target_treats_empty_as_unset.py             (12)
+라운드 3  test_status_cannot_report_a_failed_look_as_nothing.py (14)
+```
+
+**821 이 기준선일 수 없다는 결정적 증거는 산술이 아니라 skip 두 개다.** 리포 전체에서
+skip 은 `tests/test_logging_setup_wiring.py:120` 의 두 개뿐이고(`pytest -rs` 로 확인),
+**그 파일 자체가 라운드 1 이 새로 쓴 파일이다.** 즉 `2 skipped` 가 찍힌 측정은
+**이미 라운드 1 의 작업을 포함하고 있다.** 기준선은 `0 skipped` 여야 한다.
+
+산술도 같은 말을 한다. 730 + 115 = 845 = 843 passed + 2 skipped. 그리고
+821 + 2 = 823 = 730 + 93 이므로, 821 을 잴 때 라운드 1 은 최종 115 개 중 **93 개**를
+쓴 상태였다. **821 은 자기 작업 도중에 자기를 잰 값이다.**
+
+**§71.5 는 맞는 숫자를 틀린 숫자로 바꿨다.** `README.md` 의 680 은 실제로 낡은
+값이었지만 `CLAUDE.md` 의 **730 은 오늘 다시 잰 기준선과 정확히 같다.** 두 문서가
+어긋나 있을 때 **둘 중 어느 쪽도 확인하지 않고 방금 자기가 잰 세 번째 값으로 둘 다
+덮은 것**이 이 결함이다. 어긋난 두 값 중 하나는 맞을 수 있다 — 먼저 그것부터 본다.
+
+**못 한 것.** 여기서는 git 을 쓰지 않으므로 **"HEAD 의 깨끗한 트리" 를 직접 재지
+않았다.** 잰 것은 **"작업 트리 − 위 7개 파일"** 이다. 둘이 갈라지려면 라운드 1~3 이
+기존 테스트 파일의 **개수**를 바꿨어야 하는데, `tests/` 에서 8월 27일 mtime 을 가진
+파일은 위 7개가 전부다. **730 은 그 근거 위에서의 값이다.**
+
+**지금 문서에 박힌 값은 셋 다 869 가 아니다.** 이번 회차에 그 파일들을 소유한
+에이전트가 따로 있어 **안 고쳤다** — 다음 회차가 가져갈 항목이다:
+
+| 자리 | 지금 | 실측 |
+| --- | --- | --- |
+| `CLAUDE.md:12` | `843 passed, 2 skipped` | `869 passed, 2 skipped` |
+| `README.md:84` | `843 passed, 2 skipped` | `869 passed, 2 skipped` |
+| `docs/labs/lab0.md:7`, `:44` | `855` / `855 passed, 2 skipped in 8.75s` | `869` |
+
+### 73.2 `AzureTarget.from_env` — 빈 문자열이 기본값을 통과해 지나갔다
+
+`os.environ.get(name, default)` 의 default 는 **이름이 없을 때만** 발동한다.
+`export FFSFT_WORKSPACE=` 는 **있는데 빈 값**이므로 default 를 건드리지 않고 그대로
+`AzureTarget` 에 실린다. 여덟 개 변수 중 `FFSFT_SUBSCRIPTION_ID` 하나만 `if not`
+가드가 있었고, 나머지 일곱은 없었다.
+
+**동기가 된 자리는 `lab0.md:312` 의 heredoc 이다.** 그 블록은 `<<EOF`(따옴표 없음)라
+**파일을 쓰는 순간 확장된다** — 세 변수가 비어 있는 셸에서 그 명령을 치면
+`export FFSFT_RESOURCE_GROUP=` 이 프로필에 **굳는다.** 그러면 그 뒤의 모든 셸이
+rg=`''` ws=`''` 로 타깃을 만들고, `ffsft-lifecycle status` 는 이름이 `''` 인
+워크스페이스를 조회해 `collect_inventory` 안에서 실패하고, 화면에는
+`BILLING NOW: nothing` 이 찍힌다. **§72.5 와 같은 오독이 프로필이 아니라 환경변수를
+통해 도착한다.**
+
+> 지금 `lab0.md` §4 는 두 갈래(있으면 / 없으면) **모두**의 앞에 export 세 줄을 두고
+> (`lab0.md:207-209`), `:302-305` 에서 "대괄호가 그대로면 여기서 멈춰라" 를 경고한다.
+> **그 이전 판본은 보지 못했다** — git 을 쓰지 않으므로 "예전에는 한쪽 갈래가 세 줄을
+> 건너뛰었다" 는 이 트리에서 확인할 수 없다. 확인되는 것은 **지금도 heredoc 이
+> `<<EOF` 라서 빈 값을 굳힐 수 있다**는 것이고, 그래서 방어는 문서가 아니라 코드에
+> 있어야 한다.
+
+**수리.** 모듈 수준 `_env_setting(*names) -> str | None` 이 `names` 중 공백이 아닌
+첫 값을 `strip()` 해서 돌려주고, 없으면 `None` 이다. `from_env` 의 여덟 줄이 전부
+그것을 지난다 (`src/ffsft/azure_ml.py:151`, `:223-238`). **비대칭이 줄 단위로 보이는
+것이 요점이다** — 구독은 `raise`, 테넌트는 `None`(없는 것이 정당하다), 나머지는
+`or "<기본값>"`.
+
+**측정 (지금 트리):**
+
+```
+$ FFSFT_SUBSCRIPTION_ID=sub-real FFSFT_RESOURCE_GROUP= FFSFT_WORKSPACE= FFSFT_LOCATION= \
+  FFSFT_COMPUTE= FFSFT_SKU= FFSFT_VM_PRIORITY= FFSFT_TENANT_ID= \
+  uv run python -c "from ffsft.azure_ml import AzureTarget; print(AzureTarget.from_env())"
+AzureTarget(subscription_id='sub-real', resource_group='rg-ffsft-kc', workspace_name='mlw-ffsft',
+            location='koreacentral', compute_name='gpu-a100-lp',
+            compute_sku='Standard_NC24ads_A100_v4', max_nodes=1,
+            vm_priority='LowPriority', tenant_id=None)
+
+$ FFSFT_SUBSCRIPTION_ID= AZURE_SUBSCRIPTION_ID= uv run python -c "...from_env()"
+RuntimeError: set FFSFT_SUBSCRIPTION_ID (or AZURE_SUBSCRIPTION_ID) to the target Azure subscription id
+```
+
+**브리프 밖의 동작 변화가 하나 있고, 이건 개선이다.** 공백만 든
+`FFSFT_SUBSCRIPTION_ID="   "` 는 `if not subscription` 을 **통과했었다**(`'   '` 는
+참이다) — 즉 구독 id 자리에 공백 세 칸이 애저까지 갔다. 지금은 거부한다 (측정:
+`RuntimeError: set FFSFT_SUBSCRIPTION_ID ...`). 빈 문자열의 동작은 그대로다.
+
+**기본값이 안전한 이유는 기본값이라서가 아니라 그것이 적히기 때문이다.** `''` 라는
+이름의 애저 리소스는 없으므로 빈 값은 후보가 아니지만, `mlw-ffsft` 는 **저자들의**
+워크스페이스다. 그 이름이 화면에 찍히지 않으면 참가자는 자기 프로필이 빈 줄 모르고
+남의 워크스페이스 이름으로 된 보고서를 읽는다. **그 인쇄가 73.3 이다** —
+`from_env` 의 docstring 이 그 의존을 제자리에 적어 둔 이유이고, 그 줄을 지우는 사람은
+장식을 지우는 게 아니다.
+
+테스트 12 개: `tests/test_env_target_treats_empty_as_unset.py`.
+
+### 73.3 `collect_inventory` — `logs.py` 가 막는 실패가 돈 찍는 경로에 그대로 있었다
+
+`CLAUDE.md:180-182` 는 이렇게 적는다:
+
+> `deploy/logs.py::classify_log_response` returns a `LogStatus` so "could not
+> look" is never reported as "looked, saw nothing".
+
+**같은 규칙이 한 디렉터리 옆, 돈을 찍는 경로에는 없었다.** `collect_inventory` 의 네
+listing 은 `except Exception: log.warning(...)` 로 감싸여 있었다. 경고는 **stderr**
+로, 판정은 **stdout** 으로 가므로 둘은 만나지 않는다. 네 개가 전부 실패하면 표는
+비고, 표가 비면 `else` 가지가
+
+```
+BILLING NOW: nothing. No always-on compute in this workspace.
+```
+
+를 찍는다 — **진짜 정리가 끝난 워크스페이스와 바이트 단위로 같은 줄이다.**
+
+**수리.** `_section` 컨텍스트 매니저가 `SectionScan` 을 `Inventory.scans` 에 남기고
+실패를 `ScanStatus.FAILED` + `type(exc).__name__: exc` 로 기록한다. **예외 타입까지
+남기는 이유**는 `ResourceNotFoundError` 는 "위의 rg/워크스페이스를 봐라" 이고
+`403` 은 "워크스페이스는 맞고 신원이 틀렸다" 이기 때문이다. 판정은 세 갈래가 된다.
+
+**측정** (`tests/test_status_cannot_report_a_failed_look_as_nothing.py` 의 가짜
+클라이언트로 `format_inventory` 를 직접 렌더 — 애저 호출 없음):
+
+```
+BILLING NOW: UNKNOWN -- could not look. 4 of 4 listing(s) failed, so the empty table above is silence, not evidence.
+  COULD NOT LOOK at 4 listing(s): online endpoints (ResourceNotFoundError: workspace 'mlw-ffsft' not found in rg 'rg-ffsft-kc'); batch endpoints (...); compute clusters (...); jobs (...)
+Fix the errors above and re-run: an unreadable workspace is not an idle one.
+```
+
+`nothing` 도 `$0` 도 `0.000` 도 `/month` 도 **한 글자도 없다.** 부분 실패는 본 것을
+그대로 보고하되 **총계가 무엇을 덮는지**를 적는다:
+
+```
+BILLING NOW: 1 resource(s)  $4.320/hr  ~$3,154/month if left running
+  the count covers only what could be listed. COULD NOT LOOK at 1 listing(s): compute clusters (ResourceNotFoundError: (AuthorizationFailed) the identity cannot read computes)
+```
+
+그리고 **진짜 음성은 살아 있다** — 네 listing 이 다 성공하고 비었으면 문장은 예전
+그대로다:
+
+```
+BILLING NOW: nothing. No always-on compute in this workspace.
+```
+
+`unlisted_note()` 가 `unpriced_note()` 와 같은 모양인 것은 의도다 — **같은 구멍에 두
+번째 어휘를 만들지 않는다**(§72.2②와 같은 규칙). 엔드포인트 한 줄에도 같은 규칙이
+적용됐다: deployments listing 이 실패한 엔드포인트는 이제
+`no deployments (endpoint shell only, no compute cost)` 가 아니라
+`deployments could NOT be listed -- what runs here is unknown` 이다. **A10 하나가
+그 문장 뒤에서 돈다.**
+
+**§72.5 가 "다음 회차의 첫 번째 항목" 이라고 적은 한 줄도 같이 들어왔다.**
+`format_inventory` 는 표 **위에** 스코프를 찍는다 (`scope_lines`, `cmd_status` 가
+타깃을 넘긴다):
+
+```
+LOOKED IN: workspace mlw-ffsft   resource group rg-ffsft-kc
+           subscription 11111111-2222-3333-4444-555555555555
+           that triple is the whole query. FFSFT_LOCATION=koreacentral is not sent by get_ml_client,
+           so it does not scope this read and cannot explain a missing resource.
+```
+
+세 번째·네 번째 줄이 장식이 아닌 이유: `get_ml_client` 는 구독·rg·워크스페이스만
+넘기고 **`FFSFT_LOCATION` 은 보내지 않는다.** 리전을 라벨 없이 찍으면 "이 표는 리전
+스코프고 다른 리전 리소스는 원래 안 보인다" 는 **틀린 이론**을 부른다 — §72.5 가
+정확히 그 오독을 다루는 절이다. 타깃 없이 렌더된 보고서는
+`LOOKED IN: unrecorded -- this report cannot name the workspace it read.` 를 찍는다.
+
+테스트 14 개: `tests/test_status_cannot_report_a_failed_look_as_nothing.py`.
+
+### 73.4 Lab 5 — 서빙 리전에 워크스페이스를 만드는 절이 워크샵에 없었다
+
+§72.5 가 프로필을 둘로 갈랐다. `~/.ffsft-serve-env` 는 `FFSFT_RESOURCE_GROUP` /
+`FFSFT_WORKSPACE` 에 **서빙 리전의 값**을 넣으라고 한다. 그런데 리전이 갈린
+참가자에게 **그 워크스페이스는 아직 존재하지 않는다.** 워크샵에서
+`provision_azure.py` 를 부르는 자리는 `lab0.md` §4 와 `lab2` 선행조건 둘뿐이고,
+**둘 다 학습 rg·워크스페이스·리전으로 부른다.**
+
+`lab5.md:104-146` 이 그걸 만드는 유일한 절이 됐다. 두 가지가 문서 쪽 함정이다.
+
+- **이 절은 아직 학습 프로필 셸에서 돈다.** `$FFSFT_SUBSCRIPTION_ID` 가 거기 있고,
+  서빙 프로필은 그 다음 §3.1 에서 만들어진다. 순서를 뒤집으면 구독 id 가 없다.
+- **워크스페이스만 만들 수 없다.** `provision_azure.py` 는 워크스페이스 다음에
+  `gpu-a100-lp` 를 만들고 **클러스터만 건너뛰는 플래그가 없다.** 워크스페이스가 먼저
+  만들어지므로 클러스터 줄에서 죽어도 이 Lab 이 필요로 하는 것은 남는다.
+
+**그 실패는 실측이 아니다.** `lab5.md:139-140` 이 그렇게 적었다 — 이 리포는 서빙
+리전에서 그 클러스터를 만들어 본 적이 없고, LowPriority 풀 쿼터가 거기 있는지 모른다.
+**없는 측정으로 절차를 쓰지 않는다**(§72.7 과 같은 규칙).
+
+### 73.5 Lab 8 — 학습 스토리지 계정에 대한 **미확인** 권한 공백 (관측된 403 없음)
+
+**이 절은 추론이다. 아무도 이 403 을 본 적이 없다.** 아래를 측정으로 읽으면 안 된다.
+
+`lab8.md` §3 의 `--model-blob-uri` 는 **학습 워크스페이스**의 `workspaceblobstore`
+계정을 가리킨다 (`model_asset.job_output_uri` 가 만드는 경로가 그 잡이 돈
+워크스페이스의 것이기 때문 — §72.7 이 이미 적었다). 그걸 받는 것은
+`~/.ffsft-serve-env` 로 갈아탄 **서빙 워크스페이스의 엔드포인트 MSI** 다.
+
+**§62.6 은 이 경우를 재지 않았다.** 거기서 확인된 `Storage Blob Data Reader` 는
+**계정 하나** — 엔드포인트 자기 워크스페이스의 `mlwffsftstorage09dd66111` 이다.
+다른 계정에 대해서는 §62.6 이 **아무 말도 하지 않는다.** 리전이 하나였으므로 잴
+이유도 없었다. 즉 이것은 **관측된 실패가 아니라 §62.6 측정의 범위에서 나온 공백**이다.
+
+**배포 경로의 신원 프리플라이트도 이 공백을 못 본다 (이건 코드로 확인됨).**
+`deploy/identity.py::read_identity_grants` 는 워크스페이스 본문의
+`properties.storageAccount` 를 스코프로 롤을 읽는다(`identity.py:204`). 그 워크스페이스는
+**서빙** 쪽이다. **학습 스토리지 계정에 롤이 없다는 사실은 그 검사에 아예 안 보인다.**
+
+확인·부여 비용은 `lab8.md:285-301` 의 블록 하나다. 틀렸을 때의 비용은
+**$4.959/시 × 약 24분** — 24분은 §66 의 배포 완료 실측(`PERFORMANCE.md:319`)이고
+$4.959 는 §72.1 의 PAYG 요율이다. **그리고 이 실패는 조용하다:** `fetch_model.py` 는
+실패하면 컨테이너를 죽이고(폴백이 살아 있으면 튜닝 안 된 베이스를 **건강하게**
+서빙하니까), `Creating` 동안 컨테이너 로그는 못 읽는다. 화면에서 403 은
+**"blob 수신이 느림"(§72.7 의 리전 교차 미측정 경로)과 구분되지 않는다** — 둘 다
+24분짜리 롤아웃 끝의 실패다.
+
+**다음에 리전 둘로 돌리는 사람이 해야 할 일은 롤을 부여하는 것이 아니라
+`az role assignment list` 를 먼저 찍어 두는 것이다.** 그러면 이 절은 추론에서
+측정으로 바뀌거나, 필요 없었다는 것이 기록된다. **지금은 둘 다 모른다.**
+
+### 73.6 자기보고와 트리가 어긋난 자리 — 옮겨 적지 않은 이유
+
+라운드 2·3 의 자기보고는 대체로 트리와 맞았다. 어긋난 것 하나를 적는다.
+
+- **부분 실패 예시의 예외 이름이 다르다.** 자기보고는
+  `compute clusters (PermissionError: (AuthorizationFailed) no read on
+  Microsoft.MachineLearningServices/workspaces/computes)` 라고 적었는데, 이 트리에서
+  실제로 찍히는 것은
+  `compute clusters (ResourceNotFoundError: (AuthorizationFailed) the identity cannot
+  read computes)` 다. 모양은 맞고 **글자는 틀렸다.** 위 73.3 에는 **직접 렌더한
+  값**을 넣었다. §72.3 과 같은 실패다 — 출력을 손으로 옮겨 적으면 갈라진다.
+- **`from_env` 의 "고치기 전" 출력은 재현하지 않았다.** 코드가 이미 바뀐 뒤라
+  이 트리에서는 못 잰다. 73.2 에 적은 "전"은 `os.environ.get(name, default)` 의
+  **동작에서 나오는 것**이지 측정이 아니다.
+
+### 73.7 이번에 배운 것
+
+- **기준선은 "무엇을 뺀 값인지" 를 같이 적지 않으면 기준선이 아니다** (§73.1).
+  821 은 틀린 측정이 아니라 **올바른 측정에 틀린 이름이 붙은 것**이다. 이 리포에서
+  같은 실패가 반복된다 — §71.5②③ 은 맞는 숫자에 센 문장, §72.4 는 총액에 요율 이름.
+- **어긋난 두 문서를 세 번째 값으로 덮지 않는다** (§73.1). 680 과 730 이 달랐다는
+  사실은 **둘 중 하나가 맞을 수 있다**는 신호였다. 확인이 `--ignore` 한 줄이었다.
+- **불변식은 파일 단위로 적히면 파일 단위로만 지켜진다** (§73.3). `logs.py` 는
+  `LogStatus` 로 그 실패를 막고 있었고, 같은 실패가 **한 디렉터리 옆 돈 찍는
+  경로**에 그대로 있었다. `CLAUDE.md:180-182` 는 규칙을 `deploy/logs.py` 의 성질로
+  적고 있었지 **"못 봤다는 없다가 아니다"** 라는 성질로 적고 있지 않았다.
+- **기본값의 안전은 기본값이 아니라 그 인쇄에서 온다** (§73.2 ↔ §73.3). 두 회차가
+  각각 만든 조각인데, 한쪽만 있으면 나머지 한쪽이 위험해진다 — `mlw-ffsft` 로 조용히
+  떨어지는 것은 **남의 워크스페이스를 자기 것으로 읽게 만드는** 동작이다.
+- **"안 쟀다" 를 절에 적는 것이 절을 못 쓰게 만들지 않는다** (§73.4·§73.5).
+  lab5 의 쿼터, lab8 의 403, 리전 교차 수신 셋 다 미측정인 채로 문서에 들어갔고,
+  **미측정이라고 적혀 있다.** 안 적으면 다음 사람이 그것을 실측으로 읽는다.
+
+---
+
+## 74. 라운드 4 게이트 — "못 봤다"가 마침내 **삭제**가 됐다 (2026-08-27)
+
+§73.3 은 `status` 에서 "못 봤다 → 없다" 를 막았다. **같은 파일 400줄 아래 `cmd_down`
+에서는 그 문장이 삭제 호출이었다.** 이 절은 그 결함과, §11.4 가 이미 적어둔 채로 세
+회차가 지나친 `read_orphans` 구멍, 그리고 종료코드를 기록한다.
+
+**이 절의 모든 출력은 이 트리에서 내가 직접 돌려서 잘라 온 것이다.** 다른 에이전트의
+자기보고를 옮긴 값은 없다. 옮기지 않은 이유는 §72.3·§73.6 과 같다 — 출력을 손으로
+옮기면 갈라진다. 확인 못 한 것은 74.7 에 **확인 못 했다고** 적었다.
+
+**게이트 실측:**
+
+| 무엇 | 결과 |
+| --- | --- |
+| `uv run ruff check .` | `All checks passed!` |
+| `uv run pytest -p no:warnings` | **945 passed, 2 skipped in 8.65s** |
+| `uv run pytest` (경고 포함, lab0 이 인용하는 형태) | **945 passed, 2 skipped, 472 warnings in 8.85s** |
+| 위에서 이번 회차 **신규 4개 파일**을 `--ignore` | **874 passed, 2 skipped in 8.91s** |
+
+874 + 71 = 945. 신규 71개는 `test_teardown_refuses_to_act_on_a_failed_look.py`(33),
+`test_submit_scripts_target_the_configured_workspace.py`(21),
+`test_shell_and_python_resolve_the_same_target.py`(12),
+`test_status_header_claims_only_the_reads_it_covers.py`(5). 나머지 5개는 기존 파일이
+자란 것이다(`test_status_cannot_report_a_failed_look_as_nothing.py` 의 `cmd_status`
+종료코드 단언 포함 — **그 한 줄이 결함 4를 고정한 자리다**).
+
+### 74.1 헤드라인 — `down --endpoint X --yes` 가 403 위에서 진짜 DELETE 를 쐈다
+
+`online_deployments.list` 가 403 을 던지면 `collect_inventory` 는 그 엔드포인트를
+"배포 없음" 행으로 남기고, `--endpoint` 가 만드는 좁힌 `Inventory` 는 비어 있다.
+그 다음 문장이 **엔드포인트 껍데기 삭제**였다.
+
+**측정 — "전" 을 재현했다.** 새 거부는 오직 `blind_spots(...)` 하나로 게이트된다.
+그래서 `lifecycle.blind_spots` 를 `[]` 로 스텁하면 이 가지의 **옛 제어흐름이 그대로
+복원된다.** 가짜 클라이언트의 삭제 메서드는 **예외를 던지지 않고 기록한다** — 기록이
+남았다는 것은 진짜 DELETE 가 나갔다는 뜻이다.
+
+```
+--- BEFORE (blind_spots -> [] = 고치기 전 흐름) :: down --endpoint ffsft-a10 --yes
+   | no online deployment found for endpoint 'ffsft-a10'
+   | deleting endpoint shell 'ffsft-a10'
+   | >>> REAL DELETE CALL ISSUED: () {'name': 'ffsft-a10'}
+   | deleted
+   rc=0  deletes=[('online_endpoints.begin_delete', (), {'name': 'ffsft-a10'})]
+```
+
+**`rc=0` 이 같이 찍혔다는 점이 결함의 절반이다.** 화면에는 "no online deployment
+found" 라고 적히고, 종료코드는 성공이고, 실제로는 **무엇이 도는지 모르는 엔드포인트를
+지웠다.** 그 엔드포인트가 `Standard_NV36ads_A10_v5` 이면 `$4.320/시` 가 돌고 있었을
+수도 있고, 지웠으니 그것도 이제 알 수 없다.
+
+**측정 — 지금.** 같은 호출, 패치된 코드:
+
+```
+--- AFTER :: down --endpoint ffsft-a10 --yes
+   | BILLING NOW: UNKNOWN -- could not look. 1 of 5 listing(s) failed, so the empty table above is silence, not evidence.
+   | Fix the errors above and re-run: an unreadable workspace is not an idle one.
+   | COULD NOT LOOK: what runs on endpoint 'ffsft-a10' is UNKNOWN.
+   | nothing was deleted. an endpoint whose deployments could not be listed
+   | is not an empty one -- it may be serving, and it bills either way.
+   | fix the errors above and re-run.
+   rc=1  deletes=[]
+```
+
+`no online deployment found` 도 `deleting endpoint shell` 도 `0.000` 도 **한 글자도
+없다.** 표 위 `LOOKED IN:` 헤더 여섯 줄과 `KIND` 표는 위 인용에서 잘라냈다(실제
+화면에는 있다).
+
+**같은 가지의 `--deployment` 쪽도 같이 새고 있었다.** 좁힌 `Inventory` 는 `scans` 를
+**이미 넘겨받고 있었고** 그 이유를 적은 주석까지 있었는데, 이 가지가 `format_inventory`
+를 부르기 **전에** `return` 해서 넘겨받은 scans 를 아무도 렌더하지 않았다.
+
+```
+--- BEFORE :: down --endpoint ffsft-a10 --deployment blue --yes
+   | no deployment 'blue' on endpoint 'ffsft-a10'
+   | endpoint 'ffsft-a10' left alone; you did not ask to delete it
+   rc=0  deletes=[]
+
+--- AFTER :: down --endpoint ffsft-a10 --deployment blue --yes
+   | COULD NOT LOOK: whether deployment 'blue' of endpoint 'ffsft-a10' is still there is UNKNOWN.
+   | nothing was deleted. ...
+   rc=1  deletes=[]
+```
+
+여기서는 아무것도 안 지웠지만 **더 비쌌을 수 있다.** lab8 §7 은 green 으로 트래픽을
+넘긴 뒤 blue 를 지우는 자리다. "blue 는 이미 없다" 를 읽은 참가자는 그 자리에서
+끝낸다 — blue 가 `Standard_NC24ads_A100_v4`, **$4.959/시** 로 도는 채로.
+**고쳐진 것은 삭제가 아니라 문장이었다.** 문장이 돈을 태운다.
+
+### 74.2 §11.4 가 **이미 적어둔** 구멍을 세 회차가 지나쳤다
+
+`docs/JOURNAL.md:712` 는 이렇게 적혀 있었다:
+
+> `http=200 count=0` 이 중요하다. `read_orphans` 는 어떤 실패에도 `[]` 를 돌려주므로
+> "고아 없음"이 "인증 실패"를 가리고 있을 수 있다.
+
+**적어두고 고치지 않았다.** 그 사이 라운드 1 이 `$0.000/hr` 을, 라운드 2 가 빈
+환경변수를, 라운드 3 이 `collect_inventory` 의 네 listing 을 고쳤고, **`read_orphans`
+는 세 회차 모두를 통과했다.** `log.debug` + `return []` 이라 기본 로그 레벨에서
+아무 흔적도 남기지 않았기 때문이다 — AML 쪽 네 listing 은 적어도 `log.warning` 은
+받고 있었다.
+
+**측정 — AML 네 listing 이 전부 성공해서 비었고, 리소스그룹 스캔만 403 인 `status`:**
+
+```
+BILLING NOW: UNKNOWN -- could not look. 1 of 5 listing(s) failed, so the empty table above is silence, not evidence.
+  COULD NOT LOOK at 1 listing(s): orphaned disks/IPs (resource group) (RuntimeError: (AuthorizationFailed) no Reader on rg-ffsft-kc)
+Fix the errors above and re-run: an unreadable workspace is not an idle one.
+
+LEFTOVERS: UNKNOWN -- the resource-group scan did not happen, so this report cannot say whether a deleted VM left a disk or a public IP billing.
+  COULD NOT LOOK at 1 listing(s): orphaned disks/IPs (resource group) (RuntimeError: (AuthorizationFailed) no Reader on rg-ffsft-kc)
+```
+
+rc=1. 같은 입력으로 **전에는** `BILLING NOW: nothing. No always-on compute in this
+workspace.` 에 `LEFTOVERS` 블록이 **아예 없었다.** 그 "블록 없음"이 §11 의
+**$41.66/월** 을 가린 문장이다 — 없는 블록도 주장이다.
+
+**진짜 음성은 살아 있다** (측정): 리소스그룹 스캔이 성공하고 고아가 없으면 표 아래
+`LEFTOVERS:` 블록은 여전히 없고 `BILLING NOW: nothing...` 이 그대로 나오며 rc=0 이다.
+
+> **철회 (§81.1).** 바로 아래 "지금도 실패에 `[]` 를 돌려준다"는 라운드 9 부터 사실이
+> 아니다. 셋을 한 표현식에서 읽었기 때문에 **완결된 목록까지 같이 버려지고 있었고**,
+> 그것이 §81.1 이 수리한 결함이다. 지금은 목록마다 따로 읽어, 못 읽은 목록은 `scan.detail`
+> 에 이름이 남고 읽어 낸 행은 반환된다. "예외를 던지지 않는다"는 절반은 그대로 유효하다.
+
+`read_orphans` 는 **지금도 실패에 `[]` 를 돌려준다.** 예외를 던지고 죽는 비용
+리포트는 아무도 안 돌리기 때문이다. 달라진 것은 그 실패가 `_section` — AML 네
+listing 이 쓰는 **바로 그** 컨텍스트 매니저 — 을 통과한다는 것이다. 같은 구멍에 두
+번째 어휘를 만들지 않는다(§72.2②·§73.3 과 같은 규칙).
+
+### 74.3 종료코드 — 산문은 UNKNOWN 인데 스크립트는 0 을 읽었다
+
+`down --all --yes && echo clean` 이 네 listing 이 전부 실패한 위에서 `clean` 을
+찍었다. **스크립트는 문단을 안 읽는다.** `EXIT_COULD_NOT_LOOK = 1` 이 붙었고, 파일의
+모든 사용법 거부가 쓰는 `2` 와 구분된다 — 2 는 "말을 안 했다"(사람이 다시 친다),
+1 은 "워크스페이스가 대답을 안 했다"(고칠 것이 밖에 있다).
+
+**측정 (전부 이 트리, 가짜 클라이언트, 애저 없음):**
+
+| 호출 | 조회 상태 | rc | 삭제된 것 |
+| --- | --- | --- | --- |
+| `down --all --yes` | 전부 실패 | **1** | 없음 |
+| `down --endpoint E` (`--yes` 없음) | 그 엔드포인트 배포 listing 403 | **1** | 없음 |
+| `down --all` (`--yes` 없음) | `jobs` 만 403 | **1** | 없음 |
+| `down --all --yes` | `jobs` 만 403 | **1** | 본 것은 삭제됨 |
+| `down --endpoint E --yes` | `jobs` 만 403 | **0** | 엔드포인트 삭제됨 |
+| `status` | 리소스그룹 스캔만 403 | **1** | — |
+| `status` | 전부 성공, 비어 있음 | **0** | — |
+
+넷째 줄이 규칙의 모양이다. **본 것은 내리되, 다 내렸다고는 말하지 않는다** —
+`meter stopped. 'ffsft lifecycle status' to confirm.` 이 사라지고 "이 명령은 지금
+워크스페이스가 유휴라고 말해줄 수 없다" 가 대신 나온다. 그리고 `--yes` 없는 dry run
+도 1 을 준다. 계획이 못 본 것을 덮고 있는데 0 을 주면 그 0 이 "이게 전부다" 로 읽힌다.
+
+### 74.4 반대 방향 — 과잉교정도 같은 값을 문다
+
+`blind_spots(inv, endpoint)` 는 `inv.failed_scans` 를 **그대로 돌려주지 않는다.**
+`--all` 은 워크스페이스 전체를 주장하므로 모든 listing 이 근거가 되지만, `--endpoint E`
+는 그 엔드포인트만 주장한다. 위 표 다섯째 줄이 그 경계다 — `jobs` 의 403 이 A10
+테어다운을 막으면, **$4.320/시 짜리가 아무도 하지 않은 주장을 지키려고 계속 돈다.**
+그리고 그때 운영자의 다음 동작은 덜 조심스러운 곳에서의 `--yes` 다.
+
+CLAUDE.md 의 규칙이 양방향인 이유가 이것이다: **안 읽은 값은 발견이 될 수도 없다.**
+
+### 74.5 이번 회차 에이전트들이 서로 밟은 자리
+
+다섯 에이전트가 같은 트리에 썼다. 충돌은 코드가 아니라 **문서 쪽**에 있었다.
+`lifecycle.py` 를 두 에이전트가 만졌지만(테어다운 경로 / 헤더 문구) 중복 헬퍼도
+모순 주석도 없었다 — `grep -oP '^def \K\w+' | sort | uniq -d` 가 빈 결과다.
+
+세 자리를 **고쳤다** (전부 지금 코드와 어긋난 사실 진술이었다):
+
+| 자리 | 문서가 말하던 것 | 지금 코드 |
+| --- | --- | --- |
+| `docs/labs/lab7.md` §3 | "`--yes` 가 없으면 거기서 `return 0` 합니다" | 사각지대가 있으면 dry run 도 **1** |
+| `docs/labs/lab7.md` §6 체크리스트 | "`LEFTOVERS:` 블록이 없음 — 있으면 §4 의 고아" | `LEFTOVERS: UNKNOWN` 이면 **고아가 아니라 조회 실패** |
+| `docs/labs/lab7.md` §5 | "`read_orphans` 가 `[]` 를 돌려주므로 리포트가 인증 실패를 가릴 수 있다" | 이제 가리지 않는다 — `LEFTOVERS: UNKNOWN` 이 찍힌다 |
+
+셋째 줄은 **`JOURNAL:712` 의 문장을 그대로 베껴 간 것**이었다. 저널이 안 고친 결함을
+적어두면 랩이 그것을 사양으로 베껴 간다.
+
+**헤더 문구와 체크리스트가 부딪힌 자리 하나 더.** 새 `AML_CLIENT_SCOPE` 는 헤더에
+`LEFTOVERS does not: it is a separate ARM scan of resource group {rg}` 를 넣는다.
+즉 **모든** 리포트의 표 **위**에 `LEFTOVERS` 라는 단어가 있다. lab7 체크리스트는
+"`LEFTOVERS:` 블록이 없음" 이었다 — 콜론이 구분해 주지만 단어로 훑는 참가자는
+걸린다. 체크리스트에 "콜론까지 보세요, 헤더에도 그 단어가 있습니다" 를 넣었다.
+
+> ⛔ **철회(§75).** 아래 "다음 회차 항목" 은 그 다음 회차에 닫혔다. `format_inventory`
+> 는 이제 워크스페이스 리스팅이 실패했을 때만 `an unreadable workspace is not an idle
+> one.` 을 찍고, 리소스그룹만 못 읽었으면 `an unread resource group is not a clean
+> one.` 을 찍는다. 아래 문단은 당시 상태의 기록으로 남긴다.
+
+**안 고치고 적어만 두는 것 하나.** 리소스그룹 스캔만 실패했을 때 `format_inventory`
+의 마지막 줄은 `an unreadable workspace is not an idle one` 이다. 그 경우
+**워크스페이스는 읽혔고 리소스그룹이 안 읽혔다.** 금액에 대한 거짓 주장은 아니지만
+문구가 부정확하다. `format_inventory` 의 이 문장은 AML listing 만 있던 시절에
+쓰였고, 라운드 4 가 고아 스캔을 같은 `inv.scans` 로 보내면서 두 스코프가 한 단어
+(`listing(s)`)를 공유하게 됐다. **다음 회차 항목이다.**
+
+### 74.6 테스트 수 — 869 → **945**
+
+§73.1 이 "다음 회차가 가져갈 항목" 이라고 적어둔 표를 이번에 닫았다. 다만 **§73.1 이
+적어둔 목표값 869 는 이미 낡았다** — 이번 회차가 71개를 더 썼다.
+
+| 자리 | 게이트 진입 시 | 지금 |
+| --- | --- | --- |
+| `CLAUDE.md:12` | `945 passed, 2 skipped` | 그대로 (이번 회차 에이전트가 이미 맞춰 놓았다) |
+| `README.md:84` | `869 passed, 2 skipped` | **945** |
+| `docs/labs/lab0.md:7` | `테스트 869개` | **945개** |
+| `docs/labs/lab0.md:44` | `869 passed, 2 skipped, 472 warnings in 8.72s` | **945 passed, 2 skipped, 472 warnings in 8.85s** |
+
+`lab0.md:44` 는 기대 출력 블록이므로 **`uv run pytest` 를 경고 억제 없이 다시 돌려서
+그 줄을 잘라 왔다.** `-p no:warnings` 로 잰 줄을 여기 붙이면 참가자 화면과 다르다.
+
+### 74.7 아직 실측에서 잘라오지 못한 기대 출력 블록
+
+전부 `status` 출력이고, 전부 같은 이유로 낡았다 — **`LOOKED IN:` 헤더 여섯 줄이
+빠져 있다.** 헤더에는 실제 구독 id 가 들어가는데, 그게 들어간 실행 출력이
+`PERFORMANCE.md` 에 없다. **지어내지 않았다.** 각 블록 위에는 이미 "구판 출력" 경고가
+붙어 있다.
+
+| 파일:줄 | 블록 | 빠진 것 |
+| --- | --- | --- |
+| `docs/labs/lab0.md:421-423` | 기대 최종 상태 (`BILLING NOW: nothing` 한 줄) | 헤더 + `KIND` 표 전체 |
+| `docs/labs/lab7.md:113-120` | §2 두 프로필 루프 블록 | 헤더 여섯 줄 (`====` 와 `KIND` 사이) |
+| `docs/labs/lab7.md:149-157` | §2.1 `?` 칸 설명용 표 | 헤더 여섯 줄 |
+| `docs/labs/lab7.md:370-377` | §6 "0 의 정의" 블록 | 헤더 여섯 줄 |
+| `docs/labs/lab8.md:608-616` | blue 삭제 뒤 `status` | 헤더 여섯 줄 |
+
+**여기에 더해 이번 회차가 헤더 문구 자체를 바꿨다.** §73.3 이 인용한 헤더는 네 줄
+(`that triple is the whole query. …`)이고, 지금 코드가 찍는 것은 여섯 줄이다:
+
+```
+LOOKED IN: workspace mlw-ffsft   resource group rg-ffsft-kc
+           subscription 00000000-fake-fake-fake-000000000000
+           that triple is what get_ml_client sends, and it scopes every row that came back
+           through it. LEFTOVERS does not: it is a separate ARM scan of resource group rg-ffsft-kc,
+           same subscription, no workspace. FFSFT_LOCATION=koreacentral is sent by neither, so it
+           does not scope this read and cannot explain a missing resource.
+```
+
+(구독 id 는 이 실행에서 쓴 가짜 값이다.) **§73.3 을 철회하지는 않는다** — 그때의
+문구는 그때 옳았고, "whole query" 가 과대주장이었다는 것이 이번 회차의 발견이다.
+랩들이 §73.3 을 헤더 근거로 인용하면서 "여섯 줄" 이라고 적고 있으므로, **헤더 문구의
+현재 근거는 이 절(§74)이다.**
+
+### 74.8 확인 못 한 것 — 명시
+
+- **애저에서 이 결함이 실제로 터지는 것을 본 적은 없다.** 이 절의 모든 403 은 가짜
+  클라이언트가 던진 것이다. 결함의 존재는 코드 경로와 위 재현으로 확정이지만,
+  "참가자가 실제로 A10 을 이렇게 잃었다" 는 기록은 **없다.**
+- **"고치기 전" 은 `blind_spots` 스텁으로 복원한 것**이지 옛 파일을 체크아웃한 것이
+  아니다(여기서는 git 을 쓰지 않는다). 그 가지의 거부가 오직 `blind_spots` 하나로
+  게이트된다는 것은 코드에서 확인했고, 그래서 스텁이 옛 흐름과 같다고 본다.
+  **이 등가성은 읽어서 확인한 것이지 잰 것이 아니다.**
+- **리소스그룹 스캔 성공 경로의 실제 ARM 호출은 안 재봤다.** `requests.get` 을
+  패치한 테스트만 있다.
+- **§74.5 마지막 항목(`unreadable workspace` 문구)은 안 고쳤다.** 테스트 없이 문구를
+  바꾸면 다음 회차가 또 어디까지가 사양인지 모른다.
+  > ⛔ **철회(§75).** 이 줄은 더 이상 맞지 않는다. 다음 회차가 그 문구를 두 갈래로
+  > 나눴고 테스트도 함께 들어왔다. 원문은 당시 기록으로 남긴다.
+
+### 74.9 이번에 배운 것
+
+- **불변식을 파일의 성질로 적으면 파일 단위로 지켜진다 — 그리고 그것은 같은 파일
+  안에서도 함수 단위로 쪼개진다** (§73.7 의 확장). 라운드 3 은 `collect_inventory`
+  를 고치면서 400줄 아래 `cmd_down` 과 60줄 아래 `read_orphans` 를 지나갔다.
+  **같은 파일이라는 것은 아무 보호도 아니다.** 규칙은 "이 함수가 방금 읽은 것에
+  대해 무엇을 주장하는가" 로 걸어야 한다.
+- **산문과 종료코드는 따로 거짓말한다** (§74.3). `BILLING NOW: UNKNOWN` 을 찍으면서
+  `0` 을 돌려주는 것은 사람에게는 참이고 스크립트에게는 거짓이다. 채널이 둘이면
+  검사도 둘이어야 한다.
+- **적어두고 안 고친 결함은 사양이 된다** (§74.2·§74.5). `JOURNAL:712` 는 구멍을
+  정확히 기술했고, 3회차 뒤 랩 문서가 그 문장을 **참가자용 설명으로** 베껴 갔다.
+  저널의 미해결 항목에는 "미해결" 이라고 붙는 게 아니라 **기한**이 붙어야 한다.
+- **거부의 스코프는 주장의 스코프와 같아야 한다** (§74.4). 넓히면 무해해 보이지만,
+  `--endpoint` 하나를 못 내리게 만드는 순간 그 시간당 요금은 계속 나가고 운영자는
+  더 거친 도구로 옮겨간다. 안전 장치가 비싸지면 사람들은 그것을 끈다.
+
+## 75. 라운드 5 게이트 — 세 번째 결과와 세 번째 종료코드 (2026-08-27)
+
+§74 는 `cmd_down` 이 "못 봤다"를 삭제로 바꾸는 것을 막았다. **이번 회차는 그 뒤에
+남은 두 자리다** — 하나는 읽기조차 안 한 것을 `BLOCKED` 라고 판정하던 자리(`check
+--probe`), 하나는 **읽어서 찾아낸** 누수 위에 `meter stopped.` 를 찍던 자리(`down
+--all --yes`). 다섯 에이전트가 동시에 이 트리를 고쳤고 다섯 감사가 전부
+`partially_holds` 를 돌려줬다. 이 절은 게이트가 **직접 실행해서** 확인한 것과,
+확인하지 못한 것을 나눈다.
+
+**이 절의 모든 출력은 이 트리에서 내가 돌려서 잘라 온 것이다.** 에이전트 보고서에
+적힌 값은 한 줄도 옮기지 않았다. 애저 접근은 없다 — 모든 클라이언트와 HTTP 계층은
+가짜이고, 구독 id `00000000-0000-0000-0000-000000000000` 은 내가 넣은 가짜 값이다.
+**요금(`$4.320/hr`, `~$41.66/month`)은 코드가 가짜 입력에서 계산한 값이지 청구서가
+아니다.**
+
+**게이트 실측:**
+
+| 무엇 | 결과 |
+| --- | --- |
+| `uv run ruff check .` | `All checks passed!` |
+| `uv run pytest -p no:warnings` | **1033 passed, 2 skipped in 8.89s** |
+| `uv run pytest` (경고 포함, lab0 이 인용하는 형태) | **1033 passed, 2 skipped, 472 warnings in 8.48s** |
+
+브리프가 적어준 진입 기준선은 `945 passed, 2 skipped` 다. **그 945 는 내가 잰 값이
+아니다** — 다섯 에이전트의 작업이 이미 들어온 트리를 내가 처음 잰 값이 1033 이므로,
+945 와 1033 사이의 88개 중 무엇이 누구 것인지는 이 게이트가 측정할 수 없다.
+**게이트가 직접 쓴 것은 23개**다(`test_the_documented_test_count_is_one_number_everywhere.py`
+3, `test_sku_probe.py` +9, `test_check_exit_code_agrees_with_what_it_could_read.py` +7,
+`test_down_scans_the_resource_group_before_it_claims_the_meter_stopped.py` +4).
+
+### 75.1 헤드라인 (a) — `check --probe` 가 남의 클러스터를 지우던 자리, 그리고 남은 절반
+
+프로브의 이름은 `ffsft-probe-{index}` 로 **고정**돼 있다. 그 이름을 이미 누가 쓰고
+있으면 `begin_create_or_update` 는 **upsert** 이므로 남의 클러스터의 size·tier·스케일
+설정을 덮어쓰고, 그 뒤 무조건 실행되는 teardown 이 그것을 **삭제**한다. 감사가 이
+자리를 `created: [('ffsft-probe-0', …)]` → `DELETED: ['ffsft-probe-0']` 로 재현했다.
+
+**게이트가 다시 잰 것 — 패치된 코드, 실제 `cmd_check` + 실제 `probe_sku`, 가짜는
+클라이언트뿐이고 그 가짜는 create/delete 를 전부 기록한다** (`/tmp/gate/verify_a_probe.py`):
+
+```
+workspace owned BEFORE      : ['ffsft-probe-0']
+clusters CREATED by this run: [('ffsft-probe-1', 'Standard_NC24ads_A100_v4', 0), ('ffsft-probe-2', 'Standard_NC24ads_A100_v4', 0), ('ffsft-probe-3', 'Standard_NV12ads_A10_v5', 0)]
+clusters DELETED by this run: ['ffsft-probe-1', 'ffsft-probe-2', 'ffsft-probe-3']
+workspace owns AFTER        : ['ffsft-probe-0']
+ffsft-probe-0 still the OPERATOR'S object: True
+exit code: 1
+```
+
+**`ffsft-probe-0` 은 create 도 delete 도 한 번도 안 받았다.** 나머지 세 패턴은
+정상적으로 프로브되고 정상적으로 지워졌다 — 거부의 스코프가 **이름 하나**로 좁게
+걸려 있다는 뜻이다(§74.4 의 규칙이 여기서도 같다).
+
+**남아 있던 절반이 이번 회차의 발견이다.** 이름을 거부하는 것만으로는 안 된다.
+그 거부가 화면에 **`BLOCKED`** 로 찍히고 있었다:
+
+```
+  aks_vllm         BLOCKED   ProbeNameTaken. a compute named 'ffsft-probe-0' already exists ...
+```
+
+`BLOCKED` 는 **SKU 에 대한 판정**이다. 여기서 SKU 는 시험된 적이 없다 — 이름이
+막혔을 뿐이다. 그리고 `cmd_check` 의 종료코드는 `0` 이었다. `check --probe && echo
+ok` 가 **아무도 묻지 않은 질문 위에 `ok` 를 찍는다.** CLAUDE.md 의 불변식이 양방향으로
+걸린다고 적어둔 그 두 번째 방향 — "안 읽은 필드는 finding 이 될 수 없다" — 의
+정확한 사례다.
+
+**패치 뒤 같은 실행:**
+
+```
+  aks_vllm         UNKNOWN   ProbeNameTaken: Standard_NV36ads_A10_v5 was not tested
+      a compute named 'ffsft-probe-0' already exists and this probe did not create it, so
+      nothing was created and nothing was deleted. Standard_NV36ads_A10_v5 was NOT tested at
+      LowPriority -- this line is about the name, not the SKU. Re-run the probe against a
+      name nobody owns, or remove 'ffsft-probe-0' yourself first: the create call is an
+      upsert, so it would have replaced that cluster's size, tier and scale settings, and
+      the teardown that follows it would then have deleted the cluster outright.
+
+COULD NOT LOOK: these reads returned no answer, so nothing above
+covers them -- an unread row is neither ok nor blocked:
+  - whether aks_vllm can create Standard_NV36ads_A10_v5 at LowPriority (ProbeNameTaken)
+```
+
+`exit code: 1`. **프로브의 결과는 두 개가 아니라 세 개다** — ok / BLOCKED / **UNKNOWN**.
+`SkuProbe.probed` 가 그 세 번째를 들고 있었는데 렌더가 두 단어밖에 안 갖고 있었다.
+`probes.py::probe_report` 가 이제 그 분기를 소유하고, 세 번째일 때 `cmd_check` 의
+COULD NOT LOOK 목록에 넣을 문장을 같이 돌려준다.
+
+**덤으로 고친 것 하나.** 위 문단은 300자가 넘는다. 이전에는 그것을 표의 **칸 안에**
+붙여서 한 줄이 140자를 넘겼다. 이제 `_wrapped` 가 92자로 접어 행 **아래** 들여쓴다
+(테스트가 `len(probe.detail) > 300` 인 입력으로 모든 줄 ≤ 140 을 고정한다).
+
+### 75.2 헤드라인 (b) — `down --all --yes` 가 방금 이름을 부른 누수 위에 `meter stopped.` 를 찍었다
+
+§11.4 가 기록한 누수(붙어 있지 않은 256GB Premium 디스크 + VM 이 없는 NIC 의 공인 IP)를
+가짜 ARM 응답으로 재생하고, **실제 `cmd_down` → 실제 `read_orphans` → 실제
+`orphan_items` → 실제 `format_inventory`** 를 태웠다 (`/tmp/gate/verify_b_down.py`).
+가짜는 HTTP 계층과 AML 클라이언트뿐이다.
+
+**경우 1 — 스캔 성공, 고아 2개 발견:**
+
+```
+LEFTOVERS: 2 resource(s) from deleted VMs, ~$41.66/month for nothing.
+`down` will not touch these -- deleting a disk cannot be undone. To remove:
+  az disk delete -g <rg> -n vm-a10-ffsft_OsDisk_1 --yes
+  az network public-ip delete -g <rg> -n vm-a10-ffsftPublicIP
+
+NOT idle: 2 leftover resource(s) from deleted VMs are still
+billing in this resource group -- listed above, with the `az` command for
+each. `down` deletes none of them: a disk cannot be un-deleted and no `up`
+recreates it, so that call is yours. `ffsft lifecycle status` after.
+
+-- says 'meter stopped.'      : False
+-- names the orphan disk      : True
+-- rc                         : 3
+-- destructive calls          : [('endpoint', 'ffsft-a10')]
+```
+
+**경우 2 — 스캔이 403 으로 실패, 고아를 본 적이 없음:**
+
+```
+LEFTOVERS: UNKNOWN -- the resource-group scan did not happen, so this report cannot say whether a deleted VM left a disk or a public IP billing.
+  COULD NOT LOOK at 1 listing(s): orphaned disks/IPs (resource group) (RuntimeError: (AuthorizationFailed) no Reader on rg-ffsft-kc)
+
+what else this resource group holds is UNKNOWN -- the scan above did not
+happen, so nothing here says a deleted VM left no disk or public IP behind.
+
+-- says 'meter stopped.'      : False
+-- names the orphan disk      : False
+-- rc                         : 1
+-- destructive calls          : [('endpoint', 'ffsft-a10')]
+```
+
+**두 경우 다 `meter stopped.` 가 없고, 두 경우 다 엔드포인트는 제대로 지워졌다**
+(`destructive calls : [('endpoint', 'ffsft-a10')]`). 이것이 §74.4 가 경고한 과잉교정을
+피한 자리다 — 리소스그룹을 못 읽었다고 **엔드포인트를 못 내리게 만들면** 시간당
+$4.320 이 계속 나가고 운영자는 더 거친 도구로 옮겨간다. 못 읽은 것은 **문장과
+종료코드**로만 갚는다.
+
+**두 경우의 종료코드가 다르다는 것이 이 절의 설계 결정이다.** 아래.
+
+### 75.3 세 번째 종료코드 — `EXIT_NOT_IDLE = 3`
+
+`down` 이 마지막에 하는 주장은 "이제 미터가 멈췄다" 다. 그 주장이 깨지는 방식이
+**두 가지**인데 종료코드는 하나였다:
+
+| 상황 | 운영자의 다음 수 |
+| --- | --- |
+| 스캔을 **못 했다** | 권한을 고치고 **다시 돌린다**. 아직 아무것도 모른다 |
+| 스캔을 **했고 남은 게 있다** | 다시 돌려도 똑같다. **`az disk delete` 를 사람이 친다** |
+
+**다음 수가 서로 반대다.** 둘을 같은 `1` 로 묶으면 스크립트가 구분할 수 없고, 둘 다
+`0` 으로 묶으면 §74.3 이 고친 거짓말이 그대로 돌아온다. 그래서 `EXIT_NOT_IDLE = 3`
+을 새로 뒀다. 우선순위는 **못 본 것이 먼저**다 — 못 읽은 리스팅이 하나라도 있으면
+`1` 이고, 전부 읽었는데 남은 게 있으면 `3` 이다. 스캔이 실패한 상태에서 `3` 을
+돌려주면 "다 읽었고 이만큼 남았다" 는 뜻이 되어 다시 거짓이 된다.
+
+**`cmd_status` 는 같은 워크스페이스에서 그대로 `0` 을 돌려준다. 일부러 안 바꿨다.**
+`status` 가 답하는 질문은 "내가 읽는 데 성공했는가" 이지 "멈췄는가" 가 아니다.
+`status` 가 고아를 발견했다고 `3` 을 돌려주면 "고아가 있는 워크스페이스에서는
+`status` 가 영원히 실패한다" 가 되고, 그 워크스페이스에서 `status` 를 게이트로 쓰던
+스크립트가 전부 멈춘다. **두 명령의 종료코드가 같은 세계 상태에서 다른 값을 갖는
+것은 결함이 아니라 두 명령이 다른 것을 주장하기 때문이다.** 이 문장을 CLAUDE.md 의
+불변식 표에 같이 넣었다.
+
+### 75.4 에이전트끼리 밟은 자리 — 실제로 있었던 충돌 세 개
+
+브리프는 종료코드 체계 두 벌, 중복된 헬퍼, 코드와 어긋난 문서를 의심했다.
+**확인한 결과 앞의 두 개는 이미 하나로 합쳐져 있었다** — `EXIT_COULD_NOT_LOOK` 는
+`lifecycle.py` 한 곳에 있고 `endpoint.py` 가 그것을 import 한다. `_absence_is_proven`
+과 `_summary` 도 복사본이 아니라 `probes.py` 로 옮겨진 뒤 재-import 되고 있었다.
+**진짜 충돌은 다른 세 개였다:**
+
+1. **`cmd_down` 이 고아 스캔 실패를 두 번 찍었다.** 두 에이전트가 각각 한 줄씩
+   추가했고 둘 다 살아남았다. `blind_spots` 의 결과에서 `ORPHANS_SECTION` 을 빼서
+   AML 리스팅 쪽과 리소스그룹 쪽의 책임을 나눴다. 위 75.2 경우 2 의 `COULD NOT LOOK
+   at 1 listing(s)` 줄이 **정확히 한 번** 나오는 것이 그 확인이다.
+2. **`lab7.md` 의 배너가 방금 고쳐진 블록을 아직 "낡았다"고 가리켰다.** `docs`
+   에이전트가 §2 블록을 실측에서 다시 잘라 왔는데, 같은 파일 §2.1 의 배너는 여전히
+   "§2 도 헤더가 빠져 있다"고 적고 있었다. 배너를 §75 인용으로 고쳤다.
+   **배너를 지우지는 않았다** — §2.1 블록 자체는 여전히 헤더가 없다(§74.7 그대로).
+3. **`down` 의 스코프 규칙이 산문과 종료코드에서 갈라졌다.** `--endpoint X` 는
+   리소스그룹에 대해 **아무 주장도 하지 않는다**. 그런데 내가 처음 넣은 패치는
+   `--endpoint` 실행에서도 리소스그룹 미독을 rc 에 반영해서, 테스트 4개가 깨졌다.
+   `rg_in_scope = args.endpoint is None` 한 줄로 리소스그룹 절반 전체의 스코프를
+   `blind_spots` 가 AML 리스팅에 이미 적용하는 규칙과 같게 맞췄다. **산문은 더
+   엄격하다** — 좁힌 실행은 `meter stopped.` 를 **아예 안 찍는다.** 그 문장은
+   워크스페이스 전체에 대한 것이고 좁힌 `inv` 는 엔드포인트 하나만 들고 있다.
+
+### 75.5 문서의 테스트 수 — 이제 테스트가 지킨다
+
+`CLAUDE.md:12`, `README.md:84`, `docs/labs/lab0.md:7`, `docs/labs/lab0.md:44` 를
+**1033** 으로 맞췄다. `lab0.md:44` 는 기대 출력 블록이므로 §74.6 과 같은 이유로
+`-p no:warnings` 없이 다시 돌려서 잘라 왔다(`1033 passed, 2 skipped, 472 warnings in 8.48s`).
+
+**이 동기화를 세 회차 연속으로 손으로 했다(§73.1, §74.6, 지금).** 그래서 이번에는
+그것을 테스트로 옮겼다 — `tests/test_the_documented_test_count_is_one_number_everywhere.py`
+가 `CLAUDE.md`·`README.md`·`docs/**/*.md`(JOURNAL 제외)에서 `N passed, M skipped` 와
+`테스트 N개가 통과한다` 를 전부 긁어 **서로 다른 숫자가 나오면 실패한다.**
+JOURNAL 을 제외하는 이유는 이 파일이 append-only 이고, §74.6 의 표처럼 **낡은
+숫자를 일부러 보존**하기 때문이다.
+
+**같은 계열의 가드를 하나 더 고쳤다.** `test_lab_status_blocks_are_cut_from_measured_output.py`
+는 낡은-출력 경고 배너의 **개수**를 `== 2` / `== 1` 로 단언하고 있었다. 그 등식은
+"배너를 지워라"라는 **자기 주석이 지시한 조치를 그 자신이 막는다** — 블록을 실측으로
+갈아끼우고 배너를 떼면 테스트가 깨진다. 개수 대신 `UNMEASURED_SECTIONS` 목록으로
+**어느 절이 아직 미실측인지**를 고정했다. 가드가 무는지는 배너 하나를 지워서
+확인했다(그 자리에서 실패, 복원).
+
+### 75.6 감사가 남긴 것 중 이번에 닫은 것
+
+- **프로브가 `KeyboardInterrupt` 로 끊기면 클러스터가 남았다.** `except Exception`
+  아래에서는 `KeyboardInterrupt` 가 안 잡힌다(`BaseException`). Ctrl-C 는 프로브가
+  **막 만든** GPU 클러스터를 남기고 나간다. `except KeyboardInterrupt:` 를 앞에 두고
+  `_discard_probe` 를 돌린 뒤 **이름을 찍고 다시 raise** 한다. 삭제까지 실패하면
+  그 사실도 같이 찍는다 — 화면에 이름이 없으면 사람은 안 지운다.
+- **`deploy_online` 의 사전 삭제가 실패를 GET 의 핸들러로 흘렸다.** `Failed` 상태의
+  배포를 지우려다 실패하면 "배포가 없다"로 읽혔다. `begin_delete` 에 자기 try/except
+  를 주고, 상태와 예외를 이름과 함께 찍고, **이 배포는 실패할 것이라고 미리 말한다.**
+- **`format_inventory` 의 `an unreadable workspace is not an idle one.`** — §74.5 가
+  다음 회차 항목으로 남긴 것. 리소스그룹만 못 읽었을 때는 워크스페이스를 읽은
+  것이므로 그 문장이 과대주장이었다. 이제 워크스페이스 리스팅이 실패했을 때만 그
+  문장이고, 리소스그룹만이면 `an unread resource group is not a clean one.` 이다.
+  §74.5 와 §74.8 에 철회 배너를 달았다.
+
+### 75.7 실측과 추론 — 나눠서
+
+**실측(내가 이 트리에서 명령을 돌리고 출력을 봤다):**
+
+- `uv run ruff check .` → `All checks passed!`
+- `uv run pytest -p no:warnings` → `1033 passed, 2 skipped in 8.89s`
+- 75.1 의 `check --probe` 두 출력과 create/delete 기록, `exit code: 1`
+- 75.2 의 `down --all --yes` 두 경우, `rc` 3 과 1, `destructive calls`
+- 75.4 의 중복 줄이 한 번만 나온다는 것
+- 75.5 의 배너 가드가 실제로 문다는 것(지웠다 → 실패 → 복원)
+
+**추론(코드를 읽어서 그렇다고 본 것, 재보지 않았다):**
+
+- 진입 시점 테스트 수와 88개의 출처 배분. 브리프의 945 는 내가 잰 값이 아니다.
+- `probe_sku` 의 `KeyboardInterrupt` 경로가 **실제 Ctrl-C** 에서 도는 것.
+  테스트는 가짜 클라이언트가 `KeyboardInterrupt` 를 **던지게** 해서 확인했다.
+  터미널 시그널로 재현한 적은 없다.
+- 사전 삭제 실패 뒤 "이 배포는 실패할 것" 이라는 예측. **애저가 그 상태에서 실제로
+  거절하는 것을 본 적은 없다** — 이 저장소에 그 기록이 없다.
+
+### 75.8 안 고친 것 — 명시
+
+- **`_discard_probe` 가 `ResourceNotFoundError` 를 삼킨다.** 감사가 "못 봤다를
+  삼킨다"고 걸었지만, **404 는 확정된 답이다** — 그 이름의 리소스는 없다. 프로브를
+  지우려는데 없다면 목적은 달성된 것이다. 문제가 되는 유일한 경우는 **부모 스코프가
+  없어서** 나는 404 인데, 그 구분은 애저 없이는 확인할 수 없다. 지어내지 않는다.
+- **프로브 이름의 TOCTOU.** `compute.get` 으로 비어 있음을 확인한 뒤 create 사이에
+  다른 사람이 같은 이름을 만들 수 있다. 애저는 컴퓨트 생성에 lease 를 주지 않으므로
+  **이 창은 코드로 닫을 수 없다.** 창을 좁혔을 뿐이고, 그렇게 적어둔다.
+- **`_store_posture_unread` 가 과잉교정이라는 지적.** 동의하지 않는다.
+  `publicNetworkAccess` 가 응답에 **없으면** 그것은 안 읽은 것이고, UNKNOWN + rc=1
+  이 맞다. 다만 "다음에 뭘 하라" 문구는 더 날카로울 수 있다 — 안 고쳤다.
+- **`cmd_check` 를 `endpoint.py` 밖으로 옮기기.** 파일의 줄 수 래칫
+  (`assert n < 1110`)이 그 이동을 다음 사람에게 지시하고 있고 지금 1107 이다.
+  **이 게이트에서 안 한다** — 이동은 이 회차가 안전하게 검증할 수 있는 범위보다 크고,
+  검증 못 하는 리팩터가 이 저장소가 반복해서 지불한 값이다.
+- **애저에서 아무것도 안 봤다.** 이 절의 403, 이름 충돌, 고아 디스크는 전부 내가
+  만든 가짜다. 결함의 존재는 코드 경로와 재현으로 확정이지만, **"참가자가 실제로
+  이렇게 클러스터를 잃었다" 는 기록은 없다.**
+
+### 75.9 이번에 배운 것
+
+- **판정 어휘가 두 개면 세 번째 상태는 둘 중 하나로 접힌다.** ok/BLOCKED 만 있는
+  렌더는 "안 물어봤다"를 **BLOCKED** 로 접었다. 데이터 구조에는 (`probed`) 세
+  번째가 이미 있었다. **불변식은 모델이 아니라 출력에서 깨진다** — 표를 그리는
+  함수도 "못 봤다" 검사 대상이다.
+- **종료코드는 어휘다.** 실패를 하나로 묶으면 다음 수가 반대인 두 상황이 같은 값을
+  갖는다. `1` 은 "다시 읽어라", `3` 은 "네가 지워라". 그리고 **같은 세계 상태에서
+  `status` 와 `down` 이 다른 코드를 돌려주는 것은 정상이다.** 두 명령이 다른 주장을
+  하기 때문이다.
+- **가드가 자기가 지시한 조치를 막고 있으면 그 가드는 개수를 세고 있다.**
+  "배너 2개" 는 배너를 떼는 순간 깨진다. **무엇이 아직 미실측인지**를 이름으로
+  고정해야 개선이 통과한다.
+- **손으로 세 번 한 동기화는 테스트로 옮긴다** (§73.1·§74.6·§75.5). 세 번째에
+  자동화하지 않으면 네 번째에도 손으로 한다.
+
+## 76. `deploy_batch` 가 운영자의 배치 엔드포인트를 덮어쓰고 있었다 (2026-08-27)
+
+§65 는 `ensure_endpoint` 에서 "새로 만든 엔티티를 그대로 PUT 하면 안 된다"를 확정
+했다. **같은 파일 400 줄 아래 `deploy_batch` 에는 그 가드가 없었다.** 위험은 이미
+이해됐고 이미 적혀 있었는데 형제 함수에서 빠진 것이다.
+
+**애저 접근은 없다. 이 절의 모든 출력은 이 트리에서 실행해 잘라 온 것이고, 클라이
+언트는 전부 가짜다.** 가짜가 흉내 내는 규칙은 하나뿐이다 — ARM 엔드포인트 PUT 은
+create-or-**replace** 라서 요청 본문이 곧 리소스의 다음 상태다. 그 양옆은 진짜 SDK
+(`_to_rest_batch_endpoint` / `_from_rest_object`, azure-ai-ml 1.34.1)를 그대로 쓴다.
+엔드포인트 이름·태그·URI 는 내가 만든 값이지 애저에서 읽은 값이 아니다.
+
+### 76.1 무엇이 지워졌나
+
+문제의 호출(`endpoint.py:740`)은 읽기 없이 새 엔티티를 PUT 했다. 그 본문을 직접
+직렬화해서 확인했다:
+
+```
+BatchEndpoint(name="ffsft-batch", description="ffsft offline scoring")
+    ._to_rest_batch_endpoint(location="koreacentral").as_dict()
+-> {'location': 'koreacentral',
+    'tags': {},
+    'properties': {'description': 'ffsft offline scoring',
+                   'authMode': 'aadToken', 'properties': {}}}
+```
+
+- `tags` 는 **명시적 빈 맵**이다 — 생략된 필드가 아니다.
+- `description` 은 이 도구의 문자열이다.
+- `defaults` — 스코어링 잡이 **어느 배포로 가는지** 정하는 라우팅 포인터 — 는 본문
+  에서 아예 빠진다.
+
+원래 함수 본문을 그대로 떼어 같은 가짜에 물려 돌린 결과
+(`/tmp/ffsft_audit/audit_old.py`):
+
+```
+CASE 2  the deployment create fails (quota)
+  BEFORE  defaults   : 'green'
+  BEFORE  tags       : {'cost-centre': 'kc-ml-01', 'owner': 'data-eng'}
+  BEFORE  description: 'nightly scoring for the pricing team'
+  RAISED HttpResponseError: BadRequest: not enough quota for the requested instances
+  WRITE/READ: endpoint PUT ffsft-batch
+  WRITE/READ: deployment PUT default
+  AFTER   defaults   : None
+  AFTER   tags       : {}
+  AFTER   description: 'ffsft offline scoring'
+```
+
+**순서가 진짜 결함이다.** 지우는 PUT 이 배포 생성보다 **먼저** 실행되므로, 쿼터로
+배포 생성이 실패하면 화면에는 쿼터 에러만 남고 운영자의 라우팅은 이미 `None` 이다.
+스코어링 URI 는 살아 있고 아무 데로도 가지 않는다.
+
+### 76.2 고친 방식 — 없을 때만 만든다
+
+`traffic.py:80-84` 의 read-back-mutate 도 후보였지만, **엔드포인트 자체에는 이 명령
+이 바꿀 것이 없다.** 이 명령이 정당하게 바꾸는 것은 (1) 배포 하나와 (2) 배포가 성공
+한 뒤의 `defaults` 뿐이다. 그래서 엔드포인트는 `ensure_endpoint` 와 같은 형태 —
+**없을 때만 create, 있으면 아무것도 쓰지 않는다** — 로 갔다. 순서 문제를 답하는 대신
+없애는 쪽이다.
+
+`ResourceNotFoundError` 만 "없다"로 친다. 403·503 은 **답이 아니라 못 물어본 것**
+이므로 그대로 올려보낸다. 그것을 create 로 바꾸는 것이 이 회차의 불변식 위반
+("못 봤다"를 "봤는데 없더라"로) 그 자체이고, 여기서는 ARM PUT 이 딸려 온다.
+
+`defaults` 재지정은 **여전히 이 명령의 일**이다. 다만 배포가 존재한 뒤에만 하고,
+이전 값을 로그에 남긴다 — 되돌릴 이름을 아는 유일한 방법이기 때문이다. 이미 같은
+값이면 PUT 자체를 보내지 않는다.
+
+같은 가짜, 패치된 코드(`/tmp/ffsft_audit/audit_batch.py`):
+
+```
+CASE 2  the deployment create fails (quota)
+  BEFORE  defaults   : 'green'
+  RAISED HttpResponseError: BadRequest: not enough quota for the requested instances
+  WRITE/READ: endpoint GET ffsft-batch
+  WRITE/READ: deployment PUT default
+  AFTER   defaults   : 'green'
+  AFTER   tags       : {'cost-centre': 'kc-ml-01', 'owner': 'data-eng'}
+  AFTER   description: 'nightly scoring for the pricing team'
+```
+
+엔드포인트 PUT 이 **한 번도 없다.**
+
+### 76.3 테스트가 0개였다
+
+`grep -rn "deploy_batch|batch_deployments|ModelBatchDeployment" tests/` 는 0줄이었다.
+`tests/test_batch_deploy_does_not_clobber_an_operator_owned_endpoint.py` 19개를 추가
+했다. 고치기 **전에** 먼저 돌려서 재현했다:
+
+```
+7 failed, 6 passed in 1.75s
+FAILED ...::test_the_operators_tags_on_a_live_batch_endpoint_survive_a_redeploy
+FAILED ...::test_the_endpoint_is_not_written_at_all_when_the_deployment_create_fails
+FAILED ...::test_a_batch_endpoint_read_that_failed_is_never_treated_as_a_missing_endpoint
+...
+```
+
+### 76.4 파일을 나눴다 — 래칫을 세 번째로 올리지 않기 위해
+
+가드를 넣자 `endpoint.py` 가 1207 줄이 됐고
+`test_deploy_module_split.test_the_split_left_endpoint_readable` 의 `< 1110` 이
+깨졌다. 그 테스트의 독스트링이 "세 번째로 숫자를 올리지 말고 코드를 꺼내라"고 적어
+둔 상태였다. 배치 표면 전체(`deploy_batch`, `ensure_batch_endpoint`, 헬퍼)를
+`src/ffsft/deploy/batch.py` 로 옮기고 `endpoint.py` 가 재수출한다. 1060 줄.
+래칫은 손대지 않았다.
+
+### 76.5 SDK 비대칭 — `defaults` 는 쓸 때와 읽을 때 모양이 다르다
+
+```
+BatchEndpoint._from_rest_object(live).defaults
+-> <BatchEndpointDefaults>, dict 가 아니다        # azure-ai-ml 1.34.1
+```
+
+쓸 때는 dict 를 받는다(`_to_rest_batch_endpoint` 가 REST 객체로 만든다). 그래서
+`endpoint.defaults.get(...)` 은 애저에서 읽어 온 값에서 터지고,
+`endpoint.defaults.deployment_name` 은 이 모듈이 방금 넣은 값에서 터진다.
+`_default_deployment_name` 이 두 모양과 `None` 을 전부 받는 이유다.
+
+### 76.6 나머지 src/ 를 다시 훑었다
+
+라운드 5 가 24개 사이트를 통과시켰다고 적혀 있지만 숫자를 믿지 않고 다시 유도했다.
+`begin_create_or_update|create_or_update|begin_create|requests.put|.post|.patch` 로
+`src/` 를 훑어 dict `.update()` 와 FastAPI 라우트 데코레이터를 걷어내면 **애저/ARM
+쓰기 20자리**가 남는다. 분류:
+
+- **읽고 없을 때만 create** — `azure_ml.ensure_compute`(:561), `azure_ml.ensure_workspace`(:448),
+  `endpoint.ensure_endpoint`(:347), `batch.ensure_batch_endpoint`(:106).
+  넷 다 `ResourceNotFoundError` **만** 잡는다.
+- **읽어 온 엔티티를 변경** — `traffic.py:84`, `endpoint.py:701`, `azure_ml.py:542`,
+  `lifecycle.py:945`, `batch.py:195`.
+- **불변 버전 자산** — `aml_job.py:193`, `bench_job.py:375`, `endpoint.serve_environment`.
+  셋 다 먼저 읽고, 이미지가 다르면 **덮어쓰지 않고 거부**한다.
+- **새 이름으로만 만든다** — `model_asset.py:117`(버전 자동 증가),
+  `identity.create_role`(:375, `roleAssignments/{uuid4()}`), `jobs.create_or_update`
+  3자리(런 이름은 서버 생성).
+- **삭제** — `probes.py:391`(이 호출이 만든 이름만), `endpoint.py:557`,
+  `lifecycle.py:933/964/1226`. 거부된 DELETE 를 실패한 GET 으로 적지 않는다.
+- **프로브 create** — `probes.py:290`. `_name_is_taken` 이 "못 읽었다"를 별도로
+  돌려주고 그때 거부한다.
+
+**이번에 찾은 위반은 `deploy_batch` 하나뿐이다.** 다만 이것은 "0개"가 아니라
+"이 형태로 훑어서 0개"다 — 앞선 다섯 번의 수색이 매번 새 인스턴스를 찾아냈다.
+
+> ⛔ **철회(§78).** 여섯 번째 수색도 새 인스턴스를 찾았다. 이 훑기가 "읽어 온 엔티티를
+> 변경"으로 분류한 `batch.py:195` 아래에 **읽히지 않은 채 PUT 되는 배포**가 있었고
+> (§77.2 가 지적, §78.3 이 닫음), 같은 형태가 `ensure_compute` 의 신원 판정에도
+> 있었다 (§78.4). 위 문단의 **경고는 맞았고 목록이 틀렸다** — "이 형태로 훑어서
+> 0개"라는 표현을 유지하되, 그 형태가 `begin_create_or_update` 호출 자리만 보고
+> **그 호출에 넘길 엔티티가 어디서 왔는지는 보지 않는다**는 것이 이번에 드러났다.
+
+### 76.7 안 고친 것
+
+- `deploy_batch` 는 `default` 라는 **배포**를 이미 있으면 그대로 덮어쓴다. 배포는 이
+  명령이 소유한 엔티티이고 `deploy_online` 도 같은 형태이므로 이번 결함과 같은
+  분류가 아니다. 다만 운영자가 직접 만든 `default` 배포를 조용히 대체할 수는 있다.
+
+  > ⛔ **철회(§78.3).** "같은 분류가 아니다"가 틀렸다. `deploy-online` 에는
+  > `--deployment` 이 있어 운영자가 덮일 리소스를 직접 지명하지만 `deploy-batch`
+  > 에는 없었고, 그래서 두 명령은 같은 형태가 아니었다 (§77.2 가 이 비대칭을
+  > 지적했다). §78.3 이 `--deployment` 과 `--force` 를 붙이고 PUT 앞에 읽기를
+  > 넣어 닫았다. 마지막 문장 — "조용히 대체할 수는 있다" — 은 맞았고, **그것이
+  > 범위 밖으로 둘 이유가 아니라 범위 안으로 넣을 이유였다.**
+- 이 회차에는 에이전트 넷이 같은 트리를 동시에 고쳤다. 76.4 의 줄 수와 아래 테스트
+  개수는 **내가 잰 시점의 값**이고, 다른 에이전트의 커밋이 그 뒤에 들어오면 달라진다.
+
+## 77. §76 감사 — 가드는 버텼고, 남은 PUT 이 담지 못하는 것이 남았다 (2026-08-27)
+
+§76 의 가드 자체는 재현으로 확인했다. `ensure_batch_endpoint` 는 쓰기 전에 읽고,
+`ResourceNotFoundError` 만 "없다"로 치며, 엔드포인트 PUT 이 배포 생성보다 앞서지
+않는다. §76 의 인용 증거도 이 트리에서 그대로 재현된다.
+
+**애저 접근은 없다. 아래 클라이언트는 전부 가짜이고, 엔드포인트 이름·태그·식별자
+리소스 id·스코어링 URI 는 내가 지어낸 값이다.** 가짜가 지어내는 규칙은 §76 과
+동일하게 하나 — ARM 엔드포인트 PUT 은 create-or-replace — 뿐이고, 직렬화/역직렬화는
+설치된 azure-ai-ml 1.34.1 의 실제 코드를 그대로 쓴다.
+
+### 77.1 살아남은 것 ① — 재지정 PUT 이 `identity` 를 떨어뜨린다
+
+`batch.py:195` 는 읽어 온 엔티티를 되PUT 한다. read-back-mutate 는 엔티티가 리소스가
+가진 것을 **전부** 왕복시킬 때만 비파괴적인데, 배치 엔티티는 그렇지 않다:
+
+```
+$ uv run python /tmp/audit6/identity_loss.py
+BEFORE identity : {'type': 'UserAssigned', 'userAssignedIdentities': {...ffsft-batch-uai: {}}}
+BEFORE kind     : ffsft-managed
+read-back entity has .identity attr?  False <<absent>>
+PUT BODY keys   : ['location', 'properties', 'tags']
+PUT BODY identity: None
+PUT BODY kind   : None
+```
+
+- `BatchEndpoint._from_rest_object` 는 `identity`/`kind` 를 읽지 않는다.
+- `_to_rest_batch_endpoint` 는 둘 다 보내지 않는다 (본문 키가 셋뿐이다).
+- 근거로 인용된 `traffic.py:78-84` 는 **온라인** 엔드포인트다. 온라인 엔티티는
+  `identity`/`kind` 를 왕복시키고, 나아가 `_to_rest_online_endpoint` 는 엔티티에
+  identity 가 없으면 `type="SystemAssigned"` 를 **채워서** 보낸다. SDK 가 그 경로에서
+  바로 이 사고를 막고 있다는 뜻이고, 배치 경로에는 막을 것이 없다. 패턴이 옮겨가지
+  않는다.
+
+진짜 `deploy_batch` 를 가짜에 물려 돌린 결과 (`/tmp/audit6/attack_deployment_clobber.py`,
+CASE B — 엔드포인트가 `green` 을 가리켜 재지정 PUT 이 실제로 나가는 경로):
+
+```
+  BEFORE endpoint.identity : {'type': 'UserAssigned', ...}
+  BEFORE endpoint.kind     : ffsft-managed
+  AFTER  endpoint.identity : None
+  AFTER  endpoint.kind     : None
+```
+
+### 77.2 살아남은 것 ② — `default` 배포는 읽히지 않고 덮인다
+
+> ✅ **닫힘(§78.3).** 아래 진단은 **쓰인 시점에 맞았고 지금은 코드가 다르다.**
+> `read_batch_deployment` 가 PUT 앞에 서고, 바뀌는 것이 있으면
+> `BatchDeploymentInUse` 로 거부한다. 철회가 아니라 해소다 — 진단을 지우지 않는
+> 이유는 이 절이 §78.3 의 재현 근거이기 때문이다.
+
+`batch.py:171` 은 `:154-169` 에서 **새로 만든** `ModelBatchDeployment` 를 하드코딩된
+이름 `"default"`(`:31`)로 PUT 한다. 모듈 어디에도 `client.batch_deployments` 를 읽는
+코드가 없다. 원래 결함과 같은 모양이 리소스 한 단계 아래로 옮겨간 것이다.
+
+```
+CASE A  endpoint already defaults to 'default'
+  BEFORE deployment 'default' -> model='azureml:pricing-prod-model:7' compute='operator-prod-cluster'
+  WRITE/READ: ('GET  endpoint', 'ffsft-batch')
+  WRITE/READ: ('PUT  deployment', 'default')
+  WRITE/READ: ('GET  endpoint', 'ffsft-batch')
+  AFTER  deployment 'default' -> model='azureml:qwen-ko:1' compute='gpu-a100-lp'
+  LOG  batch endpoint ffsft-batch already defaults to default; not writing it
+```
+
+엔드포인트가 이미 `default` 를 가리키면 §76 의 수정이 엔드포인트 PUT 을 **정확히
+건너뛰므로**, 경고 한 줄 없이 같은 URI 가 다른 모델을 서빙한다.
+
+§76.7 은 "`deploy_online` 도 `--deployment` 이름으로 같은 일을 한다"를 근거로 범위
+밖으로 뒀다. 두 경우는 같지 않다: `deploy-online` 에는 그 플래그가 있어 운영자가
+덮일 리소스를 **직접 지명**한다. `deploy-batch` 에는 없다 (`endpoint.py:977-982`).
+
+> ⛔ **철회(§78.3) — 마지막 문장만.** `deploy-batch` 에도 이제 `--deployment` 과
+> `--force` 가 있다. 비대칭을 지적한 앞 두 문장은 그대로 유효하고, 그것이 이 문장을
+> 틀리게 만든 수정의 근거였다.
+
+### 77.3 이번 감사의 위치
+
+과교정은 찾지 못했다. 없는 엔드포인트는 여전히 만들어지고, 재지정은 여전히 일어나며,
+반환되는 스코어링 URI 도 그대로다. 나머지 src/ 쓰기 지점 재도출에서도 §76 이 놓친
+새 위반은 없었다 — `identity.py:375` 의 `requests.put` 은 `uuid4()` 이름으로 만드는
+추가형이라 덮어쓸 대상이 없고, `azure_ml.py:448/542/561`·`probes.py:290`·
+`lifecycle.py:945` 는 모두 읽기 뒤에 온다.
+
+기록은 `tests/test_the_batch_repoint_writes_less_than_the_endpoint_holds.py` 에 있다.
+실패 케이스 셋은 `xfail(strict=True)` 다 — 감사는 수리가 아니고, 누가 고치는 순간
+XPASS 로 뒤집혀 스스로 말한다.
+
+## 78. 라운드 7 게이트 — 네 에이전트의 수리를 실행으로 다시 재고, 두 축을 더 닫았다 (2026-08-27)
+
+이 회차에는 에이전트 넷이 같은 트리를 동시에 고쳤고(batch-put, unread-sentinel,
+except-scope, structural-guard), 넷 다 적대적 감사를 받아 넷 다 `partially_holds`
+가 나왔다. 이 절은 **게이트**의 기록이다 — 보고서를 요약한 것이 아니라, 보고된
+수정을 이 트리에서 다시 실행해 얻은 값이다.
+
+**애저 접근은 없다.** 아래의 모든 클라이언트·응답·엔드포인트 이름·태그·모델 URI 는
+**내가 만든 가짜**이고 애저에서 읽은 값이 아니다. 가격도, GUID 도, API 응답도
+지어내지 않았다. 가짜가 흉내 내는 규칙은 하나뿐이다 — **ARM PUT 은
+create-or-REPLACE** 라서 요청 본문이 곧 리소스의 다음 상태다. 그 양옆은 진짜 SDK
+(`_to_rest_batch_endpoint` / `_from_rest_object`, azure-ai-ml 1.34.1)를 그대로 쓴다.
+
+### 78.1 잰 것과 추론한 것을 먼저 갈라 둔다
+
+**잰 것 — 이 트리에서 이 명령을 돌려 이 출력을 잘라 왔다.**
+
+```
+$ uv run ruff check .
+All checks passed!
+
+$ uv run pytest -p no:warnings
+1108 passed, 2 skipped, 1 xfailed in 8.61s
+
+$ uv run pytest
+1108 passed, 2 skipped, 1 xfailed, 472 warnings in 8.70s
+```
+
+- 구조 가드 재조사 (§78.5): `handlers walked: 65 flagged: 31 distinct: 31`,
+  `ALLOWLIST: 25 KNOWN_OPEN: 6`, `unclaimed: []`, `stale ALLOWLIST: []`,
+  `stale KNOWN_OPEN: []`.
+- 진짜 `deploy_batch` 를 기록형 가짜에 물려 돌린 여섯 경로 (§78.3).
+- `BatchEndpoint` 왕복이 무엇을 떨어뜨리는지 (§78.7 ①).
+- 문서 네 곳의 테스트 개수가 한 숫자로 모인다는 것 —
+  `tests/test_the_documented_test_count_is_one_number_everywhere.py` `3 passed`.
+
+**추론한 것 — 실행으로 확인하지 않았고, 확인할 방법이 이 리포에는 없다.**
+
+- **ARM PUT 이 replace 다.** 이 회차의 배치 가짜 전부가 이 규칙 위에 서 있다.
+  살아있는 구독에서 관측한 적이 없다. 다만 이 가정은 **테스트가 더 많이 요구하게
+  만드는 방향**이지 덜 요구하게 만드는 방향이 아니다.
+- **ARM 이 compute PUT 에 principal 을 채워 준다.**
+  `tests/test_an_identity_that_is_explicitly_none_is_not_an_identity.py` 의
+  `_ASSIGNED_PRINCIPAL` 은 **모델링한 값이고 측정한 값이 아니다.** 파일 안에 그렇게
+  적혀 있다.
+- **네 에이전트의 보고서 본문.** 게이트는 보고서를 믿지 않았다. 아래에서 "닫혔다"
+  라고 쓴 것은 전부 재현을 다시 돌려 본 것이고, 재현하지 못한 것은 §78.7 에 남겼다.
+- **`ensure_compute` 의 유일한 비테스트 호출자가 `print` 라는 것**은 grep 으로 잰
+  것이지만, 운영자가 그 줄을 실제로 읽는지는 추론이다.
+
+### 78.2 못 읽은 목록과 **잘린** 목록이 같은 답을 하고 있었다
+
+라운드 6 은 데이터스토어 목록의 GET 이 **실패**하는 경우에 `None` 센티널을 줬다.
+GET 이 **성공하고 잘리는** 경우는 그대로였고, 그 경우가 착지하는 값이 하필
+라운드 6 이 "읽었고, 계정 키를 쓰는 것은 없다"로 예약해 둔 `[]` 였다.
+
+`read_all_arm_pages` 가 `nextLink` 를 따라가고, 따라가다 실패하면 **목록 전체를
+거부**한다 — 잘린 읽기가 403 과 같은 핸들러에 착지해 `None` 을 답한다. 같은 클래스가
+`Microsoft.Compute/skus` 에도 있었다: 한 페이지만 읽고 "이 리전에 아예 없다"는
+**전수 부정**을 로그로 찍고 있었고, 이제 `scan_complete=False` 가 그 간극을 싣는다.
+
+기록은 `tests/test_a_listing_that_arrived_in_pages_is_not_a_complete_one.py` 에
+있고, 그 파일의 `xfail` 세 개는 이번에 평범한 테스트로 바뀌었다. 과교정 가드도
+같이 있다 — `{"value": []}` 에 `nextLink` 가 없으면 그것은 **측정된 빈 목록**이고,
+그 판정은 살아남아야 한다 (`test_a_listing_that_ends_without_a_continuation_is_still_a_measurement`).
+
+### 78.3 `default` 배포 — §77.2 를 닫았다
+
+`deploy_batch` 는 하드코딩된 이름 `default` 에 새로 만든 `ModelBatchDeployment` 를
+PUT 했고, 모듈 어디에도 `client.batch_deployments` 를 읽는 코드가 없었다.
+`read_batch_deployment` 가 PUT 앞에 서고 (`ResourceNotFoundError` **만** 부재를
+뜻한다), `deployment_replacement_blocker` 가 순수 함수로 판정하며,
+`--deployment NAME` 과 `--force` 가 CLI 에 붙었다.
+
+게이트가 **직접 쓴** 기록형 가짜로 진짜 `deploy_batch` 를 돌린 결과
+(`/tmp/gate/verify_headline.py`; 운영자 엔드포인트는 태그 3개·자기 설명·`green` 으로
+가는 라우팅을 들고 있다):
+
+```
+A. 살아있는 운영자 엔드포인트에 재배포 — 라우팅만 움직여야 한다
+  reads  : batch_endpoints.get('ffsft-batch') / batch_deployments.get('default')
+           / batch_endpoints.get('ffsft-batch') x2
+  WRITES :
+    PUT batchDeployments 'default' <- {'model': 'azureml:qwen-ko:1', 'compute': 'gpu-a100-lp'}
+    PUT batchEndpoints 'ffsft-batch' <- {'tags': {'cost-centre': 'kc-ml-01', 'owner': 'data-eng',
+        'retention': '90d'}, 'description': 'nightly scoring for the pricing team',
+        'defaults': 'default'}
+  endpoint afterwards: {'tags': {...셋 다 그대로...},
+        'description': 'nightly scoring for the pricing team', 'routes_to': 'default'}
+```
+
+재지정 PUT 의 **본문 자체가** 운영자의 태그와 설명을 싣고 나간다. 새로 만든 엔티티가
+아니라 읽어 온 엔티티를 변경했기 때문이고, 그것이 §76 수정의 전부다.
+
+```
+B. 배포 create 가 실패한다 (쿼터)
+  WRITES : PUT batchDeployments REFUSED BY ARM 'default' <- BadRequest: not enough quota ...
+  endpoint afterwards: {'tags': {...그대로...}, 'description': '...', 'routes_to': 'green'}
+  outcome: RAISED HttpResponseError: BadRequest: not enough quota for Standard_NC24ads_A100_v4
+```
+
+**엔드포인트 PUT 이 0회다.** 라우팅은 `green` 그대로다. 쓰기 순서를 답한 것이 아니라
+순서 질문 자체를 없앤 결과다.
+
+```
+C. 운영자의 'default' 배포가 이미 다른 모델을 서빙 중이다
+  WRITES : NONE
+  outcome: RAISED BatchDeploymentInUse: batch deployment 'default' already exists and this
+    run would change what it serves: model azureml:pricing-prod-model:7 -> azureml:qwen-ko:1;
+    compute operator-prod-cluster -> gpu-a100-lp. Nothing about the endpoint would warn you
+    -- its routing pointer does not move when it already names 'default'. Re-run with
+    --deployment NAME to deploy alongside it, or --force to replace it on purpose.
+
+D. 같은 상황에 force=True — 일부러 요청한 교체는 그대로 나간다
+  WRITES : PUT batchDeployments 'default' <- {'model': 'azureml:qwen-ko:1', ...}
+  LOG    : --force: replacing an existing batch deployment. ...
+
+E. 엔드포인트가 아예 없다 — 여전히 만들어진다
+  WRITES : PUT batchEndpoints (create) / PUT batchDeployments / PUT batchEndpoints (repoint)
+
+F. 이미 'default' 를 가리킨다 — 재지정 PUT 을 건너뛴다
+  WRITES : PUT batchDeployments 'default' 하나뿐
+```
+
+C 가 이번 회차에서 **가장 비싼 한 줄**이다. §77.2 가 잡아낸 그대로, 엔드포인트가 이미
+`default` 를 가리키면 §76 의 가드가 엔드포인트 PUT 을 **정확히 건너뛰므로**, 예전
+코드에서는 경고 한 줄 없이 같은 스코어링 URI 가 다른 모델을 서빙했다.
+E·F 는 과교정 가드다 — 거부가 "아무것도 안 한다"로 번지지 않았다.
+
+### 78.4 `identity=None` 과 "신원을 못 읽었다"가 같은 값이었다
+
+`ensure_compute` 는 `if existing.identity is not None:` 으로 관리 신원 유무를 판정했다.
+`IdentityConfiguration(type="None")` — ARM 이 legal 로 받는 값 — 은 **객체가 있으므로
+참**이고, 신원 없는 클러스터가 신원 있는 것으로 통과했다. `_has_managed_identity` 가
+`principal_id`/`user_assigned_identities`/정규화한 `type` 을 본다.
+
+더 비싼 쪽은 `grant_compute_data_roles` 였다. 반환값이 없었고, 신원을 **못 읽은** 실행과
+스토리지 계정이 **없는** 워크스페이스가 같은 부여 목록으로 끝났다:
+
+    a storage account that could not be READ produced the same grants as a
+    workspace that HAS none: [('acrffsftkc', 'AcrPull')]
+
+`GrantsOutcome(granted, unverified)` 가 그 둘을 가르고, `ensure_compute` 는 클러스터
+이름에 그 목록을 실어 `ComputeReadiness` 로 돌려준다 — `str` 서브클래스인 이유는
+유일한 비테스트 호출자가 `scripts/provision_azure.py:121`,
+`print(f"  -> {ensure_compute(target)}")` 이기 때문이다. 반환값이 곧 운영자 보고다.
+`UNREAD` 센티널은 "못 읽었다"를 `None`("스토리지 계정이 없다")과 분리한다.
+
+**과교정을 일부러 남겨 뒀다.** 두 실행의 **부여 목록은 여전히 동일하다**
+(`[("acrffsftkc", "AcrPull")]`) — 차이를 만들려고 동작하는 `AcrPull` 부여를 빼는 것은
+테스트를 초록으로 만들려고 기능을 없애는 것이다. 달라지는 것은 **반환값**이고,
+테스트가 그렇게 적혀 있다.
+
+### 78.5 구조 가드 — 이 회차의 수정과 충돌하지 않는지 직접 셌다
+
+가드와 센티널 수정은 충돌하게 되어 있다: 가드의 ALLOWLIST 는 센티널 쪽이 **실제로
+착지시킨 것**과 맞아야 한다. 보고서를 믿지 않고 워커를 직접 돌렸다.
+
+```
+handlers walked: 65 flagged: 31 distinct: 31
+ALLOWLIST: 25 KNOWN_OPEN: 6
+unclaimed: []          stale ALLOWLIST: []          stale KNOWN_OPEN: []
+```
+
+- 이번 회차가 만든 세 자리가 전부 **스캔에 실제로 잡히고** ALLOWLIST 에 논증과 함께
+  들어 있다 — `batch.py::read_batch_deployment`(404만 부재),
+  `probes.py::_key_based_datastores`(`None` 을 돌려주므로), `eval/run.py::publish`.
+- **고장 난 채로 면제된 것은 없다.** `probes.py` 항목의 논증("`[]` 가 아니라 `None`
+  을 돌려준다")은 코드와 §78.2 의 테스트로 확인했다.
+- 워커가 `-> None` 함수를 통째로 제외하던 것을 없앴다. **재고 비용은 트리 전체에서
+  한 자리** (`eval/run.py::publish`)였고, 그래서 반대급부 없이 강해졌다.
+- KNOWN_OPEN 이 8 → 6. `azure_ml.py`(§78.4)와 `probes.py`(§78.2)가 빠졌다.
+  남은 여섯: `data/korean.py::load_sft_dataset`,
+  `deploy/lifecycle.py::_orphaned_nic_names`, `serve/bench_report.py::_read_json`,
+  `serve/bench_report.py::flatten_smoke`, `serve/loadtest.py::_one_request`,
+  `train/preflight.py::check_disk`.
+- 가드 모듈의 독스트링에 **가드가 못 보는 것** 절을 새로 넣었다. 스캔이 찾은 것만
+  보고하는 것은 이 리포의 불변식이 가드 자신에게 적용된 실패 방식이다. 넷: 같은
+  모양의 두 번째 핸들러가 키 하나에 흡수되는 것, `Name` 타겟만 따라가는 것,
+  `except` 를 통과하지 않는 공백, 그리고 `docker/`·`scripts/` 가 `_SRC` 밖이라
+  아예 안 걸린다는 것.
+
+### 78.6 문서의 테스트 개수를 다시 맞췄다
+
+`CLAUDE.md:12`, `README.md:84`, `docs/labs/lab0.md:7`·`:44` 가 전부 1092 였다.
+잰 값은 **1108 passed, 2 skipped** 이고 네 곳 다 그 값으로 바꿨다. `lab0.md:44` 는
+전체 요약줄을 인용하므로 `uv run pytest`(플러그인 비활성화 없이) 실제 출력인
+`1108 passed, 2 skipped, 1 xfailed, 472 warnings in 8.70s` 로 바꿨다 — xfail 이
+12개에서 1개로 줄어든 것이 이번 회차가 핀을 닫은 결과다. 가드 테스트는 `3 passed`.
+
+`CLAUDE.md` 의 가드 설명도 같이 고쳤다: ALLOWLIST 22 → 25, KNOWN_OPEN 8 → 6, 그리고
+"`return None` 은 `preflight.py` 에서는 수정이고 `probes.py` 에서는 버그다"라는
+문장 — `probes.py` 가 이제 그 `None` 을 **제대로** 돌려주므로 틀린 문장이 됐다.
+
+### 78.7 안 고친 것
+
+① **재지정 PUT 은 여전히 `identity` 와 `kind` 를 떨어뜨린다** (§77.1). 게이트가 직접
+잰 값 (`/tmp/gate/pin_a.py`, 가짜 REST 객체 하나, 애저 없음):
+
+```
+read back  -> entity.identity = <no attribute>
+PUT body   -> tags           = {'cost-centre': 'kc-ml-01'}
+PUT body   -> description    = nightly scoring for the pricing team
+PUT body   -> defaults       = default
+PUT body   -> identity       = None
+PUT body   -> kind           = None
+```
+
+태그·설명·라우팅은 왕복하고 `identity`/`kind` 는 안 한다. 무손실 경로는
+`self._batch_operation.begin_create_or_update(...)` 로 내려가 SDK 사설 속성 **네 개**에
+기대야 하는데, 애저 없이는 그 REST 왕복이 맞는지 확인할 방법이 없다. 확인 못 한
+사설 경로를 "고쳤다"로 적는 것이 바로 이 리포가 금지하는 일이다.
+`test_the_repoint_leaves_the_operators_user_assigned_identity_on_the_endpoint` 가
+`xfail(strict=True)` 로 남아 있고, 누가 고치면 XPASS 로 뒤집혀 스스로 말한다.
+이것이 위 요약줄의 `1 xfailed` 다.
+
+② **`docker/verify_serve.py:109-116`.** 두 번 보고됐고 두 번 다 안 고쳤다. 가드의
+`_SRC` 밖이라 워커가 아예 못 본다. 이번에는 최소한 **가드 독스트링에 사각지대로
+적어** 두었다 — 못 본 것을 못 봤다고 적는 것이 이 리포의 규칙이다.
+
+③ **KNOWN_OPEN 여섯 자리.** 실재하고, 라우팅돼 있고, 안 고쳤다.
+
+④ **`ensure_workspace` 가 `-> str` 로 선언돼 있고 `ws.id` 를 돌려준다.** SDK 에서
+`id` 는 Optional 이다. 이것은 어노테이션 문제이지 "못 봤다 → 없다" 문제가 아니라
+(읽기는 성공하거나 raise 한다) 이번 범위 밖으로 뒀다.
+
+⑤ **`ensure_compute` 가 다른 종류의 compute 가 쥐고 있는 이름에 그대로 PUT 한다.**
+`test_a_name_held_by_another_kind_of_compute_is_written_to_anyway` 가 그 동작을
+성격 규정으로 고정해 두고 있다. 이번 회차에 손대지 않았다.
+
+⑥ **에이전트 넷이 동시에 고친 트리다.** 위 숫자는 **내가 잰 시점의 값**이다.
+그리고 §76.6 이 자기 자신에 대해 적어 둔 문장이 이번에도 그대로 적용된다 —
+"이 형태로 훑어서 0개"이지 0개가 아니다. 여섯 번째 수색도 새 인스턴스를 찾았다.
+
+## 79. 페이지 2 의 AcrPull 이 성공할 배포를 막고 있었다 (2026-08-27)
+
+라운드 8. `deploy/identity.py` 의 roleAssignments 읽기 두 곳이 ARM 응답의 첫 페이지를
+목록 전체로 읽고 있었다. §78.2 와 같은 클래스인데 **부호가 반대**다 — 못 읽은 행이
+침묵이 아니라 **발견**이 된다.
+
+### 79.1 잰 것과 추론한 것
+
+- **잰 것.** 아래 A/B 는 전부 `requests` 경계의 **가짜**에 대고 실행한 결과다. 이
+  저장소에는 Azure 접근이 없고, 여기 나오는 어떤 응답도 실제 구독에서 관측한 것이
+  아니다. 증명된 것은 "이 모양을 건네받았을 때 우리 코드가 어떻게 행동하는가"뿐이다.
+- **잰 것.** `create_role` 의 `requests.put` 이 스위트에서 한 줄도 실행되지 않는다는
+  것은 `coverage` 로 확인했다. 이 저장소의 유일한 RBAC 부여 쓰기다.
+- **문서에서 인용한 것.** 두 호출부가 보내는 바로 그 api-version(2022-04-01)의
+  `RoleAssignmentListResult` 는 `nextLink : string (uri)  "The link to the next page
+  of items"` 와 `value : RoleAssignment[]  "The RoleAssignment items **on this page**"`
+  를 갖는다 (learn.microsoft.com, role-assignments/list-for-scope).
+- **추론.** 같은 문서는 `$skipToken` 이 "Only supported on provider level calls" 라고
+  적는다. 리소스 스코프에서 서버가 `nextLink` 를 실제로 내보내는지는 **재지 못했다**.
+  다만 `nextLink` 가 없는 본문에 대해 `read_all_arm_pages` 는 `.get("value", [])` 와
+  글자 그대로 같은 값을 답하므로, 따라가게 만드는 쪽의 비용은 0 이다.
+- **페이징에 기대지 않는 두 번째 다리.** `.get("value", [])` 는 `value` 가 아예 없는
+  200 응답도 "이 신원은 아무 역할도 없다"로 바꾼다. 이 워크스페이스는 컨테이너
+  `getLogs` 에서 Azure 가 거절을 200 + 산문으로 답하는 것을 이미 쟀다(`deploy/logs.py`).
+
+### 79.2 A/B — 같은 레지스트리, 같은 두 개의 역할 할당
+
+ARM 이 그것을 한 페이지로 주느냐 두 페이지로 주느냐만 다르다. 그것은 ARM 의 선택이지
+호출자의 선택이 아니다.
+
+    한 페이지   acr_roles ['Reader', 'AcrPull']  can_pull_image True   -> 배포됨
+    페이지 둘   acr_roles ['Reader']             can_pull_image False  -> 막음
+                "endpoint 'ffsft-smoke2' has a managed identity ... that is missing:
+                   - AcrPull on the container registry (cannot pull the image)"
+
+권한은 있었다. ARM 이 그렇게 말했다. 도구는 **묻지도 않은 페이지** 때문에 배포를
+거절했다. CLAUDE.md 가 값을 매겨 둔 바로 그 방향이다 — "성공했을 배포를 막는다".
+
+쓰기 경로는 더 나빴다. `ArmRoleAuth.list_roles` 는 `ensure_role` 이 RBAC 을 **쓸지**
+결정하는 목록이다.
+
+    페이징     granted=True  already_had=False  PUT 1건
+    페이지2 403 granted=True  already_had=False  PUT 1건
+
+둘 다 이미 갖고 있는 역할을 아무도 읽지 않은 행을 근거로 다시 부여했고, 두 번째는
+ARM 이 거절한 페이지 위에서 그렇게 했다. 실제 ARM 은 앞의 것에 409 RoleAssignmentExists
+를 답하고, `ensure_role` 은 그것을 존재하지도 않는 권한 문제로 운영자에게 보고한다.
+그리고 `deploy_online` 은 `granted` 를 믿고 전파를 기다리며 60초를 잔다 — 과금 중인
+GPU 위에서.
+
+### 79.3 잘린 목록은 무엇이라고 말해야 하나
+
+세 상태가 필요했지 두 상태가 아니었다. `IdentityGrants` 의 역할 목록을 3상태로 만들었다.
+
+    [...]   ARM 이 목록을 줬고 이것들이다
+    []      ARM 이 목록을 줬고 없다 — **측정값**
+    None    시작한 읽기가 끝나지 않았다 — 아무것도 모른다
+
+- `can_pull_image` / `can_read_artifacts` 가 `bool | None` 이 됐다.
+- `identity_blocker` 는 `not ...` 이 아니라 **`is False`** 로만 발견을 만든다. 아무도
+  재지 않은 값 위에서 거절하지 않는다.
+- 그렇다고 침묵하지도 않는다. `identity_unread_note` 가 간극을 **소리 내어** 말한다 —
+  `probe_report` 가 재지 않은 SKU 에, `format_inventory` 가 실패한 목록에 쓰는 것과
+  같은 단어(UNKNOWN), 옆에 판정을 찍지 않고, 그 스코프의 `az role assignment list`
+  명령을 붙여서. `deploy_online` 이 그것을 WARNING 으로 찍는다.
+- 상태는 **스코프별**이다. 레지스트리 목록이 잘렸다고 스토리지 쪽의 멀쩡한 측정까지
+  같이 날아가면 안 된다 — 그래서 핸들러를 바깥 `except` 에서 떼어내 목록 하나에
+  붙였다. `SectionScan` 이 같은 이유로 하는 일이다.
+- 과교정 가드. `nextLink` 없는 `{"value": [...]}` 는 ARM 이 컬렉션 전체를 진술한 것이고,
+  거기에 AcrPull 이 없으면 그것은 §57 의 실제 실패다. 그 판정은 **살아남아야 한다**.
+  실행으로 확인했다: `['Reader']` 도 `[]` 도 여전히 막는다.
+
+### 79.4 RBAC 쓰기에 테스트가 0줄이었다
+
+`coverage` 로 잰 사실: `create_role` 의 본문 중 `_ROLE_GUIDS` 조회와 그 `ValueError`
+만 실행되고 있었다. 요청 본문과 `requests.put` 은 한 번도 실행된 적이 없다. 잘못된
+`roleDefinitionId` 나 잘못된 스코프는 실제 주체에게 실제로 틀린 권한을 준다.
+
+이번에 붙인 것: PUT 이 **호출자가 지정한 스코프**로 가는가, **호출자가 지정한 역할**의
+GUID 를 싣는가, roleDefinitionId 가 `scope` 에서 파싱한 구독을 쓰는가, 새 관리 ID 에
+필요한 `principalType: ServicePrincipal` 이 있는가, 4xx 가 삼켜지지 않고 올라오는가,
+409 가 "부여함"으로 집계되지 않는가, 그리고 **할당 이름이 매번 새 uuid4 인가** —
+주체와 스코프에서 파생한 이름이었다면 운영자가 걸어 둔 조건·설명·다른 역할 정의를
+200 과 함께 조용히 덮어썼을 것이다.
+
+### 79.5 안 고친 것
+
+- **리소스 스코프에서 ARM 이 정말 `nextLink` 를 내보내는가** — 재지 못했다. §79.1 참조.
+- `identity_blocker` 의 "Fix it with:" 꼬리말은 실제로 빠진 역할과 무관하게 두 `az`
+  명령을 모두 찍는다. 발견 목록(불릿)은 정확하므로 그대로 뒀다.
+- 이 파일 밖의 세 번째 단일 페이지 읽기, `deploy/lifecycle.py:652 read_orphans.fetch`
+  는 다른 에이전트의 범위라 손대지 않았다.
+
+## 80. §79 감사 — 판정은 버텼고, 그 판정을 사람에게 전달하는 줄이 안 잡혀 있었다 (2026-08-27)
+
+§79 를 되받아치려고 실행한 것만 적는다. 여기의 모든 ARM 응답은 `requests` 경계에서
+만든 **가짜**다. Azure 접근은 없고, 실제 테넌트에 대한 주장은 하나도 없다.
+
+### 80.1 버틴 것 — 뮤테이션으로 잰 결과
+
+`src/` 를 사본(`_audit_rbac`, 저장소 밖)에 복제해 한 줄씩 되돌리고 전체 스위트를 돌렸다.
+되돌리면 죽는다 = 그 주장은 테스트가 실제로 잡고 있다.
+
+    roles_on 을 단일 페이지로 되돌림      -> 7 failed  (§79 새 파일 5 + 형제 가드 2)
+    list_roles 를 단일 페이지로 되돌림    -> 4 failed
+    create_role 이 항상 AcrPull GUID     -> 잡힘
+    create_role 이 파생된 할당 이름 사용  -> 잡힘
+    create_role 이 4xx 를 안 올림         -> 잡힘
+    identity_blocker 가 `not ...` 로 판정 -> 잡힘
+    페이지네이터가 1페이지에서 멈춤       -> 잡힘
+
+§79 가 인용한 재현 두 개(`_repro_rbac/repro_before_seam.py`, `repro_page2.py`)를 그대로
+다시 돌렸고 출력은 인용된 것과 일치한다. `granted=True ... PUTs=1` -> `already_had=True
+... PUTs=0` 도 실제다.
+
+### 80.2 안 잡혀 있던 줄 — 이번 라운드가 실제로 산 것
+
+`identity_unread_note` 는 함수로서는 잘 테스트돼 있었다. 그 문장이 **사람에게 닿는**
+유일한 경로는 `deploy/endpoint.py` 의 한 줄이고, 스위트의 어떤 테스트도
+`deploy_online` 을 그 분기로 몰지 않았다. 한 단어만 바꿔 재봤다:
+
+    log.warning -> log.debug   ->  1142 passed, 2 skipped, 1 xfailed
+
+그리고 같은 가짜 ARM(2페이지가 403)으로 `deploy_online` 을 끝까지 돌리면:
+
+    deploy_online : RETURNED, deployments created=1
+    ARM PUTs      : 0
+    UNKNOWN note logged as WARNING : False
+
+읽지 못한 목록 위에서 배포가 나갔고 운영자는 아무 말도 듣지 못했다. 막지 않는 것은
+약속의 절반일 뿐이고, 나머지 절반은 그것이 누군가에게 닿을 때만 존재한다. `SkuProbe.probed`
+와 `format_inventory` 는 **찍는 지점**에서 잡혀 있다. 이것만 **판단하는 지점**에서만
+잡혀 있었다.
+
+`read_all_arm_pages` 의 사이클 가드도 같은 상태였다 — 지워도 1142 전부 통과.
+
+`tests/test_the_unread_grant_note_reaches_the_operator_and_not_only_the_record.py` 5개가
+그 자리를 잡는다. 진짜 `deploy_online` + 진짜 `read_identity_grants` + 진짜 `ArmRoleAuth`
+를 돌리고 `requests`·자격증명·ML 클라이언트만 가짜다. 위의 뮤테이션 3개가 이제 죽는다.
+
+### 80.3 남은 것 — 고치지 않고 보고만 한다
+
+- **`nextLink` 가 다른 호스트를 가리키면 그냥 따라간다.** `preflight.py:118` 은 본문이
+  준 URL 을 검사 없이 GET 하고 **ARM 베어러 토큰을 그대로 실어 보낸다**. 실행:
+
+        ARM 이 진술한 것       : ['Reader']  (1페이지, ARM 기준으로는 완결)
+        acr_roles             : ['Reader', 'AcrPull']
+        can_pull_image        : True   / blocker None / unread note None
+        접촉한 ARM 외 호스트   : [('not-management.example.invalid', 'Bearer SECRET-ARM-TOKEN')]
+        ensure_role           : already_had=True  PUTs=0
+
+  ARM 이 주는 값이라 TLS 아래에서는 현실적 위협이 아니다. 다만 감사 브리프가 나열한
+  다섯 모양 중 **거부도 절단 처리도 하지 않는 유일한 모양**이고, 결과가 "재지 않은
+  권한을 있다고 말하는 것" — 이 모듈이 존재하는 이유 그 자체다. 다음 라운드 몫.
+- **중간 페이지의 HTTP 실패는 `TruncatedListing` 이 아니다.** `identity.py:422` 의
+  `except TruncatedListing` 은 WARNING 을 찍지만, 2페이지 403 은 바깥
+  `except Exception`(`identity.py:441`) 으로 떨어져 **debug** 로 찍히고 같은 `assumed` 를
+  돌려준다. 인식론적 상태는 동일한데 목소리 크기만 다르다.
+- **이 환경에는 살아 있는 ARM 자격증명이 있다.** `DefaultAzureCredential().get_token(...)`
+  이 1.3초에 실제 토큰을 준다. 스위트는 실제 토큰을 한 번도 받지 않는다(기록 훅으로 0회
+  확인). 그러나 §79 의 재현 스크립트는 `auth=` 없이 `ensure_role` 을 불러 `_headers` 에서
+  **실제 토큰 2회**를 받았다(읽기 1, 쓰기 1). 가짜 `requests.put` 과 all-zeros 구독 id 만이
+  실제 PUT 을 막았다. 저장소 밖 재현이라도 쓰기 경로는 `auth=` 를 주입해서 돌릴 것.
+
+## 81. 라운드 9 게이트 — 완결된 목록이 형제 목록의 절단에 같이 버려지고 있었다 (2026-08-27)
+
+실행한 것만 적는다. 여기의 모든 ARM 응답·자격증명·ML 클라이언트는 `requests` / SDK
+경계에서 만든 **가짜**다. Azure 접근은 없고, 실제 테넌트·리소스·가격에 대한 주장은
+하나도 없다. 절마다 **잰 것**과 **추론한 것**을 나눠 적었고, 81.8 에 모아 뒀다.
+
+### 81.1 헤드라인 — 읽어 낸 디스크가 못 읽은 목록과 함께 버려졌다 (측정)
+
+`read_orphans` 는 세 목록을 한 표현식 안에서 읽었다:
+
+    items = orphan_items(
+        fetch("Microsoft.Compute/disks", ...),
+        fetch("Microsoft.Network/publicIPAddresses", ...),
+        fetch("Microsoft.Network/networkInterfaces", ...),
+    )
+
+파이썬은 `orphan_items` 를 부르기 전에 인자 셋을 모두 평가한다. 디스크 목록이
+**완결**됐어도 뒤의 NIC 목록이 절단되면 예외가 `_section` 까지 올라가 `items` 자체가
+사라진다. 가짜 ARM(디스크 1페이지 완결 + NIC 403)으로 수리 전 모듈을 돌린 결과:
+
+    read_orphans returned : []
+
+즉 §11.4 가 잰 그 디스크를, 이번에는 **읽고 나서** 버렸다. §73 이후 이 저장소가 쫓아 온
+"못 봤다를 없다로 말하지 마라"의 **거울상**이다 — 봤고 찾았는데 못 봤다고 말한다.
+
+수리는 세 독립 읽기다. 한 섹션이 **잰 행**과 **못 읽은 목록**을 동시에 가질 수 있게
+하고, 둘 다 보고한다. 같은 가짜, 수리 후:
+
+    could not list network interfaces in rg-ffsft-kc: 403 fake ARM error
+    read_orphans returned : ['vm-a10-ffsft_OsDisk_1']
+    failed_scans          : ['orphaned disks/IPs (resource group)
+                             (RuntimeError: network interfaces: 403 fake ARM error)']
+    scans                 : [('orphaned disks/IPs (resource group)', 'failed')]
+
+**실패 경로를 약화시키지 않았다.** 진짜 `cmd_down --all --yes` 를 끝까지 돌리면 행과
+못 읽은 목록이 같이 나오고 종료코드는 라운드 5 가 세운 우선순위 그대로다:
+
+    !!orphaned-disk  vm-a10-ffsft_OsDisk_1  Premium_LRS  0.052  256 GB Premium_LRS, unattached
+      the count covers only what could be listed. COULD NOT LOOK at 1 listing(s):
+      orphaned disks/IPs (resource group) (RuntimeError: network interfaces: ...)
+      az disk delete -g <rg> -n vm-a10-ffsft_OsDisk_1 --yes
+    >>> EXIT CODE = 1   (EXIT_NOT_IDLE=3, EXIT_COULD_NOT_LOOK=1)
+    >>> shell `&& echo clean` would NOT print clean
+
+`meter stopped.` 는 나오지 않는다. rc=1 이 rc=3 을 이긴다 — 못 읽은 목록이 찾아낸
+누수보다 위다. 병행 보고 경로는 만들지 않았다: 예외를 올리면 `with` 를 빠져나가면서
+`return items` 가 다시 죽으므로, 이 핸들러는 **올리지 않고** `scan.status` 를 세운다.
+
+### 81.2 반대 방향으로 넘어가지 않은 지점 (측정)
+
+행을 살리려다 **없는 누수를 만드는 것**이 이 수리의 과잉교정이다. 공인 IP 는
+`ipConfiguration` 이 있으면 NIC 목록만이 "그 NIC 에 VM 이 없다"를 증명할 수 있다.
+NIC 목록을 못 읽었으면 그 IP 들은 **판정에서 뺀다**. 빼되 버리지 않고 센다:
+
+    (so 2 attached public IP(s) could not be judged)
+
+가짜 매트릭스로 양방향을 확인했다 — NIC 목록을 못 읽으면 붙어 있는 IP 에 대해
+`az network public-ip delete` 가 한 번도 찍히지 않고, NIC 목록이 완결되면 같은 IP 가
+그대로 고아로 잡힌다.
+
+### 81.3 `nextLink` 가 caller 가 부르지 않은 호스트를 가리키면 거부한다 (측정, **강화**)
+
+§80.3 이 열어 둔 항목. `read_all_arm_pages` 는 본문이 준 URL 을 검사 없이 GET 하면서
+ARM 베어러 토큰을 실어 보냈다. 가짜 2홉으로 실행한 유출:
+
+    https://management.azure.com/... Authorization='Bearer FAKE-ARM-TOKEN'
+    http://evil.example.invalid/...  Authorization='Bearer FAKE-ARM-TOKEN'
+
+수리 후 같은 입력:
+
+    TruncatedListing: ARM served a nextLink pointing at http://evil.example.invalid
+    while the listing was requested from https://management.azure.com; refusing to
+    send the request's credentials off the host the caller named
+
+**이것을 유출 사고로 적지 않는다.** ARM 이 TLS 아래에서 `nextLink` 를 주므로 실제
+트리거를 재지 못했다 — 강화지 침해가 아니다(§80.3 과 두 검증자의 판단을 그대로 따른다).
+비교 대상은 허용목록이 아니라 **caller 가 준 url 자신의 scheme+netloc** 이다. 그래야
+소버린 클라우드가 그대로 페이지된다: `usgovcloudapi.net`, `chinacloudapi.cn`,
+`azure.eaglex.ic.gov` 3개를 비회귀 테스트로 박아 뒀다. azure-core 1.41.0
+`_authentication.py:83` 의 실제 소스를 읽어 확인했다 — SDK 파이프라인은 리다이렉트에서
+Authorization 을 떼지만, 이 페이지네이터는 SDK 를 안 쓰고 `requests` 를 직접 쓴다.
+
+### 81.4 `acr_id_for_image` 의 두 목소리 (측정)
+
+§80.3 이 열어 둔 항목. 같은 인식론적 상태(= `assumed` 는 추측이고 아무도 못 봤다)가
+예외 타입에 따라 다른 볼륨으로 나왔다. 가짜로 실행한 수리 전:
+
+    B: 2페이지가 raise  -> DEBUG:   could not resolve ACR acrffsft by name, assuming rg-fake: ...
+    A: 페이지 상한 도달 -> WARNING: the registry listing for this subscription stopped short (...)
+
+`log.debug` 는 출하되는 모든 엔트리포인트에서 꺼져 있으므로 B 는 **아무것도 안 찍혔다**.
+§80.2 와 같은 실패다. 문구도 문제였다 — "could not resolve ACR X by name" 은 **보고 나서**
+하는 말이다. 수리 후:
+
+    B: WARNING: the registry listing ... did not complete (RuntimeError: ...), so whether
+       acrffsft lives outside rg-fake was never established; assuming ...
+    A: WARNING: the registry listing ... did not complete (TruncatedListing: ...)
+
+한 레벨, 두 이야기 — 구별자는 메시지 안의 **예외 타입**이고, 이는 `SectionScan.detail`
+이 이미 쓰는 이 저장소의 규약이다. 조회가 **아예 시작도 못 한 경우**(azure extra 부재,
+자격증명 거부)는 DEBUG 로 남겼다: 두 호출 경로 모두 같은 자격증명으로 바로 다음 Azure
+호출이 크게 실패하므로, 여기서 경고를 또 찍으면 진짜 인증 실패 위에 두 번째 줄을 얹어
+윗줄을 건너뛰게 가르친다.
+
+### 81.5 `identity_blocker` 꼬리말 — 재지 않은 권한에 명령을 붙여 줬다 (측정)
+
+§79.5 가 "불릿은 정확하므로 그대로 뒀다"고 남긴 항목. 불릿은 스코프별이었는데 그 아래
+`Fix it with:` 문단은 고정이었다. 손으로 만든 레코드로 실행한 수리 전:
+
+    --- storage 만 없음, 레지스트리 목록은 NEVER READ ---
+       FINDINGS : ['- Storage Blob Data Reader on the workspace storage ...']
+       PRESCRIBES: ['--role "AcrPull" --scope <acr-resource-id>',
+                    '--role "Storage Blob Data Reader" --scope <storage-resource-id>']
+
+`acr_roles is None` 은 "목록이 안 끝났다"이고, 불릿은 그것을 없다고 말하기를 거부한다.
+그런 다음 **그 권한을 부여하는 명령을 복붙 가능한 형태로 건넨다.** 운영자가 실행하면
+원래 있었을지도 모를 역할이 부여되고, 기록에는 재지 않은 발견이 남는다 — 부호가 뒤집힌
+같은 불변식에 **행동이 박혀 있는** 형태다. 가벼운 쪽도 실재한다: 방금 있다고 잰
+blob 데이터 평면 권한을 또 부여하라고 시킨다.
+
+수리 후 불릿과 명령은 **한 리스트**에서 나온다. 같은 입력:
+
+    PRESCRIBES: ['--role "Storage Blob Data Reader" --scope <storage-resource-id>']
+
+7가지 레코드 모양에 대해 `prescribed(msg) == flagged(msg)` 를 성질로 박았다.
+`IdentityGrants` 가 이미 들고 다니던 `acr_scope`/`storage_scope` 도 이제 명령에 채운다.
+
+### 81.6 가드 두 개 — 실측하고, 심어서 빨갛게 하고, 뺐다 (측정)
+
+보고서를 믿지 않고 소스에서 다시 셌다.
+
+    swallow 가드 : 69 handlers walked / 34 flagged / 28 ALLOWLIST / 6 KNOWN_OPEN
+    ARM 가드     : 8 ARM GET walked / 7 paginator call sites / 1 ALLOWLIST / 0 KNOWN_OPEN
+
+ARM 가드가 예상한 충돌(세 곳이 아직 나쁜 것으로 남아 있다)은 **존재하지 않았다** —
+독립 grep 으로 `read_all_arm_pages` 호출 7곳, 단일 페이지 ARM 목록 0곳을 확인했다.
+`_scan()` 이 내는 유일한 finding 은 페이지네이터 자신의 GET 이고 그것이 그 1건이다.
+
+가드가 아직 살아 있는지는 심어서 봤다. `src/ffsft/deploy/_gate9_probe.py` 를 넣자 두
+가드가 동시에 빨개졌고, 빼자 둘 다 통과(16 passed). §79 감사가 지적한 두 모양도
+그대로 심었다 — 모듈 전역 바인딩 마스킹과 버려지는 `escaped` 플래그:
+
+    assert not [deploy/_gate9_escape.py:12 list_things -- BODY_THE_WALKER_COULD_NOT_FOLLOW,
+                deploy/_gate9_mask.py:16 list_arm_collection -- URL_THE_WALKER_COULD_NOT_RESOLVE,
+                deploy/_gate9_mask.py:9 read_manifest -- URL_THE_WALKER_COULD_NOT_RESOLVE]
+
+둘 다 잡힌다. 코드 주석이 "라운드 9 가 실행했다"고 말한 것을 믿지 않고 다시 실행한
+결과이고, 결론은 주석과 같다.
+
+81.1 의 새 핸들러는 swallow 가드에 **걸렸다**. 워커를 좁히지 않고 가드가 제시하는 세
+선택지 중 2번(ALLOWLIST 에 논증을 적는다)을 택했다 — `None` 은 이 리더의 문서화된
+미판독 센티넬이고 `read_orphans` 밖으로 나가지 않으며, 같은 `except` 가 `failures` 에
+append 해서 `ScanStatus.FAILED` 와 **어느 목록인지 이름을 적은** detail 을 세운다.
+
+### 81.7 살아 있는 자격증명 — 저장소 안은 깨끗하고, 저장소 밖 재현은 아니다 (측정)
+
+브리프가 "아무것도 못 고쳐도 이것만은 올려라"라고 한 항목. 언급을 세는 대신 **막고
+돌렸다.** 플러그인 하나로 (a) `azure.identity` 의 모든 자격증명 클래스 `get_token`,
+(b) 루프백 외 모든 소켓 connect 와 DNS 조회, (c) 실제 `requests.put/post/patch/delete`
+와 `HTTPAdapter.send` 를 전부 예외로 바꾸고 전체 스위트를 돌렸다:
+
+    1200 passed, 2 skipped, 1 xfailed
+
+**막은 것이 진짜 막는지도 심어서 봤다** — 실패한 공격은 공격이 진짜일 때만 증거다:
+
+    LiveReach: LIVE CREDENTIAL: DefaultAzureCredential.get_token was actually called
+    LiveReach: DNS lookup for 'management.azure.com' -- a test reached the network
+
+따라서 **스위트의 어떤 테스트도 살아 있는 자격증명이나 실제 쓰기에 닿지 않는다.**
+저장소 트리 안에 남은 repro/probe 파일도 없다(`test_sku_probe.py` 는 정상 테스트다).
+
+저장소 **밖**은 다르고, §80.3 이 보고한 것을 이번에는 소스에서 확인했다.
+`/home/eonlee/test-azure/workspace/_repro_rbac/repro_page2.py:87` 과
+`repro_before_seam.py:88` 은 `ensure_role(...)` 을 **`auth=` 없이** 부른다 →
+`ArmRoleAuth()` → `identity.py:565` 의 `DefaultAzureCredential()` → **실제 ARM 토큰**.
+실제 PUT 을 막고 있는 것은 단 하나, 가짜 `requests.put` 대입이 그 호출보다 **한 줄 위**에
+있다는 사실뿐이다. 두 줄을 바꾸면 실제 RBAC 쓰기가 된다. 저장소 밖 다른 에이전트의
+산출물이라 손대지 않았고, 여기 적어 둔다: **쓰기 경로 재현은 `auth=` 를 주입할 것.**
+
+### 81.8 잰 것 / 추론한 것
+
+**잰 것** (전부 이 트리에서 실행, 출력은 위에 인용):
+- 81.1 수리 전 `read_orphans -> []`, 수리 후 디스크 1건 + FAILED 스캔, rc=1.
+- 81.2 붙어 있는 IP 의 보류와 계수, 양방향.
+- 81.3 가짜 2홉 토큰 유출과 수리 후 거부, 소버린 3종 비회귀.
+- 81.4 DEBUG→WARNING 비대칭 재현과 해소.
+- 81.5 꼬리말 과잉처방 재현과 해소.
+- 81.6 두 가드의 실제 census, 심은 위반 4종이 전부 빨개짐.
+- 81.7 자격증명·소켓·쓰기 동사 전면 차단 하에서 1200 통과, 차단 자체의 유효성.
+- 전체: `1200 passed, 2 skipped, 1 xfailed`, `ruff check .` All checks passed.
+
+**추론한 것** (재지 못했고, 사실로 쓰지 않는다):
+- ARM 이 리소스 스코프 목록에서 실제로 `nextLink` 를 내보내는 빈도. §79.1 이 못 잰
+  것을 이번에도 못 쟀다. 페이지네이션 관련 수리의 **가치**는 전부 이 미측정 위에 있다.
+- 81.3 의 교차 호스트 `nextLink` 가 실제로 발생한 적이 있는지. 없다고 보는 쪽이고,
+  그래서 강화로만 적었다.
+- 실제 Azure 요금·리소스 이름·GUID 는 하나도 새로 만들지 않았다. 위의 `$0.052/hr`,
+  `~$38/month`, `vm-a10-ffsft_OsDisk_1` 은 §11.4 가 실제로 잰 것을 재생한 값이다.
+- `identity.py:565` 가 실제 토큰을 준다는 것은 §80.3 의 측정을 인용한 것이고, 이번
+  라운드에서 다시 재지 않았다. 확인한 것은 **호출 경로**(재현 → `ensure_role` →
+  `ArmRoleAuth` → `DefaultAzureCredential`)이며 소스를 읽어 확인했다.
+
+### 81.9 안 고친 것
+
+- **`read_all_arm_pages` 를 쓰는 나머지 6곳은 이번 라운드의 형제-목록 모양을 갖지
+  않는다**고 판단하고 손대지 않았다 — 각각 목록 하나만 읽는다. 기계적으로 확인한 것이
+  아니라 호출부를 읽고 내린 판단이다. 다음 감사가 다시 볼 자리.
+- **`KNOWN_OPEN` 6건**(`data/korean.py`, `deploy/lifecycle.py`, `serve/bench_report.py`
+  ×2, `serve/loadtest.py`, `train/preflight.py`)은 그대로다. 이번 라운드의 범위 밖이고,
+  가드가 계속 세고 있다.
+- **`_repro_rbac/` 의 두 재현**은 저장소 밖이라 수정하지 않았다. 81.7 참조.
+
+## 82. 라운드 10 재감사 — 세 번째 모양은 SDK 안에 있었고, 예외가 아니라 데이터로 왔다 (2026-08-27)
+
+실행한 것만 적는다. ARM 응답·자격증명·ML 클라이언트는 전부 경계에서 만든 **가짜**다.
+다만 82.1 의 핵심 주장은 가짜가 아니라 **설치된 azure-ai-ml 1.34.1 을 직접 실행해서**
+확인했다. Azure 접근은 없다.
+
+### 82.1 세 번째 모양 (측정) — 성공한 목록 **안**에 구멍이 온다
+
+라운드 7~9 는 두 모양을 쫓았다. (a) 예외를 삼키고 빈 값을 건네는 것, (b) 성공했지만
+`nextLink` 를 버려 짧게 읽는 것. 셋째가 있다: **목록은 완결됐고, 원소 하나가 `None`
+으로 온다.** 예외가 없고, 짧지도 않다. 불완전함이 제어 흐름이 아니라 **데이터**로 온다.
+
+설치된 SDK 를 읽고 실행해서 확인했다. `JobOperations.list` 는
+`cls=lambda objs: [self._handle_rest_errors(obj) for obj in objs]`
+(`_job_operations.py:314`) 를 넘기고, `_handle_rest_errors` (:325) 는
+`except JobParsingError: return None` 이다. 진짜 라이브러리에 진짜 REST `JobBase`
+(entity 계층이 못 읽는 `resources`) 를 넣은 결과:
+
+    REAL _from_rest_object raised JobParsingError:
+        'str' object has no attribute 'instance_count'
+    REAL _handle_rest_errors returned: None
+
+`lifecycle.py` 는 `getattr(j, "status", "")` 로 걸렀고 `getattr(None, "status", "")`
+는 `""` 라, 구멍은 "실행 중이 아닌 잡"으로 조용히 걸러졌다. 섹션은 OK 로 기록됐다.
+진짜 `cmd_down --all --yes` 로, **A100 Running 잡 하나**, 유일한 변수는 SDK 가 그
+잡을 파싱할 수 있느냐:
+
+    파싱됨 -> still on screen with an unread cost ... hung-a100-job [job]
+              EXIT CODE = 1,  "meter stopped." 없음
+    None   -> BILLING NOW: nothing. No always-on compute in this workspace.
+              meter stopped.
+              EXIT CODE = 0,  `&& echo clean` 이 clean 을 찍는다
+
+SDK 자신의 유일한 흔적인 `module_logger.info("Failed to parse job resource")` 는
+`azure.*` 로거라 이 리포의 `QuietAzureFilter` 가 `QUIET_THRESHOLD` 아래로 버린다.
+운영자에게 도달하는 것이 **아무것도 없다**.
+
+**두 가드 모두 구조적으로 못 본다.** 삼킴 가드는 `src/ffsft/` 와 `docker/` 의
+`except` 를 걷는데 이 `except` 는 site-packages 에 있다. ARM 가드는
+`management.azure.com` GET 을 걷는데 이건 AML 클라이언트다. 그래서 손으로 썼다.
+
+수리는 §81.1 이 세운 관례 그대로다: **파싱된 행은 지키고**, 구멍은 개수만 세어
+`scan.status = FAILED` 로 기록한다. `None` 은 이름도 상태도 안 들고 오므로 "1건"이
+잰 것의 전부이고 문장이 그 이상을 암시하면 안 된다. 올리지 않는 이유도 §81.1 과
+같다 — 올리면 `with` 를 벗어나 파싱된 행을 버린다.
+
+과잉교정 확인(실행): 잡이 전부 파싱되면 rc=0 + `meter stopped.` 그대로, 잡이 없어도
+그대로. 섞인 경우는 **둘 다** — `hung-a100-job` 행과 못 읽은 목록 주석이 동시에.
+회귀 프로브로 수리를 되돌리니 새 테스트 7개 중 3개가 빨개졌다.
+
+### 82.2 문서 표류 (측정) — 파생본은 다 고치고 원본을 놓쳤다
+
+§81.1 은 "`read_orphans` 는 어떤 실패에도 `[]` 를 돌려준다"를 거짓으로 만들었고,
+JOURNAL §11.4·§74.2 에 철회 배너를, CLAUDE.md 와 lab7 에 수정을 넣었다. 그런데 그
+문장이 **그 함수 자신의 독스트링**(`lifecycle.py:709`)에 그대로 남아 있었다.
+파생된 사본은 전부 고치고 원본을 놓친 모양이다. 실행으로 확인:
+
+    a failure DID occur       : ['orphaned disks/IPs (resource group)']
+    read_orphans returned     : ['vm-a10-ffsft_OsDisk_1']
+
+독스트링을 고쳤고, 왜 틀렸었는지를 그 자리에 남겼다.
+
+### 82.3 실패한 공격은 증거다 (측정)
+
+82.2 의 첫 재현은 `[]` 를 돌려줬다. 수리가 안 된 게 아니라 **내 가짜가 틀렸다**.
+`orphan_items:337` 은 `diskState` 가 `"unattached"` 여야 고아로 세는데 내 가짜 디스크에
+그 필드가 없었다. 가짜를 고치니 재현됐다. 라이브러리·코드가 실제로 하는 일에
+가짜를 맞춰 보기 전에는 결과를 믿지 않는다는 규칙이 또 값을 했다.
+
+부수적으로 확인된 잠재 사항: `managedBy` 가 비어 있고 `diskState` 가 **없는** 디스크는
+조용히 건너뛴다. api-version 이 그 필드를 빼면 고아 디스크가 통째로 사라진다는 뜻이지만,
+ARM 이 실제로 그러는지는 잴 수 없어 **고치지 않았다**. 못 잰 동작을 근거로 고아 판정을
+넓히면 살아 있는 디스크에 `az disk delete` 를 찍을 수 있고, 그쪽이 위험한 방향이다.
+
+### 82.4 가드 공격 (측정)
+
+프로브 5개를 심었다. ARM 가드: `session.get` 잡음, `httpx.get` 잡음, §80 이 남긴
+모듈 전역 바인딩 마스크 모양도 잡음(`URL_THE_WALKER_COULD_NOT_RESOLVE`, 게다가
+**세어졌다** — 이전의 조용한 누락이 아니다). 놓친 것 둘:
+`requests.request("GET", url)` (워커가 `.get` 속성 호출만 본다), 그리고
+`read_all_arm_pages(...)[:50]` (페이지네이터가 거부한 절단을 뒤에서 되살린다).
+삼킴 가드: 지연된 빈 값(`except: pass` 후 빈 변수 반환)은 잡았고,
+`contextlib.suppress(Exception)` 는 놓쳤다 — `ExceptHandler` 노드가 아예 없다.
+
+**세 모양 모두 현재 리포에 없다**(grep 확인). 라이브 결함이 아니라 가드 커버리지
+공백이다. 가드는 연극이 아니다 — 심은 5개 중 3개를 잡았고 마스크 수리는 진짜다.
+
+### 82.5 안전 (측정)
+
+전체 스위트를 사보타주 플러그인 아래에서 돌렸다: 모든 `azure.identity` 자격증명의
+`get_token`, 루프백이 아닌 소켓 연결과 DNS 조회, 진짜 `requests.put/post/patch/delete`
+와 `HTTPAdapter.send` 를 전부 하드 실패로 바꿨다. `1207 passed, 2 skipped, 1 xfailed`.
+사보타주가 진짜인지도 증명했다 — 프로브 3개가 전부 잡혔다(`LIVE CREDENTIAL`,
+`LIVE DNS lookup for 'management.azure.com'`, `LIVE WRITE: requests.put`).
+**트리에는 라이브 자격증명·라이브 쓰기에 닿는 테스트가 없다.**
+
+저장소 **밖**은 §81.7 이 보고한 그대로이고 소스에서 다시 확인했다.
+`_repro_rbac/repro_page2.py:87` 과 `repro_before_seam.py:88` 은 `auth=` 없이
+`ensure_role(...)` 를 부르고, `identity.py:672` 의 `auth = auth or ArmRoleAuth()` 가
+`DefaultAzureCredential()` 을 만든다. 진짜 RBAC PUT 을 막는 것은 가짜 `requests.put`
+대입이 **한 줄 위**에 있다는 사실뿐이다. 남의 디렉터리라 고치지 않았다.
+
+### 82.6 돈 (측정, 네 라운드째 깨끗)
+
+산수를 다시 계산했다. 256 GB Premium_LRS = P15 = `38.012142`/월,
+Standard 공인 IP = `0.005 × 730` = `3.65`/월, 합 `41.66` — §11.4 가 기록한 누수와
+정확히 같다. 보고서의 `$0.052/hr` 는 `38.012142 / 730`. A100 은 `4.959 × 730` ≈
+`$3,620`/월. 모르는 IP SKU 는 `0.0` 이지만 `(price unknown for this SKU)` 가 붙어
+**공짜로 렌더되지 않는다**. 1024 GB 초과 디스크는 인정된 공백.
+
+### 82.7 확인만 하고 손대지 않은 것
+
+- §81.3 `nextLink` 호스트 검사: 주권 클라우드 4곳(`usgovcloudapi.net`,
+  `chinacloudapi.cn`, `azure.eaglex.ic.gov`, 상용)이 전부 정상 페이징하고,
+  교차 호스트·`http` 강등·`https://management.azure.com@evil.invalid` 형태를
+  모두 거부한다. 실행으로 양방향 확인. 과잉교정 없음.
+- §81.4 `acr_id_for_image`, §81.5 `identity_blocker` 푸터: 소스에서 확인했고 주장대로다.
+- RBAC 쓰기(`create_role`)는 이제 진짜 커버리지가 있다 — `monkeypatch.setattr(requests,
+  "put", ...)` 아래에서 진짜 본문이 실행된다. 라운드 6 의 공백은 닫혔다.
+- ComputeInstance 는 여전히 인벤토리 밖이다(`test_collect_inventory_ignores_non_amlcompute`
+  가 고정). AmlCompute 가 아니라는 이유로 건너뛰는데, ComputeInstance 는 켜져 있으면
+  과금되는 상시 컴퓨트다. 이번 라운드의 불변식 계열이 아니고 실행 상태 필드를 잴 수
+  없어 손대지 않았다. 다음 감사가 볼 자리.
+
+### 82.8 잰 것 / 추론한 것
+
+**잰 것**: 82.1 의 SDK 동작(진짜 라이브러리 실행), 두 rc 와 화면 출력(진짜 `cmd_down`),
+82.2 의 독스트링 반증, 82.4 의 프로브 5개, 82.5 의 스위트·사보타주, 82.6 의 산수.
+**추론한 것**: SDK 가 실전에서 잡을 못 파싱하는 **빈도**는 재지 못했다 — 수리의
+가치는 그 미측정 위에 있다. 82.3 의 `diskState` 누락과 82.7 의 ComputeInstance 과금
+상태도 재지 못했고, 사실로 쓰지 않았다.
+
+---
+
+## 83. 워크샵을 하나의 스토리라인으로 — 그룹 하나, 리전 하나, 셸 하나 (2026-08-28)
+
+**요청**: "응 전체적으로 워크샵이 하나의 스토리라인으로 가야해." 앞선 세 요청
+("그룹 지우면 안되나 / 학습 블롭까지 한번에 / 고객 계정으로 열고 다시 내릴 수 있어야")의
+결론이다. 코드 쪽은 `ffsft infra up|down` 으로 끝났고, 이번 라운드는 **문서가 그 코드와
+같은 이야기를 하게** 만든 것이다.
+
+### 83.1 문서가 코드보다 두 갈래 뒤에 있었다
+
+`infra up` 은 그룹 하나에 워크스페이스·스토리지·ACR·KeyVault 를 전부 넣는다. 그런데
+Lab 문서는 그 전 세계를 그대로 설명하고 있었다.
+
+- `lab5.md` 가 `az group create -n <서빙 rg> -l <서빙 리전>` 을 시켰다. **`infra down`
+  이 절대 안 보는 그룹**이 거기서 생긴다.
+- `~/.ffsft-serve-env` 라는 두 번째 프로필 파일을 손으로 heredoc 해서 만들게 했고,
+  Lab 0·5·6·7·8 과 `RUNBOOK.md` 가 그 파일을 전제로 쓰여 있었다.
+- `lab7.md` 의 확인 루프는 `for P in "$HOME/.ffsft-env" "$HOME/.ffsft-serve-env"` 로
+  **두 프로필을 다 도는** 모양이었다.
+
+한 명령(`az group create`)이 문제가 아니라 **두 갈래 전제가 문서 전체에 퍼져 있었다.**
+
+### 83.2 두 번째 프로필은 지웠다 — 탈출구가 이미 코드에 있다
+
+두 리전이 정말 필요한 경우(koreacentral 학습 + 다른 리전 서빙, §57.1)를 위해 문서에
+특례를 두는 대신, **prefix 를 하나 더 쓰게** 했다:
+
+```bash
+ffsft infra up --prefix kim01p --write-env ~/.ffsft-env2
+ffsft infra down --prefix kim01   # 내릴 때 prefix 마다 한 번씩
+```
+
+`--write-env` 는 이미 `infra up` 에 있다. 손으로 만든 heredoc 프로필은 `infra down` 이
+이름을 모르는 그룹을 만들지만, 두 번째 prefix 는 **`infra down` 이 그대로 닫을 수 있는
+그룹**을 만든다. 메커니즘이 하나로 줄었다.
+
+### 83.3 리전은 엄격한 쪽 기준으로 하나
+
+`lab0.md` §3 이 학습용·서빙용 두 프로필을 고르게 하던 것을 **한 리전**으로 바꿨다.
+게이트는 더 엄격한 서빙 쪽(`restrictions: []` + `MIR`)이다. 근거: dedicated A100 을
+파는 리전이 LowPriority 를 거절한 기록이 이 리포 실측에 없다. 그리고 이건 가정으로
+두지 않았다 — `provision_azure.py --dry-run` 이 돈 쓰기 전에 LowPriority 를 확인한다.
+
+둘 다 통과하는 리전이 없으면 트랙 하나만 하거나 prefix 두 개(§83.2)로 간다.
+
+### 83.4 진입점 이름도 하나로
+
+문서가 `ffsft-lifecycle` / `ffsft-deploy` 같은 옛 console script 이름을 ~60곳에서
+쓰고 있었다. `src/ffsft/cli.py` 에 `ffsft <cmd>` 형태가 전부 존재하는 것을 확인하고
+Lab·README·RUNBOOK·GOTCHAS·CLAUDE.md 를 `ffsft <cmd>` 로 통일했다.
+
+`ffsft-*` 는 그대로 돈다. `[project.scripts]` 를 이야기하는 자리
+(`CLAUDE.md` 로깅 절, `lab0.md` 스킵 2개 설명)만 옛 이름을 남겼다 — 거기서는 옛 이름이
+**그 문장의 주어**다.
+
+### 83.5 `status` 가 못 보는 것을 말로 적었다
+
+`lifecycle status` 는 워크스페이스만 본다. `BILLING NOW: nothing` 을 "그룹이 비었다"로
+읽으면 §11 의 **$41.66/월** 이 다시 난다. 이 구분을 `lab5.md`·`lab6.md`·`lab7.md`·
+`lab8.md`·`labs/README.md`·`README.md`·`RUNBOOK.md` 의 해당 자리마다 한 줄씩 넣었다:
+**끄기(`lifecycle down`)와 없애기(`infra down`)는 다른 단계다.**
+
+`lab7.md` 에 §7 「워크샵 종료 — 그룹째 없애기」를, `RUNBOOK.md` 에 §9 「그룹째 내리기」를
+새로 썼다. 둘 다 그룹을 지우기 **전에** 안을 읽는 이유를 적었다 — KeyVault 소프트 삭제
+90일, `uniqueString` 은 로컬 재현 불가, 읽지 못하면 purge 할 이름을 알 방법이 없다.
+
+### 83.6 불변식이 부호를 뒤집어 다시 나타났다
+
+다른 Lab 에서는 "빈 목록이 빈 세상의 증거가 아니다"이다. 내리기에서는 같은 명제가
+반대 방향으로 선다: **확인 못 한 삭제는 삭제가 아니다.** 그래서 `infra down` 의
+종료 코드는 `1`(목록을 못 읽음)이 `3`(읽었고 남은 것이 있음)보다 무겁다. 문서 세 곳에
+그 순서를 표로 적었다.
+
+### 83.7 가드 테스트
+
+`tests/test_the_labs_describe_one_resource_group_from_start_to_finish.py` — 4개.
+
+| 테스트 | 고정하는 것 |
+|---|---|
+| `..._directory_is_actually_being_read` | 나머지 셋이 빈 목록 위에서 통과하는 것을 막는다 |
+| `..._no_lab_tells_a_participant_to_create_a_second_resource_group` | `az group create` 재발 |
+| `..._no_lab_sends_a_participant_to_a_second_env_profile` | `ffsft-serve-env` 재발 |
+| `..._lab_zero_opens_the_group_and_lab_seven_deletes_it` | 스토리라인의 양 끝 |
+
+`docs/labs/` 만 본다. `JOURNAL.md` 는 append-only 라 옛 절이 옛 세계를 계속 말해야 하고,
+`RUNBOOK.md` 는 손 조작 문서라 갈린 경우를 **의도적으로** 다룬다.
+
+가드를 붙이자마자 `lab0.md:143` 이 걸렸다 — 「프로필이 둘입니다」 경고 박스가 남아
+있었다. 사람 눈으로 5개 파일을 훑고 끝냈다고 생각한 자리다.
+
+### 83.8 스위트
+
+1228 → **1232 passed, 2 skipped, 1 xfailed** (+4). `ruff check src/ tests/` 클린.
+
+`test_the_documented_test_count_is_one_number_everywhere` 가 이 라운드에 **두 번** 잡았다
+— 1207→1228 로 올릴 때 한 번, 가드 4개를 더해 1228→1232 가 될 때 또 한 번. 문서 4곳
+(`CLAUDE.md:12`, `README.md`, `lab0.md:7`, `lab0.md:61`)이 같은 수를 말하는지가
+그 테스트가 지키는 전부다.
+
+### 83.9 잰 것 / 추론한 것
+
+**잰 것**: 스위트 1232, ruff 클린, `src/ffsft/cli.py` 에 모든 `ffsft <cmd>` 가 실재하는 것,
+가드 테스트가 `lab0.md:143` 을 실제로 잡은 것.
+**추론한 것**: dedicated A100 리전이 LowPriority 를 항상 판다는 것(§83.3) — 반례를 못
+봤을 뿐 실측이 아니다. `--dry-run` 이 매번 확인하는 쪽으로 처리했다. 문서를 따라 실제
+참가자가 `infra up` → 8개 Lab → `infra down` 을 끝까지 도는 것은 **이 라운드에서 안 돌렸다.**
+
+## 84. `infra up` → `infra down` 실측 (2026-08-28)
+
+§83.9 가 "안 돌렸다"고 적은 것 중 GPU 없는 절반을 실측했다. 범위는 스캐폴딩만
+(Lab 0 + Lab 7 골격) — GPU 학습·엔드포인트 배포(Lab 1~6, 8)는 이번에도 안 돌렸다.
+
+- `ffsft infra up --prefix smoke --location koreacentral --write-env /tmp/smoke-env`
+  → `rg-ffsft-smoke` 생성, `/tmp/smoke-env` 에 5개 변수 기록.
+- `az group show` / `az resource list` 로 **도구 출력과 독립적으로** 재확인: 리소스 6개
+  전부 `Succeeded` (`law-smoke`, `stsmoke7sezblmpgmiby`, `acrsmoke7sezblmpgmiby`,
+  `kvsmoke7sezblmpgmiby`, `appi-smoke`, `mlw-smoke`).
+- `ffsft infra down --prefix smoke` (dry-run) → WOULD DELETE 목록이 위 6개와 정확히 일치.
+- `ffsft infra down --prefix smoke --yes` → `rg-ffsft-smoke` 삭제 + KeyVault purge, rc=0.
+  그룹 삭제는 120초 내에 안 끝나 백그라운드로 넘어갔다(ARM 비동기) — 완료까지 실측.
+- 삭제 후 독립 재확인: `az group exists -n rg-ffsft-smoke` → `false`.
+  `az keyvault list-deleted` 에 `kvsmoke7sezblmpgmiby` 없음(soft-delete 상태도 아니고
+  완전히 purge됨). `az group list --query "[?tags.prefix=='smoke']"` → 빈 배열.
+
+**잰 것**: `infra up`/`infra down` 코드 경로가 실제 구독에서 그룹 생성·독립 검증·
+dry-run 일치·삭제·purge·삭제후 독립 검증까지 전부 통과. 비용은 무시 가능한 수준
+(GPU/컴퓨트 없음, 존속 시간 수 분).
+**추론한 것**: 여전히 안 잰 것 — 8개 Lab 본문(학습 잡, 병합, 배포, 로드테스트)이
+`infra up` 이 쓴 환경 변수로 끝까지 도는지는 이번에도 미검증.
+
+## 85. `log_metric` 이 스토리지 shared-key 정책에 막혀 `preflight.passed` 가 끝까지 안 찍혔다 (2026-08-28)
+
+`rg-ffsft-e2erun`(`mlw-e2erun`, polandcentral)에서 8개 Lab 실전 실행을 시작하며 진단 잡을
+먼저 돌렸다. `set_tag` 는 즉시 성공하고 바로 다음 줄의 `log_metric` 이 매번 이 예외로
+실패했다:
+
+```
+RestException: ... 'Message': 'Authentication to workspace storage account failed.'
+```
+
+`docker/Dockerfile.train` 자체 주석이 이미 적어 둔 사실과 일치한다 — 이 워크스페이스의
+스토리지 계정은 `allowSharedKeyAccess=false`(테넌트 정책 `StorageAccount_DisableLocalAuth_Modify`)
++ `publicNetworkAccess=Disabled`, 사설 엔드포인트 없음. `log_metric` 의 값 쓰기 경로는
+그 스토리지 계정에 shared key 로 인증하고, `set_tag` 는 스토리지를 아예 안 탄다.
+
+**옛 버그**: `mlflow_report.py::publish()` 가 전체 메트릭 루프 + 태그 루프를 **하나의
+try/except** 로 감쌌다. 첫 `log_metric` 실패가 그 뒤 모든 메트릭·태그 발행을 통째로
+버렸다 — `preflight.passed` 는 항상 두 번째 `publish()` 호출(첫 호출의 반환값에 게이트)
+에서만 찍히는데, 그 첫 호출이 첫 메트릭에서 죽으면서 태그 자체가 안 나갔다.
+
+**고침**: 메트릭/태그 각각을 독립된 try/except 로 발행. `log_metric` 실패 시 같은 값을
+**같은 이름의 태그**로 재시도. 하나라도 나가면 `publish()` 는 `True`.
+`tests/test_train_report.py` 에 3개 테스트 추가(`raise_on="metric"` 로 폴백 확인,
+`raise_on="all"` 로 실패 시 `False`, 다중 키 리포트가 한 메트릭 실패로 전부 죽지
+않음을 확인). 가드 테스트(`test_no_except_handler_hands_a_caller_an_empty_value_it_never_read.py`)
+의 `ALLOWLIST` 갱신 — `sent` 는 같은 함수가 자기 반환값으로 읽는 로컬 집계이지 남에게
+건네는 빈 값이 아니라는 근거. 전체 스위트 1234 passed, `ruff check .` 클린.
+
+**배포·재검증**: `az acr build --registry acrffsftkc --image ffsft-train:13
+--file docker/Dockerfile.train .` → Run ID `de1f`, 7분14초, 성공. `aml_job.TRAIN_IMAGE`
+를 `:12`→`:13` 로 올리고(빌드 성공 **후**에만 — 먼저 올리면 `ENVIRONMENT_VERSION` 이
+없는 이미지를 가리켜 전부 실패한다) 프리플라이트 잡(`ivory_town_z5mwvsqypy`)을 이
+워크스페이스에 재제출:
+
+```
+preflight.passed = True   (TAG, log_metric 실패 → set_tag 폴백으로 도착)
+preflight.nf4_matmul_ok = True
+preflight.vram_gb = 85.1 / preflight.device = NVIDIA A100 80GB PCIe
+preflight.smoke_loss = 1.3074 (2 step)
+```
+
+`preflight.*` **19개 값 전부 METRIC 이 아니라 TAG 로 도착** — 이 테넌트는 메트릭 채널이
+완전히 막혀 있고, 폴백이 그 19개를 하나도 안 놓쳤다는 뜻. `lastvalues` 는 이름만 등록된
+채 값 없이(`[null]`) 남아 이를 뒷받침한다. `scripts/watch_jobs.sh` 의 신규 태그-읽기
+경로(MLflow `runs/get` 폴링)가 이 19개를 실시간으로 잡아냈다.
+
+**잰 것**: 셰어드-키 인증 실패의 근본 원인, 고친 코드의 회귀 스위트 통과, 그리고 고친
+이미지가 **실제 테넌트에서** 값을 하나도 잃지 않고 발행한다는 것.
+**아직 안 잰 것**: 이 워크스페이스가 셰어드-키를 막는 유일한 이유가 §-미상 테넌트 정책인지,
+같은 정책이 다른 리전/구독에도 적용되는지는 미확인 — 매번 `preflight.passed` 로 채널을
+먼저 확인하라는 것이 [Lab 2](labs/lab2.md) §1 경고의 근거다.
+
+## 86. `qwen3.5-0.8b` 도 하이브리드 어텐션이었다 — 스모크 테스트가 그걸 증명하기 전에 이미지가 구버전 config 를 물고 있었다 (2026-08-28)
+
+같은 실전 실행에서 §2 스모크 테스트(`--model qwen3.5-0.8b`)를 제출하자 클라이언트 측
+가드가 즉시 거부했다:
+
+```
+ValueError: refusing to submit: model 'qwen3.5-0.8b' declares no lora_target_modules...
+```
+
+`configs/models.yaml`의 `qwen3.5-0.8b` 항목에 `lora_target_modules` 가 없었다. 추측하지
+않고 `scripts/probe_architecture.py qwen3.5-0.8b` 로 실제 구조를 읽었다:
+
+```
+layer map: {'linear_attention': 18, 'full_attention': 6}
+```
+
+`qwen3.8-27b`(linear 48 + full 16)와 같은 3:1 하이브리드 패턴. PEFT 관용 타깃
+(`{q,k,v,o}_proj`)은 24/187 Linear 모듈(13%)만 덮는다 — CLAUDE.md 가 이미 경고한
+바로 그 함정을, 27B 뿐 아니라 스모크용 0.8B 도 똑같이 밟는다는 뜻. `configs/models.yaml`
+에 실측 기반 12개 모듈(`in_proj_qkv`/`in_proj_z`/`in_proj_b`/`in_proj_a`/`out_proj` 포함)을
+추가하고 `probe_architecture.py --check` 로 186/187(99%) 커버리지 확인.
+
+**로컬 수정 후에도 같은 잡이 노드에서 또 죽었다** — 이번엔 클라이언트 가드가 아니라
+`qlora.py` 안, 훈련 노드 위에서. 원인은 `configs/` 편집이 아니라 **그 편집이 이미지
+빌드 이후에 일어난 것**: `docker/Dockerfile.train:91`의 `COPY . /opt/ffsft` 가 리포
+전체(코드 + config 포함)를 빌드 시점에 이미지 안으로 굽는다. 로컬에서 `models.yaml`
+을 고친 시점에는 `ffsft-train:13`이 이미 빌드·푸시된 뒤였고, 실행 중이던 컨테이너는
+옛 config 를 그대로 물고 있었다. `az acr build ... ffsft-train:14`(Run ID `de1g`,
+6분46초)로 재빌드하고 `TRAIN_IMAGE`를 `:14` 로 올린 뒤 재제출 — 이번엔 학습 단계가
+통과했다(`setup.trainable_pct = 1.0631`, `train.vram_peak_gb = 2.79`, 둘 다 Lab 2 §2
+기준치와 정확히 일치).
+
+**부수 사고**: 재빌드 첫 시도가 `subscription 'ME-M365CPI74210306...' 에 acrffsftkc
+없음`으로 즉시 실패. Bash 툴의 셸 상태가 호출 간 유지되지 않는다는 사실 때문 —
+`source ~/.ffsft-env`(올바른 구독을 가리키는 `AZURE_CONFIG_DIR` 설정)를 한 호출에서
+실행하고 `az acr build` 를 별도 호출에서 실행하면, 후자는 기본 로그인 컨텍스트로
+떨어져 엉뚱한 구독을 본다. `source`와 그 뒤에 의존하는 Azure 명령은 반드시 **같은**
+Bash 호출 안에 있어야 한다.
+
+**잰 것**: `qwen3.5-0.8b`가 실제로 하이브리드 어텐션이라는 사실(추측 아님), 고친
+config 가 노드에서 학습을 정상적으로 통과시킨다는 것, 그리고 "config 편집 = 이미지
+재빌드 필요"라는 §8.3 불변식이 코드뿐 아니라 `configs/` 파일에도 그대로 적용된다는 것.
+
+## 87. `eval/run.py::publish()` — 같은 버그의 두 번째, 안 고쳐진 사본 (2026-08-28)
+
+§85 에서 고친 `mlflow_report.py::publish()` 는 학습 잡의 `preflight.*`/`setup.*`/
+`train.*` 는 전부 태그로 정상 도착시켰다. 그런데 완료된 스모크 잡
+`tidy_bee_b4q7j1479y`(train→eval 체인)를 `runs/get` 으로 직접 조회하니
+`eval.kobest.base` 는 `lastvalues` 에 이름만 등록(`[null]`)돼 있고 `eval.*` 태그는
+**하나도** 없었다. §85 에서 고친 코드가 이 잡에도 이미 실려 있었는데 재발한 것 —
+추측하지 않고 `eval/run.py::publish()` 를 직접 읽었다.
+
+**원인**: 이 함수는 `mlflow_report.publish()` 로 옮겨간 적이 없는 **독립된 자기 사본**이었다.
+델타 메트릭 루프 전체와 `eval.model`/`eval.adapter`/`eval.benchmarks` 태그 세 줄을
+**하나의 공유 try/except** 로 감싸고 있었다 — §85 가 고친 것과 정확히 같은 모양이,
+스토리지를 아예 안 타는 태그까지 같이 물귀신으로 끌고 들어간 것.
+
+**고침**: 새 구현을 짜지 않았다. `eval/run.py::publish()` 의 리포트(`comparison` 행 +
+`model`/`adapter`/`benchmarks`)를 평평한 dict 로 펴서 이미 고쳐지고 검증된
+`mlflow_report.publish()` 에 위임 — 함수에 `except` 가 하나도 안 남았다.
+TDD: `tests/test_eval_publish.py` 4개 작성, 두 번째 테스트(`raise_on="metric"`)가
+고치기 전 코드에서 정확히 이 라이브 버그를 재현(`fake.tags == {}`)함을 먼저 확인한
+뒤 고침 적용, 4개 전부 통과. 가드 테스트
+(`test_no_except_handler_hands_a_caller_an_empty_value_it_never_read.py`)의
+`ALLOWLIST` 에서 이제 사라진 옛 핸들러 항목(`except ImportError::EMPTY_RETURN`)을
+지우고 census 를 28→27 로 갱신(Round 10 문단 추가). 전체 스위트, `ruff check .` 클린.
+
+**배포·재검증**: `az acr build --registry acrffsftkc --image ffsft-train:15
+--file docker/Dockerfile.train .` → Run ID `de1h`, 7분8초, 성공. `TRAIN_IMAGE`
+를 `:14`→`:15` 로 올리고(빌드 성공 **후**에만) Lab 2 §2 스모크 명령을 그대로
+재제출(`--model qwen3.5-0.8b --mix ko_smoke --max-steps 10 --max-seq-length 512
+--rank 8 --eval-suite ko_fast --eval-limit 5`) — 잡 `yellow_beard_5y1wbj0cpt`.
+
+```
+train.train_loss = 1.6979 / train.wall_seconds = 301.4 / train.vram_peak_gb = 2.79
+eval.model = qwen3.5-0.8b
+eval.adapter = /mnt/azureml/.../model_dir
+eval.benchmarks = kobest
+eval.kobest.base = eval.kobest.tuned = 0.4  (delta 0.0)
+eval.kobest_{boolq,copa,hellaswag,sentineg,wic}.{base,tuned}  delta 0.0 전부
+```
+
+델타가 전부 0.0 인 것은 버그가 아니다 — `--eval-limit 5` 의 0.2 단위 조도에서
+10-step 스모크 학습은 그 안에 들 만큼의 변화를 만들지 않는다는 것이 Lab 2 §2(b)
+기준 잡(`hungry_bell_lpf45kx8kv`)에 이미 문서화돼 있다. `watch_jobs.sh` 스트림과
+별개로 `runs/get` 을 직접 재조회해 `status: FINISHED`, 위 태그 전부, 그리고
+`eval.*` METRIC 이 하나도 안 남았음(폴백이 전부 태그로 갔다는 뜻)을 독립적으로
+확인했다.
+
+**잰 것**: `eval/run.py::publish()` 가 실제 테넌트에서 정체성 태그(`eval.model`
+등)와 델타 전부를 이제 하나도 안 잃고 발행한다는 것 — §85 의 고침이 코드베이스
+전체가 아니라 **그 파일에서만** 적용됐었다는 사실 자체가 CLAUDE.md 의 "불변식은
+파일 단위로 지켜진다" 교훈(§73.7)의 또 다른 사례.
+**아직 안 잰 것**: `src/ffsft/` 안에 `mlflow.log_metric`/`mlflow.set_tag` 를 직접
+부르는 세 번째 사본이 없는지는 grep 으로만 확인했다 — ast 가드가 이 모양
+(빈 반환이 아니라 *공유된 부수효과 손실*)을 아직 못 본다는 것은 열린 채로 둔다.
+
+## 88. 27B 디스크 풀 실패 — 근본원인은 호스트별 임시디스크 편차, 캐시 잔류 아님 (2026-08-28)
+
+`helpful_nail_kht6x5r1pf`(`qlora-qwen3.8-27b`, `rg-ffsft-e2erun`/`mlw-e2erun`)가
+`UserScriptFilledDisk` 로 실패. §50 이 이미 문서화한 "노드 로컬 디스크 64GB, 이미지+
+54GB 모델 다운로드 후 여유 1332MB" 전제를 두고, 8개 가설을 하나씩 직접 측정으로 배제:
+
+1. `workshop-restructure` 브랜치의 미커밋 ~90개 파일이 이미지에 섞였는가 → 아니다.
+   `.dockerignore` 가 `.venv/`, `.git/`, `docs/`, `tests/` 를 전부 제외 — 빌드
+   컨텍스트에 안 들어간다.
+2. `ffsft-train:6→:15` 아홉 번 재빌드로 이미지가 커졌는가 → 아니다. ACR 매니페스트
+   `imageSize` 실측 10.36GB→10.38GB, ~20MB 증가뿐.
+3. 새 워크스페이스(`rg-ffsft-e2erun`)의 클러스터 설정이 기준 잡과 다른가 → 아니다.
+   동일 컴퓨트명(`gpu-a100-lp`), 동일 SKU, 동일 LowPriority, 동일 리전.
+4. 크로스-레지스트리 풀(`acrffsftkc.azurecr.io`)이 문제인가 → 아니다. 같은 이미지로
+   0.8B 스모크 잡(`yellow_beard_5y1wbj0cpt`)이 이 워크스페이스에서 이미 성공.
+5. 제출 커맨드/플래그가 §23 기준 잡과 다른가 → 아니다. ARM `jobSpecification` 을
+   직접 조회, `ko_commercial_safe`/`ko_fast`/`eval_limit=25`/rank16/seq1024 까지 동일.
+6. `configs/models.yaml` 의 `qwen3.8-27b` 항목이 드리프트했는가 → 아니다.
+   `git diff HEAD` 확인, 이 항목은 무변경(변경분은 `qwen3.5-0.8b` 뿐, §86).
+7. `HF_HOME=/mnt/hf` 완화책이 빠졌는가 → 아니다. `aml_job.py` 에 존재.
+8. 더 큰 디스크 SKU(`NC48ads`/`NC96ads`)로 바꿀 수 있는가 → 아니다. 원시
+   `az vm list-skus` 는 제약을 안 보여주지만, 이 리포의 `GPU_SKUS` 레지스트리가
+   두 SKU 모두 `low_priority: False` 로 이미 기록 — `check_sku_fits()` 가 제출
+   전에 거부한다. Dedicated 쿼터도 기본 부재(테넌트 정책, §20.3).
+
+**남은 가설**: 같은 클러스터에서 먼저 돈 8개의 작은 잡(스모크·프리플라이트)이
+`/mnt/hf` 에 잔류 캐시를 남겨, 27B 다운로드 전에 이미 여유분을 갉아먹었는가.
+
+이를 직접 재려고 진단 잡(`command()`, 코드 스냅샷 없이 인라인 셸)을 같은
+`gpu-a100-lp`/`ffsft-train:15` 로 두 번 제출:
+
+- 1차(`coral_rainbow_xg6dbnwdd0`, `df/du/find` 를 stdout 으로) — 로그를 못 읽었다.
+  이 워크스페이스의 잡은 **성공/실패 무관하게 전부** `Common Runtime
+  (hosttools-capability): Failure detected in the log streaming` 경고를 달고
+  있고 Run History 아티팩트 목록이 0건이었다 — `yellow_beard`, `helpful_nail`,
+  `ivory_town` 세 개를 교차 확인, 전부 동일 증상. **이 워크스페이스는 stdout/
+  아티팩트 채널 자체가 죽어 있다** — 이전 세션에서 반복됐던 로그 조회 400/404 들이
+  API 오용이 아니라 이 사실 때문이었다는 뜻. `mlflow.set_tag`/메트릭 채널은 살아
+  있음(§87 에서 이미 확인한 경로).
+- 2차(`tidy_moon_36v6z4b8sp`) — 같은 진단을 stdout 대신 `mlflow.set_tag` 청크로
+  우회. 결과:
+  ```
+  df -h: overlay(=/)   124G, 57G used, 68G avail
+         /dev/sdb1(=/tmp)  63G, 501M used, 59G avail
+  /mnt 하위: azureml/ 40M 뿐. /mnt/hf 자체가 존재하지 않음.
+  ```
+
+**결론**: 잔류 캐시 가설은 기각 — 새로 할당된 노드는 `/mnt/hf` 가 아예 없는 완전히
+깨끗한 상태로 시작한다(스케일-투-제로 LowPriority 클러스터이니 당연한 결과). 대신
+§50 이 "노드 로컬 디스크 = 64GB" 로 잰 수치 자체가 이번 측정과 안 맞는다: 이번
+노드는 `/mnt` 가 얹힌 오버레이 루트(`/`)가 124GB 에 68GB 여유(모델 다운로드도 전에
+이미지만 풀려 57GB 를 이미 쓴 상태 — ACR 압축 크기 10.38GB 의 CUDA/PyTorch 이미지가
+압축 해제되면 이 정도로 부푸는 것 자체는 이상하지 않다). §50 이 쟀던
+`AZ_BATCH_NODE_ROOT_DIR` 64GB 는 이 노드의 `/dev/sdb1`(63GB, `/tmp`)쪽과 값이
+비슷해 그쪽을 쟀을 가능성이 있고, `/mnt` 는 별도 마운트(오버레이 루트)였을 수 있다
+— 또는 LowPriority 할당마다 실제 물리 호스트가 달라 로컬 임시디스크 크기 자체가
+편차를 갖는다는 뜻. 어느 쪽이든 **결정론적 코드/설정 버그가 아니라 호스트별(또는
+경로별) 디스크 가용량 편차**이고, 같은 구성으로 27B 가 이미 두 번(§20, §23)
+성공했다는 사실과 일치한다.
+
+**따라서**: 추가 코드 변경 없이 27B 잡을 그대로 재제출한다 — 디버깅 절차의
+"원인이 환경적/편차성으로 확인되면 문서화하고 적절한 처리(재시도)로 넘어간다"는
+결론에 따른 것.
+
+**잰 것**: 이 워크스페이스의 stdout/아티팩트 업로드 경로가 전 잡에 걸쳐 죽어 있다는
+것(신규 발견, 앞으로 로그 조회는 태그/메트릭 채널만 신뢰). `/mnt/hf` 잔류 캐시가
+없다는 것. 새로 할당된 노드 1개 표본의 오버레이 루트가 124GB/68GB-여유라는 것.
+**안 잰 것**: 실패했던 그 특정 노드의 실제 여유 공간(이미 사라졌다) — 호스트 편차가
+진짜 원인인지, 27B 학습이 다운로드 외에 추가로 디스크를 쓰는 다른 경로가 있는지는
+재시도 결과로만 확인 가능.
+
+## 89. §88 결론 기각 — 재시도가 동일 증상으로 재실패, "호스트 편차" 는 틀렸다 (2026-08-28)
+
+§88 이 "추가 코드 변경 없이 재제출" 이라 결론 내린 직후 재제출한 27B 잡
+(`gentle_seal_f8q9h9h27s`, §23 과 동일 구성)이 **동일하게** `UserScriptFilledDisk`
+로 실패. 이번엔 14분19초 만에, MLflow 메트릭 0건 상태로 — 즉 학습 진입 전,
+다운로드/로드 단계에서 죽었다. 같은 신선한 클러스터에서 **2/2 실패**, 정적
+스냅샷(`tidy_moon_36v6z4b8sp`, 68GB 여유)과 모순. "드문 호스트 편차라 재시도하면
+된다" 는 §88 의 결론은 **기각**한다 — 검증 없이 재시도부터 한 것 자체가 이 리포의
+디버깅 원칙(§88 인용) 오적용이었다: "환경적 원인 확정" 은 정적 스냅샷 1건이 아니라
+실제 재현 시도 결과로 뒷받침돼야 했다.
+
+**남은 가설(미검증)**: 정적 스냅샷은 다운로드를 실제로 실행하지 않았다 — 다운로드/
+로드 *도중* 디스크 사용량이 모델 최종 크기(54GB)보다 훨씬 크게 순간적으로 치솟을
+가능성(샤드 재개 상태, 포맷 변환, 잠금파일 등)을 스냅샷 1장으로는 볼 수 없다.
+
+이를 재려고 3차 진단 잡을 제출: 실제 트레이너 진입점(`python -m ffsft.train.qlora`,
+재구현이 아니라 §23 이 실제로 쓰는 그 코드 경로)을 `--max-steps 1 --max-samples 8`
+로 한 스텝만 돌리면서, 백그라운드 샘플러가 `df -B1 --output=avail` 을 3초 간격으로
+`/`, `/mnt` 양쪽에 기록 → MLflow 태그로 청크 발행. 다운로드 도중 여유 공간이 실제로
+어떻게 줄어드는지 시계열로 처음 확인하는 시도(`plum_kettle_c66p5p0tc1`, 진행 중).
+
+**잰 것**: 재시도가 실제로 실패했다는 것(2회 연속, 동일 에러, 동일 구성) — §88 의
+"안 잰 것" 항목이 이번 실패로 답을 얻음(호스트 편차 단독 가설로는 설명 불충분).
+**안 잰 것**: 다운로드 도중 디스크 사용량의 실제 시계열 — 위 3차 진단 잡 결과 대기 중.
+
+## 90. 진짜 근본원인 확정 — 다운로드가 여유공간을 거의 다 먹는다, 캐시 정리로 해결 (2026-08-28)
+
+3차 진단 잡(`plum_kettle_c66p5p0tc1`, `--max-steps 1 --max-samples 8`)이 §89 가
+설계한 그대로 완료. 3초 간격 `df -B1 --output=avail /` 시계열(MLflow
+`disksamp_00..02` 태그)을 재구성한 결과:
+
+```
+t+0s   avail ≈ 48.7 GB  (샘플러 기동 직후, 이미지 언팩 직후 상태)
+t+3s   avail ≈ 67.4 GB  (다운로드 시작 직전 — 짧은 정리로 여유가 순간 늘어남)
+...    단조 감소, 다운로드/로드 내내 3초마다 계속 줄어듦...
+t+490s avail ≈  6.8 GB  (학습 진입, 1스텝 완료 후)
+최종   df -h: overlay 124G, 118G used, 6.8G avail (95%)
+```
+
+**모델 하나를 다운로드+로드하는 데 실제로 소비된 디스크는 ~65GB** — §88 이 가정한
+"평평한 54GB" 를 훌쩍 넘는다. 시작 시점 여유(~67GB, §88 이 잰 정적 스냅샷과 일치)
+대비 남는 마진은 **6.8GB 뿐**, 그것도 이 진단 잡은 `--max-samples 8`
+`--max-steps 1` 로 학습 자체는 거의 안 돈 상태에서다. `train_exit=0`(성공)까지
+찍혔지만 여유는 이미 바닥.
+
+**결론**: §88/§89 의 "호스트 편차" 가설은 틀렸다 — 편차가 아니라 **구조적으로 마진이
+없다.** 다운로드된 fp16/bf16 원본 가중치는 `from_pretrained` 가 반환되고 나면
+GPU 메모리(4bit 양자화)에만 필요하고 디스크에서는 그 이후로 한 번도 다시 안 읽히는데,
+아무도 안 지워서 학습 내내 ~65GB 를 깔고 앉아 있었던 것. 실제 §23 규모 잡(전체
+`ko_commercial_safe` 믹스, 다수 스텝, 체크포인트 저장, 데이터셋 토크나이즈 캐시)은
+이 6.8GB 여유로는 어림없다 — 그래서 재현 가능하게 2/2 로 실패했다.
+
+**고침**: `src/ffsft/train/qlora.py::free_hf_download_cache()` 신규 — 모델+토크나이저
+로드 직후 `huggingface_hub.scan_cache_dir()` 로 해당 `hf_id` 의 캐시 리비전만
+`delete_revisions()` 로 삭제(참조 카운트를 보고 지우므로 다른 리포와 blob 을 공유해도
+안전). `train()` 에서 로드 직후 호출, 해제한 GB 를 `setup.hf_cache_freed_gb` 로 발행.
+스캔 자체가 실패하면(드묾) 문자열 `"scan_failed"` 를 반환해 "확인된 0GB" 와
+"확인 못 함" 을 구분 — 이 구분이 없으면
+`test_no_except_handler_hands_a_caller_an_empty_value_it_never_read.py` 가 잡는다
+(처음 구현은 `except: return 0.0` 으로 썼다가 이 테스트에 걸려 고쳤다). 훈련 로직/
+하이퍼파라미터는 무변경 — 디스크 정리만 추가, §20/§23 기준값(`train_loss`,
+`vram_peak_gb`)에 영향 없음.
+
+검증: `tests/test_qlora_config.py` 에 `free_hf_download_cache` 단위테스트 3개
+(정상 삭제 / 캐시 없음 / 스캔 실패) 추가. 전체 스위트 1241 passed, 2 skipped,
+1 xfailed(기준선), `ruff check` 클린.
+
+**다음**: 이 고침을 실은 이미지로 27B 잡 재제출 — 지금까지 실패 2회는 전부 이 코드
+변경 전 이미지였으므로, 이번이 고침 이후 첫 실제 검증.
+
+**잰 것**: 다운로드/로드 도중 여유공간의 실제 시계열(3초 간격, t+490s 까지) —
+모델 자산 자체가 ~65GB 를 쓴다는 것, 이게 시작 여유(~67GB)의 대부분이라는 것.
+**안 잰 것**: 고침을 실제 27B 풀 스케일 잡에 적용했을 때 정말 통과하는지 —
+재제출로 확인 예정.
+
+## 91. 이미지 재빌드(`:16`) + 고침 실측 확인 — 다운로드 후 여유공간이 실제로 회복된다 (2026-08-28)
+
+§90 이 코드만 고치고 이미지는 안 바꿨다는 점을 이어받아, 이 코드 변경을 실제 GPU 잡에
+반영하는 절차를 밟았다. 이 리포는 코드를 이미지에 굽는 구조(`aml_job.py` 모듈
+독스트링)라 소스 변경만으로는 다음 제출에 반영되지 않는다.
+
+- `TRAIN_IMAGE` 를 `acrffsftkc.azurecr.io/ffsft-train:15` 에서
+  `acre2eruncvhaw5sbfy2lm.azurecr.io/ffsft-train:16` 으로 변경 — **레지스트리 자체를
+  바꿨다.** `acrffsftkc` 는 `rg-ffsft-kc` 소속(별도 리소스 그룹), 이번 라이브 실행은
+  자기 자신의 리소스 그룹(`rg-ffsft-e2erun`)만 건드린다는 원칙을 지키려면 그 그룹의
+  ACR(`acre2eruncvhaw5sbfy2lm`)에 새로 빌드해야 했다. `ENVIRONMENT_VERSION =
+  image_tag(TRAIN_IMAGE)` 가 자동으로 "16" 으로 파생됨. 전체 스위트 재확인: 1241
+  passed 그대로(레지스트리 문자열은 어떤 테스트도 하드코딩하지 않음, `aml_job.TRAIN_IMAGE`
+  간접 참조뿐).
+- `az acr build --registry acre2eruncvhaw5sbfy2lm --image ffsft-train:16` 로 실제
+  빌드+푸시. 15분57초, 성공 (`Run ID: nd1`).
+- GPU 잡을 걸기 전에 `az acr run` 으로 값싸게(ACR 컴퓨트, 초 단위 과금) 이미지 안에
+  고침이 실제로 들어있는지 확인: `hasattr(qlora, "free_hf_download_cache")` →
+  `True`. (`Run ID: nd3`, 4분37초)
+- 그 다음에도 곧장 §23 규모 실 잡을 걸지 않고, §90 이 쓴 것과 똑같은 디스크 샘플링
+  진단 잡을 `:16` 환경으로 재실행(`serene_rice_5wp204blbk`, `aml_job.ensure_environment()`
+  경유로 제출해 환경 버전 드리프트 가드까지 그대로 통과) — 이미지 안에 있다는 것과
+  런타임에서 실제로 작동한다는 것은 다른 확인이라는 점, 그리고 §89 의 교훈("검증 없이
+  재시도부터 한 것 자체가 오적용")을 그대로 적용했다.
+
+재구성한 `disksamp16_*` 시계열(3초 간격):
+
+```
+t+0s    avail ≈ 52.5 GB  (이미지 언팩 직후)
+t+3s    avail ≈ 72.5 GB
+...     단조 감소(다운로드 진행)...
+t+346s  avail ≈ 17.0 GB  (바닥 — §90 의 6.8GB 보다는 낮지 않지만 여전히 임계 수준)
+t+349s  avail ≈ 24.9 GB  ┐
+t+352s  avail ≈ 45.1 GB  ├ free_hf_download_cache() 발동 구간 — 12초 안에 급회복
+t+355s  avail ≈ 61.9 GB  ┘
+t+358s  avail ≈ 72.5 GB  (거의 다운로드 시작 전 수준까지 복귀)
+...     이후 완만히 감소하며 안정...
+최종    df -h: overlay 124G, 66G used, 59G avail (53%)
+```
+
+**결론**: 고침이 실측으로 확인됐다 — 바닥(~17GB)을 찍은 직후 캐시 삭제로 여유공간이
+~55GB 즉시 회복되고, 이 진단 잡의 최종 상태는 `95% used / 6.8GB avail`(§90, 고침 전)
+이 아니라 `53% used / 59GB avail`(고침 후)이다. 다운로드 자체가 여유공간을 먹는
+구조적 문제는 그대로지만, 학습이 실제로 도는 구간에서는 그 디스크를 돌려받는다 —
+§23 규모(다수 스텝, 체크포인트 저장, 데이터셋 토크나이즈 캐시)가 필요로 할 여유가
+이제 59GB 수준에서 시작한다는 뜻.
+
+**다음**: §23 과 동일 구성(`--model qwen3.8-27b --mix ko_commercial_safe --rank 16
+--max-seq-length 1024 --batch-size 1 --grad-accum 16 --max-steps 30`)의 실제 27B
+잡을 `ffsft-train:16` 으로 제출 — 고침 이후 첫 풀 스케일 실 검증.
+
+**잰 것**: `:16` 이미지가 실제로 고침을 담고 있다는 것(정적 확인) + 그 고침이 런타임에
+실제로 디스크를 회복시킨다는 것(동적 확인, 시계열로 재확인). **안 잰 것**: 30스텝
+전체 실 잡에서 체크포인트 저장·토크나이즈 캐시까지 겹쳤을 때도 이 59GB 여유로
+충분한지 — 이번 진단은 1스텝/8샘플이라 그 부하를 재현하지 않는다.
+
+## 92. `:16` 으로 제출한 실 27B 잡 — 학습은 통과, eval 이 같은 원인으로 재실패 (2026-08-28)
+
+§91 이 "안 잰 것"으로 남긴 질문(59GB 여유가 §23 규모 전체 잡에서 충분한가)에 답하려고
+`ffsft-train:16` 으로 실 잡(`hungry_apricot_by79l2hkty`, §91 과 동일 구성 — `--model
+qwen3.8-27b --mix ko_commercial_safe --rank 16 --max-seq-length 1024 --batch-size 1
+--grad-accum 16 --max-steps 30`, `eval_suite=ko_fast --eval-limit 25` 체이닝)를 제출했다.
+
+**학습 자체는 완주했다** — §91 이 확인한 고침이 정확히 겨냥한 구간(30스텝, 체크포인트
+저장, 데이터셋 토크나이즈 캐시 전부 포함)에서 디스크가 버텼다는 뜻으로, §91 의 남은
+질문에 대한 답은 "그렇다"다. 그런데 같은 잡에서 체이닝된 **eval 단계가
+`UserScriptFilledDisk` 로 재실패**했다 — §88/§89 가 학습 쪽에서 봤던 것과 동일한
+증상이 이번엔 eval 쪽에서 나타난 것.
+
+**근본원인**: `free_hf_download_cache()` 는 §90 에서 `train/qlora.py::train()` 안에만
+추가됐다. 그런데 `eval/run.py::evaluate()` 는 같은 프로세스 안에서 `run_harness()` 를
+**두 번** 호출한다 — 한 번은 베이스 모델(`spec.hf_id`), 한 번은 어댑터를 얹은 튜닝
+모델(같은 `spec.hf_id` + adapter). 두 호출 모두 `load_for_eval()` 로 같은 가중치를
+다시 `from_pretrained` 하는데, 이 경로엔 캐시 정리가 전혀 없었다. 즉 학습이 끝나며
+남긴 디스크 여유(§91: 59GB) 위에서 eval 이 같은 ~65GB 짜리 다운로드를 **두 번 더**
+반복하며 재현한 것과 동일한 구조적 문제로 다시 바닥을 찍었다 — `train/qlora.py` 만
+고치고 `eval/run.py` 를 안 고친 게 원인. 학습과 eval 이 같은 노드/같은 프로세스에서
+체이닝되므로, 학습 쪽 여유 회복은 eval 쪽 소비를 상쇄하지 못한다.
+
+**고침**: `free_hf_download_cache()` 를 `train/qlora.py` 밖으로 꺼내 새 최상위 모듈
+`src/ffsft/hf_cache.py` 로 옮겼다 — `train` 쪽만 고치면 `eval` 이 그걸 쓰려고
+`ffsft.train` 을 import 해야 하는데, 이는 `mlflow_report.py` 가 이미 겪고 고쳐 놓은
+것과 같은 종류의 불필요한 트랙 간 결합(`serve → train` 교차 edge, 워크샵 재정비
+계획 §1.1)이라 피했다. `qlora.py::train()` 은 새 위치에서 import 하도록 한 줄만
+변경(기존 lazy-import 스타일 유지). `eval/run.py::run_harness()` 에 최상위 import
+한 줄(이 파일의 기존 관례 — `qlora.py` 와 달리 top-level relative import 를 씀) +
+두 모델 로드 중 이후에 `free_hf_download_cache(hf_id)` 호출을 각각 추가 — 베이스
+로드 직후, 튜닝 로드 직후 두 곳 다. 두 번째 호출이 다시 다운로드하기 전에 첫 번째가
+남긴 캐시를 지우는 순서라 안전하다. `tests/test_qlora_config.py` 의 import 를 새
+위치로 갱신(파일 자체는 이동하지 않음 — `test_train_report.py` 가 `mlflow_report.py`
+이동 때 세운 선례).
+
+**검증**: `uv run pytest` — 1241 passed, 2 skipped, 1 xfailed(§90/§91 과 동일 기준선,
+함수를 옮겼을 뿐 테스트를 추가하지 않아 총계 불변), `ruff check .` 클린. 아직
+`az acr build` 로 이미지에 반영하지 않았고, GPU 잡으로 실측하지도 않았다 — 로컬
+검증만 끝난 상태.
+
+**다음**: 이 고침을 실은 새 이미지(`ffsft-train:17`, `acre2eruncvhaw5sbfy2lm`)를
+`az acr build` 로 빌드 → `TRAIN_IMAGE`/`aml_job.py` 주석 갱신 → §91 과 같은 순서로
+값싸게 먼저 확인(정적: `hasattr(hf_cache, "free_hf_download_cache")` 및
+`eval.run` 이 그걸 실제로 참조하는지, 동적: train+eval 을 작게 체이닝한 디스크
+샘플링 진단으로 eval 쪽에서도 회복이 실측되는지) → 그 다음에야 §23 규모 실 27B
+`train && eval` 잡을 재제출한다. §89 의 교훈(검증 없이 재시도부터 하는 것 자체가
+오적용)을 그대로 따른다 — 학습이 이미 한 번 통과했다고 해서 다음 제출에서 eval 까지
+통과한다고 가정하지 않는다.
+
+**잰 것**: `hungry_apricot_by79l2hkty` 에서 학습 단계가 30스텝 전체(체크포인트 저장,
+토크나이즈 캐시 포함)를 §91 의 59GB 여유로 완주했다는 것. eval 단계가 정확히 어느
+지점(베이스 로드 직후인지 튜닝 로드 직후인지)에서 디스크를 다 썼는지는 이번엔 별도
+디스크 샘플링을 붙이지 않아 시계열로는 못 쟀다 — 코드 리딩(두 번째 `run_harness`
+호출이 같은 `hf_id` 를 다시 로드하는 경로)으로 원인을 특정했을 뿐. **안 잰 것**: 이
+고침을 실은 이미지에서 eval 단계가 실제로 완주하는지 — 재빌드 후 확인 예정.
+
+## 93. `:17` 빌드 · 정적/동적 이중 검증 · 실 27B 잡 재제출 (2026-08-28)
+
+§92 의 "다음"을 그대로 밟았다. `az acr build`(`acre2eruncvhaw5sbfy2lm`, run `nd4`)로
+`ffsft-train:17` 빌드 성공. `TRAIN_IMAGE`(`aml_job.py`)를 `:17` 로 올리고 주석에
+§92 근거를 남김 — `ENVIRONMENT_VERSION = image_tag(TRAIN_IMAGE)` 는 파생값이라
+따로 안 건드림. 재검증: `uv run pytest` 1241 passed / 2 skipped / 1 xfailed,
+`ruff check .` 클린 — 태그만 바뀌었으므로 불변.
+
+**정적 검증**(`az acr run --cmd`, run `nd6`, 4m30s): 이미지 안에서 직접
+`hasattr(hf_cache, "free_hf_download_cache")`, `"hf_cache" in
+inspect.getsource(qlora.train)`, `inspect.getsource(run.run_harness).count(
+"free_hf_download_cache(")` 세 가지를 확인. 결과 `True` / `True` / `1` — 이미지가
+로컬에서 고친 코드를 실제로 담고 있다는 것을 재빌드가 아니라 이미지 자체에서 확인.
+(첫 시도 `nd5` 는 `print` 라벨 문자열의 콜론이 `az acr run` 의 내부 YAML 직렬화를
+깨서 실패 — 라벨을 `=` 로 바꿔 한 줄 one-liner 로 재작성해 해결.)
+
+**동적 검증**(`amusing_pasta_mdzhj85y73`): `--max-steps 1 --max-samples 8` 학습에
+`--suite ko_fast --limit 5` eval 을 체이닝하고, 3초 간격 `df` 샘플러를 백그라운드로
+돌려 MLflow 태그(`disksamp17_*`, `train_exit`, `eval_exit`)로 청크 저장하는 작은
+진단 잡을 §91/§90 과 같은 패턴으로 제출. **`Completed`**, `train_exit=0`,
+`eval_exit=0`. `eval.kobest.*` 계열 태그(base/tuned/delta, 5개 하위 태스크)가 실제로
+채워짐 — eval 이 태그를 남길 정도로 끝까지 갔다는 뜻. 디스크 시계열: 72GB → 최저
+~6.6GB → 62GB 로 회복하는 사이클이 **정확히 세 번** 반복(학습 1회 + eval 의
+`run_harness` 두 번 호출과 일치) 됐고, 마지막 `df -h` 는 `59G avail / 53% use` —
+바닥을 찍은 적이 한 번도 없음. §92 의 가설(원인은 eval 의 캐시 미정리, 고침은 세
+번째 회복 사이클을 만드는 것)이 실측으로 확인됨.
+
+이 세션 자체에서 나온 사고: `az ml` CLI 확장이 이 세션의 `AZURE_CONFIG_DIR` 에서
+설치가 안 됨(`az extension add -n ml` 도 동일 pip 오류로 실패) — 잡 상태 폴링을
+`az ml job show` 대신 이미 검증된 Python SDK 패턴(`AzureTarget.from_env()` /
+`get_ml_client()` / `client.jobs.get(name).status`)으로 바꿔 우회. MLflow 태그도
+로컬 venv 에 `mlflow` 가 없어 `mlflow.tracking.MlflowClient` 대신
+`client.jobs.get(name).tags` (Azure ML SDK 의 job 객체가 이미 태그를 갖고 있음)로
+읽음 — 둘 다 작업 자체와 무관한 로컬 도구 문제였고 진단 잡 결과에는 영향 없음.
+
+**고침**: 없음 — 이 절은 §92 고침의 검증.
+
+**검증**: 정적 + 동적 이중 확인 완료, 위 문단.
+
+**다음**: `:17` 로 실 27B `train && eval` 잡(`--model qwen3.8-27b --mix
+ko_commercial_safe --rank 16 --max-seq-length 1024 --batch-size 1 --grad-accum 16
+--max-steps 30`, `eval_suite=ko_fast --eval-limit 25`)을 재제출한다. 이번엔 학습과
+eval 모두 완주가 기대치 — 안 되면 §92 로 되돌아가 재진단.
+
+**잰 것**: `:17` 이미지가 §92 의 코드 수정을 실제로 담고 있음(정적). 작은 규모
+train+eval 체이닝이 디스크를 바닥내지 않고 세 번의 회복 사이클로 끝까지 감(동적).
+**안 잰 것**: §23 규모(30스텝, 실제 데이터량)의 실 27B 잡에서도 같은 회복 사이클이
+반복되는지 — 규모가 커지면 다운로드/체크포인트 크기도 커지므로 최저점이 더 낮아질
+가능성은 남아 있다. 다음 절에서 실측.
+
+## 94. `:17` 실 27B 잡 재실패 — 세 번째 원인, HF `datasets` 변환 캐시가 안 지워짐 (2026-08-29)
+
+§93 이 "다음"으로 남긴 실 27B 잡(`serene_worm_4bflhr1hjj`, `:17`, `--model qwen3.8-27b
+--mix ko_commercial_safe --rank 16 --max-seq-length 1024 --batch-size 1 --grad-accum 16
+--max-steps 30`, `eval_suite=ko_fast --eval-limit 25`)을 제출했다. **`Failed`**,
+그런데 이번엔 §92 와 다른 지점에서 죽었다 — `train.*` 태그(`train.wall_seconds=4944.4`,
+`train.train_loss=1.4135` 등)와 `setup.hf_cache_freed_gb=55.59` 가 전부 채워져 있어
+**학습은 완주**했고 §92/§93 의 모델 가중치 캐시 정리도 실제로 작동했다는 뜻인데,
+`eval.*` 태그가 하나도 없다 — eval 이 첫 번째 모델 리로드를 채 끝내기 전에
+`UserScriptFilledDisk` 로 죽었다.
+
+**§89 의 규율**(검증 없이 재시도부터 하는 것 자체가 오적용)을 따라, 실 A100 잡을 더
+쓰기 전에 코드 추적 + 저비용 실측으로 먼저 원인을 좁혔다.
+
+**코드 추적**: `qlora.py::train()` 호출 순서 — `load_model_and_tokenizer()` →
+`free_hf_download_cache(spec.hf_id)`(330행, §92/§93 이 고친 것) → `load_sft_dataset(
+mix=cfg.mix, ..., max_samples=cfg.max_samples, ...)`(337행). 즉 모델 캐시 정리는
+데이터 로딩보다 **먼저** 끝난다 — 데이터 로딩 비용은 순수하게 얹힌다. 그리고
+`aml_job.py`(78행 `max_samples: int | None = None`, 239행
+`if job.max_samples: parts.append(...)`) 를 보면 실 잡의 `JobSpec` 은 `max_samples`
+를 한 번도 설정한 적이 없어 `--max-samples` 플래그 자체가 안 붙는다. `korean.py::
+load_sft_dataset()` 에서 `per_source = max_samples // len(entries) if max_samples
+else None` 이 `None` 이 되면 모든 6개 데이터셋이 `split = "train"`(슬라이스 없음)으로
+전체를 읽고, `.map()`/`.filter()`/`concatenate_datasets()`/`.shuffle()` 매 단계가
+`HF_DATASETS_CACHE`(`aml_job.py` 306행 `HF_HOME=/mnt/hf`, `df -h` 로 `/mnt` 이 별도
+마운트가 아니라 `overlay` 위에 있음을 재확인) 아래 새 Arrow 캐시 세대를 디스크에
+쓴다. 이 캐시는 모델 가중치 캐시와 달리 **아무도 안 지운다**.
+
+**동적 실측**: 실 A100 잡을 또 쓰기 전에, GPU 가 필요 없는 `az acr run`(§93 의 정적
+검증과 같은 저비용 벡터, 이번엔 진짜 코드를 진짜 입력으로 돌리는 동적 실측)으로
+`:17` 이미지 안에서 `load_sft_dataset(mix="ko_commercial_safe", max_samples=None)`
+— 실 잡과 완전히 같은 경로 — 를 백그라운드 디스크 샘플러(2초 간격)와 함께 직접
+호출했다(run `nd7`, 7m5s). 결과: `EXAMPLES=1298685`(실 잡의
+`setup.examples=1298608` 과 근접 일치, 같은 데이터량을 로드했다는 뜻),
+`FIRST_AVAIL_GB=291.92` → `MIN_AVAIL_GB=LAST_AVAIL_GB=279.12` — **12.8GB 를 영구
+소비하고 회복 안 됨**. (스크립트를 `az acr run --cmd` 에 넘길 때 §93 의 `nd5`
+콜론 사고를 되풀이 안 하려고 base64 로 인코딩해 콜론 없는 one-liner 로 감쌌다.)
+
+§91 의 소규모 진단(`amusing_pasta_mdzhj85y73`, `--max-samples 8`)에서 이미 eval 의
+튜닝 모델 리로드 구간이 최저 ~6.6GB 까지 내려가는 걸 봤다 — 그 잡은 데이터 캐시
+비용이 0(슬라이스가 작아 `per_source` 경로를 탔으므로). 그 이미 얇은 여유 위에
+실 잡에서만 발생하는 12.8GB 의 영구 소비를 얹으면 실 잡의 최저점은 확실히
+마이너스로 밀린다 — `eval.*` 태그가 하나도 없는(첫 리로드 완주 전 사망) 관측과
+정확히 맞아떨어진다.
+
+부수 발견(원인과 무관, 조치 안 함): `MarkrAI/KOpen-HQ-Hermes-2.5-60K` 는 gated
+데이터셋이라 `HF_TOKEN` 없이는 `DatasetNotFoundError` 로 스킵된다 — 이미 allowlist
+된 `data/korean.py::load_sft_dataset::except Exception::SWALLOW_KEEPS_DEFAULT`
+핸들러가 그대로 삼킨다. 실 잡도 `HF_TOKEN` 이 없다면 같은 이유로 6개 중 5개만
+썼을 가능성이 있음 — 디스크 원인과 별개의 정확도 이슈라 이번 절에서는 안 건드림.
+
+**고침**: `korean.py::load_sft_dataset()` 맨 앞에서 `datasets.disable_caching()` 을
+호출 — `pyproject.toml` 이 핀한 `datasets>=4.8` 의 안정 공개 API. `.map()`/
+`.filter()`/`concatenate_datasets()`/`.shuffle()` 결과를 디스크에 새 Arrow 세대로
+안 쓰고 메모리에 유지한다. 원본 `load_dataset()` 다운로드/파케이→Arrow 변환 자체
+(~2.9GB, HF Hub API `size` 엔드포인트로 별도 확인)는 그대로 남지만, 측정된 12.8GB
+의 지배적 원인이었던 변환-캐시 배증은 제거한다. `free_hf_download_cache()` 쪽
+로직은 손 안 댐 — 이번 원인과 무관.
+
+**검증**: `ruff check src/ffsft/data/korean.py` 클린. `uv run pytest` 전체
+1241 passed / 2 skipped / 1 xfailed(고침 전과 동일 — 태그만 바뀐 §93 재검증과
+같은 이유로 불변), `-k "korean or dataset"` 12 passed 별도 확인.
+
+**다음**: `ffsft-train:18` 재빌드(§92/§93 과 동일 패턴) → §93 과 같은 정적 검증
+(`inspect.getsource(load_sft_dataset)` 에 `disable_caching` 포함 확인) → 이번
+절의 `az acr run` 진단을 `:18` 에서 재실행해 12.8GB 소비가 실제로 사라지는지
+확인(동적 재검증) → 그 다음에만 실 27B `train && eval` 잡을 재제출한다. §92 →
+§93 처럼, 한 원인을 고쳤다고 다음 원인이 없다고 가정하지 않는다.
+
+**잰 것**: 코드 추적으로 데이터 로딩이 모델 캐시 정리보다 나중에 실행되고 정리가
+전혀 없다는 것(정적). `az acr run` 으로 실 잡과 같은 `max_samples=None` 전체 믹스
+로딩이 12.8GB 를 영구 소비한다는 것, 그 예제 수가 실 잡과 근접 일치한다는 것(동적,
+GPU 없이). **안 잰 것**: `disable_caching()` 을 실은 `:18` 이미지에서 같은 진단을
+돌렸을 때 실제로 12.8GB 소비가 줄어드는지 — 재빌드 후 확인 예정. 실 27B 잡에서
+eval 이 이번엔 끝까지 가는지도 마찬가지로 아직 미확인.
+
+## 95. `disable_caching()` 은 고침이 아니었다 — 실제 고침은 `keep_in_memory=True` (2026-08-29)
+
+§94 의 "다음"대로 `:18` 을 재빌드하고 같은 `az acr run` 진단(`load_sft_dataset(mix=
+"ko_commercial_safe", max_samples=None)`)을 재실행했다(run `nda`, 7m33s):
+`EXAMPLES=1298685`, `FIRST_AVAIL_GB=291.92` → `MIN_AVAIL_GB=LAST_AVAIL_GB=279.09`,
+`DROP_GB=12.83`. `:17` 기준선(run `nd7`)의 `12.8` 과 통계적으로 동일 — **`disable_
+caching()` 은 아무것도 고치지 않았다.**
+
+**원인**: 같은 이미지 안에서 `HF_DATASETS_CACHE`/`HF_HUB_CACHE` 실제 경로를 찍어보니
+(run 별도) `/acb/home/.cache/huggingface/{datasets,hub}` 이고, `df -h` 는
+`/acb/home` 을 별도 마운트(`/dev/mapper/linux--builder--vg-root`)로 보여주지만
+크기·사용량·여유가 `overlay` 위의 `/` 와 완전히 같은 313G/34G/264G — 같은 블록
+장치를 가리키는 바인드일 뿐, 독립된 용량 풀이 아니다. `disable_caching()` 이
+`.map()`/`.filter()`/`.shuffle()`/`concatenate_datasets()` 출력을 `HF_DATASETS_CACHE`
+대신 프로세스 로컬 `/tmp/hf_datasets-*` 로 돌리지만, `/tmp` 도 같은 `overlay` 위에
+있으므로 이 "고침"은 같은 바이트를 옮기기만 할 뿐 총 소비량을 줄이지 않는다 —
+§89 규율대로 실 A100 잡을 더 쓰기 전에 잡아냈다.
+
+**후보 고침 1차 — 실패(크래시)**: 완전 인메모리화를 시험했다. `load_sft_dataset()`
+로 만든 데이터셋을 `Dataset.from_dict(ds.to_dict())` 로 다시 만들어 디스크 백킹을
+끊고, 그 다음 `HF_HUB_CACHE`/`HF_DATASETS_CACHE`/`/tmp/hf_datasets-*` 를 통째로
+삭제하는 진단(`az acr run`, run `nde`)을 돌렸다. **`exit status 137`(OOM kill)로
+7m58s 만에 죽었다** — `MATERIALISE_SEC` 줄이 한 번도 안 찍힌 걸로 보아
+`to_dict()`/`from_dict()` 호출 자체에서 죽었다. `to_dict()` 는 Arrow 컬럼 표현을
+박싱된 파이썬 객체로 통째로 복사하는 연산이라 원본보다 훨씬 무겁다는 게 알려진
+사실이고, 이번 크래시가 그걸 실측으로 확인했다. (죽기 직전까지는 정상 진행했다 —
+`EXAMPLES=1298685`, `TMP_DIRS=['/tmp/hf_datasets-8erkisuy']`, 그 안 11개 `.arrow`
+파일 합계 3.36GB, `AVAIL_BEFORE_EVICT_GB=279.08` — §94 와 근접 일치.) Phase 3 규율대로
+("Didn't work? Form NEW hypothesis. DON'T add more fixes on top.") 이 접근은 폐기,
+새 가설로 넘어갔다 — 크래시를 두고 재시도하지 않았다.
+
+**후보 고침 2차 — 성공**: `load_dataset`/`.map()`/`.filter()`/`.select()`/`.shuffle()`
+모든 단계에 `keep_in_memory=True` 를 명시해 애초에 Arrow 파일을 디스크에 안
+쓰게 만드는 가설. `korean.py` 의 실제 로직을 그대로 복제한 진단 스크립트로
+먼저 시험(`az acr run`, run `ndf`, 7m6s, 크래시 없음): `EXAMPLES=1298685`,
+`ELAPSED_SEC=162.1`(§94 기준선과 비슷), `CONCAT_IS_MEMORY_MAPPED=[]`,
+`FINAL_CACHE_FILES=[]`, `/tmp` 밑에 `hf_datasets-*` 디렉터리 0개,
+`DROP_GB=9.49`(12.8→9.49, 약 3.3GB 감소 — §94 crash 진단에서 본 3.36GB 변환-캐시
+크기와 근접 일치). 남은 9.49GB 는 `HF_HUB_CACHE`(원본 다운로드) 쪽이고, 이건
+`aml_job.py` 가 실 잡에 이미 `HF_HOME=/mnt/hf` 를 걸어 루트 디스크 밖으로 빼는
+별개 문제 — 이번 절의 범위 밖.
+
+**고침 적용**: `korean.py::load_sft_dataset()` 에서 `disable_caching()` 호출을
+지우고, `load_dataset()`/`.map()`/`.filter()`/`.select()`/`.shuffle()` 매 호출에
+`keep_in_memory=True` 를 추가했다. `concatenate_datasets()` 는 그대로 뒀다 —
+입력이 이미 인메모리면 결과도 인메모리로 남는 것을 위 진단(`CONCAT_IS_MEMORY_MAPPED=
+[]`)으로 확인했으므로 별도 인자가 필요 없다.
+
+**검증**: `uv run pytest` 전체 통과(exit 0). `ffsft-train:19` 재빌드(run `ndg`,
+7m11s, 성공). `:19` 이미지 안에서 진단 스크립트가 아니라 **진짜 `korean.py::
+load_sft_dataset` 함수를 직접 import 해서** 재실행(`az acr run`, run `ndh`, 7m15s):
+`EXAMPLES=1298685`(불변), `CACHE_FILES=[]`, `TMP_DIRS=[]`, `DROP_GB=9.49` — 진단
+스크립트로 예측한 그대로, 진짜 이미지의 진짜 함수로 재확인.
+
+**다음**: `TRAIN_IMAGE` 를 `:19` 로 갱신 완료. 이제 실 27B `train && eval` 잡을
+`:19` 로 재제출한다 — §92 → §93 → §94 처럼, 이번에도 eval 이 끝까지 가는지, 그리고
+`train.*`/`eval.*` 태그가 전부 채워지는지가 다음에 확인할 것이다.
+
+## 96. `:19` 실 A100 27B `train && eval` — **`Completed`**, §90 부터 이어진 disk-fill 아크가 실 잡에서 닫힘 (2026-08-29)
+
+§95 "다음"대로 `:19` 로 §93/§94 와 동일 설정(`--model qwen3.8-27b --mix
+ko_commercial_safe --rank 16 --max-seq-length 1024 --batch-size 1 --grad-accum 16
+--max-steps 30 --eval-suite ko_fast --eval-limit 25`)을 실 A100 LowPriority 에
+재제출했다 — 잡 `yellow_spinach_f4fshtzl3r`.
+
+`--wait` 스트림이 `nohup ... > log 2>&1 &` 로 일반 파일에 리다이렉트되어 있었던
+탓에 파이썬 stdout 이 완전 블록 버퍼링되어, 1시간 동안 로그 파일에 줄 10개(RunId/
+WebView) 밖에 안 보였다 — 멈춘 것처럼 보였지만 실제로는 버퍼가 안 flush 된 것뿐.
+"조용함 = 안 도는 것"으로 잘못 해석하지 않으려고, 그 스트림에 의존하는 대신
+`MLClient.jobs.get(name).tags` 를 45초 간격으로 폴링해 **독립적으로** 잡 상태를
+확인했다 — 이 태그들은 노드가 `azureml.log_metric`/`set_tags` 를 호출한 즉시 서비스
+쪽에 반영되므로 로컬 stdout 버퍼링과 무관하다.
+
+**결과, 크래시 없이 `Completed`**:
+- `setup.examples=1298608`(§95 진단의 `1298685` 와 근접 일치 — 소폭 차이는 라이브
+  HF 데이터셋 콘텐츠가 두 시점 사이 갱신됐을 가능성, 파이프라인 버그 아님),
+  `setup.hf_cache_freed_gb=55.59`
+- `train.wall_seconds=4646.2`(77.4분 — §92-94 기준선 41.6분보다 길지만, 실 A100
+  LowPriority 는 선점 가능 자원이라 노드별 변동은 예상 범위. 핵심은 시간이 아니라
+  **끝까지 돎**), `train.train_loss=1.4131`, `train.vram_peak_gb=28.19`(§20 실측치와
+  일치)
+- `eval.kobest.base=0.8` / `eval.kobest.tuned=0.8`(전체 델타 0), 하위 태스크별:
+  `kobest_boolq` +0.2, `kobest_sentineg` +0.04, `kobest_copa`/`kobest_hellaswag`/
+  `kobest_wic` 변화 없음 — `--eval-limit 25` 의 성긴 해상도에서 나올 법한 범위(§93 과
+  같은 성격의 결과, 이 잡의 목적은 스코어 자체가 아니라 파이프라인 완주 확인)
+- `UserScriptFilledDisk` 재발 없음. 로컬 `submit_training.py` 프로세스 자체도 종료
+  시점에 버퍼를 flush 하며 `"status": "Completed"` JSON 을 독립적으로 재확인
+
+**닫힘**: §90 에서 시작해 §91(가짜 원인 기각) → §92(train 쪽 1차 고침, eval 에서
+재발) → §93(eval 쪽 2차 고침, 재발 계속) → §94(진짜 원인 특정: `load_sft_dataset`
+의 무제한 Arrow 캐시) → §95(`disable_caching()` 반증 → `to_dict()` OOM → `keep_
+in_memory=True` 확정)까지 이어진 disk-fill 디버깅 아크가, GPU 없는 진단이 아니라
+**실 A100 노드의 실 27B 잡**에서 처음부터 끝까지 크래시 없이 완주하는 것으로 닫혔다.
+
+**다음**: Lab 3(이 잡의 `eval.*` 태그가 이미 위에 있음, 별도 조회 불필요) →
+Lab 4(커스텀 서빙 이미지 빌드/푸시) → Lab 5(매니지드 온라인 엔드포인트 배포,
+시간당 과금 시작) → Lab 6(로드테스트) → Lab 8(병합 → blue/green → 트래픽 전환 →
+blue 즉시 삭제) → Lab 7(전체 인프라 teardown) 순으로 진행한다.
+
+## 97. Lab 4 완료(`ffsft-serve:1`) · Lab 5 사전 probe 의 `aml_online_vllm BLOCKED` 는 오답 SKU — 실제 배포 SKU 는 무쿼터 문제 (2026-08-29)
+
+**Lab 4**: `az acr build --registry acre2eruncvhaw5sbfy2lm --image ffsft-serve:1
+--file docker/Dockerfile.serve .` 성공 — `docker/verify_serve.py` 게이트 통과
+(`Qwen3_5ForConditionalGeneration: registered`, 12개 아키텍처 플래그 전부 vLLM
+소스에 존재 확인), push 완료(`sha256:be90367d...`), 빌드 15분56초.
+
+**Lab 5 진입, `ffsft deploy check --probe` 가 `aml_online_vllm BLOCKED`**:
+```
+aml_online_vllm  BLOCKED   AML Managed Online Endpoint + vLLM on Standard_NV12ads_A10_v5 x1
+                            needs 24 dedicated cores, because a manage...
+```
+이 잡이 Lab 5 실행을 막는지 확인이 필요했다. `endpoint.py::cmd_check` 를 읽어보니
+`--probe` 경로(`probe_sku(client, spec.default_sku, ...)`, line 826)는 **패턴의
+`default_sku` 만 테스트**하고, 호출자가 실제로 쓸 `--sku` 를 받지 않는다.
+`aml_online_vllm` 의 `default_sku` 는 `configs/serving.yaml`상
+`Standard_NV12ads_A10_v5`(A10) — 이번 배포에서 실제로 쓸 `Standard_NC24ads_A100_v4`
+(A100)와 다른 SKU다. 즉 이 BLOCKED 는 **내가 쓰지 않을 SKU 에 대한 답**이다.
+
+`probes.py::read_dedicated_quota` 는 `Microsoft.Quota`(AML 리소스 프로바이더 하위,
+`Microsoft.MachineLearningServices/locations/{loc}/providers/Microsoft.Quota`)를
+읽는다 — `configs/serving.yaml` 헤더 주석이 koreacentral 기준으로 남긴 오래된 수치
+(A100 dedicated=0)는 **다른 리전**(이 워크숍은 polandcentral)이라 이번 서브스크립션에
+안 맞는다. 그래서 실제 값을 두 family 모두 직접 측정했다:
+
+```python
+read_dedicated_quota(sub, "polandcentral", "standardNCADSA100v4Family")  # -> 48
+read_dedicated_quota(sub, "polandcentral", "standardNVADSA10v5Family")   # -> 0
+```
+
+`standardNVADSA10v5Family`(A10, probe 가 실제로 테스트한 family)= **0** — BLOCKED 는
+정확히 이 값 때문이고(NV12=12코어, 온라인 엔드포인트 롤링업데이트 예약
+`ceil(1.2×1)×12=24` 코어 필요, 가용 0). 반면 `standardNCADSA100v4Family`(A100, Lab 5
+실제 배포 SKU)= **48** — A100/H100/ND 계열은 CLAUDE.md 에 명시된 대로 1.2배 예약 규칙
+자체가 면제되므로 1 인스턴스에 정확히 24코어만 필요, 48 안에 여유롭게 들어간다.
+`az vm list-skus`(리전 오퍼 레벨 restrictions)도 `Standard_NC24ads_A100_v4` 에 빈
+배열(`[]`) — 이 리전에서 이 SKU 자체가 막혀 있지도 않다.
+
+**결론**: `aml_online_vllm BLOCKED` 는 이번 배포와 무관한 오답 SKU 테스트 결과이며,
+실제로 쓸 `Standard_NC24ads_A100_v4` 는 (a) 리전 오퍼 제약 없음 (b) dedicated 쿼터
+48≥24 로 충분 — Lab 5 문서(`lab5.md` §1)가 말한 "polandcentral 에서 A100 은 무제한"과
+정확히 일치한다. 이 확인을 거쳐 실제 `deploy-online`(시간당 $4.959 과금 시작)을
+진행한다.
+
+**다음**: 실 `deploy-online` 실행 → 배포 상태 관찰(Azure Monitor 지표, 로그 폴링 아님)
+→ `scripts/verify_deployment.sh` 로 바디 레벨 검증 → Lab 6 → Lab 8 → Lab 7.
+
+## 98. Lab 5 완료 — `ffsft-lab/blue` 실 A100 매니지드 온라인 엔드포인트 `Succeeded`, 바디 검증 통과 (2026-08-29)
+
+§97 확인대로 실 배포 실행:
+```
+ffsft deploy deploy-online --endpoint ffsft-lab --hf-model Qwen/Qwen3.8-27B \
+  --image acre2eruncvhaw5sbfy2lm.azurecr.io/ffsft-serve:1 --deployment blue \
+  --sku Standard_NC24ads_A100_v4 --max-model-len 8192 --traffic 100
+```
+`get_logs` 폴링(레이블 문서 §4 가 명시적으로 무용하다고 경고한 방법) 대신, 배포
+ARM 리소스의 `provisioningState` 를 45초 간격으로 REST 로 직접 폴링 — 첫 폴은
+`ResourceNotFound`(엔드포인트 리소스 자체가 아직 없음), 1분 뒤 `Creating` 으로 전환,
+15분29초 뒤(05:41:37 커맨드 시작 → 05:56:53 UTC) `Succeeded`. 문서 §5 의 기대
+타임라인(23분)보다 빨랐다 — §96 의 학습 잡이 기준선보다 느렸던 것과 마찬가지로,
+실측 변동 범위 안(빠른 이미지 풀/캐시 히트일 가능성)이지 파이프라인 이상 신호가
+아니다.
+
+CLI 로그로 완주 재확인: `traffic set to {'blue': 100}`, `endpoint ready:
+https://ffsft-lab.polandcentral.inference.ml.azure.com/v1/chat/completions`.
+
+**200 OK 는 증거가 아니다** (CLAUDE.md 경고) — `scripts/verify_deployment.sh
+ffsft-lab blue` 로 바디 레벨 검증:
+- `provisioningState: Succeeded`
+- `content`: "서울은 전통과 현대가 어우러진 역동적인 세계 도시야." (31자, 실제 답변)
+- `thinking`: 305자, **필드명 `reasoning`** 으로 정확히 분리 수신 — §68 이 고친
+  필드명 버그가 이 실 배포에서도 재발하지 않음 확인
+- `trace in content: False` — `<think>` 누출 없음 (서빙 이미지의 `REASONING_PARSER=
+  qwen3` 플래그가 실제로 작동한다는 뜻)
+- `finish_reason: stop`, `completion_tokens: 109/400`(27%) — `max_tokens` 캡에 눌려
+  잘린 응답이 아니라 모델이 스스로 끝냄
+
+**닫힘**: Lab 5 완료. 학습 잡(§96) 없이 `--hf-model` 만으로 vLLM 서빙 트랙이 단독
+성립함을 실제로 확인 — `docs/design/PLAN.md`(구 workshop-restructure 계획) §1.2 의
+"서빙 트랙은 이미 학습 없이 단독 실행된다"는 주장이 실측으로 재확인된 셈.
+
+**과금 중**: `ffsft-lab/blue`, `Standard_NC24ads_A100_v4` x1, $4.959/hr — 이후 랩까지
+켜둔 채 진행하고, Lab 7 에서 반드시 내린다.
+
+**다음**: Lab 6(로드테스트, TTFT/TPOT/knee, 토큰 뷰어) → Lab 8(§96 잡의 어댑터 병합 →
+blue/green → 트래픽 전환 → blue 즉시 삭제) → Lab 7(전체 teardown).
+
+## 99. Lab 6 완료 — `ffsft-lab/blue` 5레벨 로드테스트, 기준 회차 대비 전부 정상 범위 (2026-08-29)
+
+§98 배포 위에서 실 로드테스트 실행:
+```
+ffsft loadtest --base-url https://ffsft-lab.polandcentral.inference.ml.azure.com/v1 \
+  --model ffsft --concurrency 1,2,4,8,16 --requests-per-level 20 \
+  --ttft-slo 2.0 --output my-loadtest.json
+```
+엔드포인트 키는 매 사용마다 `ffsft_endpoint_key` 로 그 자리에서 받아 셸 변수로만
+쓰고 파일에 남기지 않음(§1.1 규칙; 중간에 한 번 파일로 흘린 실수를 즉시 인지하고
+삭제 후 재수행 — 이 회차 결과에는 영향 없음).
+
+100/100 성공, 실패 0. `docs/labs/lab6.md` §2 기준 회차와 비교:
+
+| conc | TTFT p50 (측정/기준) | TPOT p50 | tok/s (측정/기준) |
+|---|---|---|---|
+| 1 | 1.093 / 1.142 | 0.0364 | 22.2 / 22.0 |
+| 2 | 1.133 / 1.141 | 0.0363 | 44.3 / 43.4 |
+| 4 | 1.171 / 1.136 | 0.0370 | 86.2 / 83.0 |
+| 8 | 1.231 / 1.275 | 0.0384 | 140.5 / 131.6 |
+| 16 | 1.320 / 1.523 | 0.0412 | 198.0 / 204.3 |
+
+전부 편차 ±13% 이내(랩 문서의 "정상" 범위 ±20% 안쪽). SLO(p95 TTFT ≤ 2.0s) 만족하는
+최대 동시성도 기준과 동일하게 **16**. 연속 배칭 정상 동작 재확인(동시성 16배에
+TPOT 13% 만 악화, tok/s 8.9배).
+
+`ffsft plot mine=my-loadtest.json --out-dir .` 로 SVG 4장(`ttft-`, `tpot-`,
+`throughput-vs-concurrency.svg`, `tokens-per-request.svg`) 생성 확인.
+
+§3.1 토큰 길이 정합성 체크: 5레벨 전부 123.2~127.0 / 128 (96~99%) — 기준 회차의
+121.8/128 보다 오히려 상한에 더 붙어 있음. 랩 문서가 명시한 대로 이는 "이 회차의
+평균 토큰 수 = 모델 길이가 아니라 설정한 max_tokens 상한"이라는 뜻이며, 단일 배포
+상태에서는 정상적으로 예상되는 값(§3.2 는 Lab 8 이후 두 배포가 생겨야 의미 있음).
+
+§4 토큰 뷰어: `scripts/run_token_viewer.sh ffsft-lab` 로 로컬 프록시 기동
+(127.0.0.1:8112, 키는 프로세스 환경변수에만 존재, 디스크 미기록). 브라우저 대신
+curl 로 프록시의 실제 동작을 직접 검증:
+- `GET /` → 200 (뷰어 페이지)
+- `GET /upstream` → `{"upstream": "https://ffsft-lab.../v1", "model": "ffsft"}`
+- `POST /chat/completions` (streaming) → SSE 델타가 `reasoning` 필드로 정확히
+  분리 수신(§68 필드명 버그 재발 없음), `reasoning_content` 미사용 확인
+검증 후 프로세스 종료(`pkill -f token_viewer.py`) — 로컬 프록시일 뿐 과금 리소스는
+아니지만 정리.
+
+**닫힘**: Lab 6 전 항목(§1.2 풀 스케일 로드테스트, §2.1 플롯, §3.1 토큰 길이 체크,
+§4 토큰 뷰어) 완료. 배포가 기준 회차와 동등하게 작동함을 확인.
+
+**과금 중**: `ffsft-lab/blue` 계속 유지, $4.959/hr.
+
+**다음**: Lab 8(§96 잡 `yellow_spinach_f4fshtzl3r` 의 어댑터 병합 → blue/green 배포
+→ 트래픽 전환 → blue 즉시 삭제) → Lab 7(전체 teardown).
+
+## 100. Lab 8 §1 — 등록이 `KeyBasedAuthenticationNotPermitted` 로 죽음, `adapter_uri` 우회로 병합까지 완주 (2026-08-29)
+
+§96 잡의 `model_dir` 을 `docs/labs/lab8.md` §1 그대로 등록 시도:
+
+```
+ErrorCode:KeyBasedAuthenticationNotPermitted
+ErrorMessage:Key based authentication is not permitted on this storage account.
+Message: Model Registration failed; error accessing Model from storage. Reason:
+Microsoft.Azure.Storage.StorageException: Key based authentication is not
+permitted on this storage account.
+   at ...BlobContainerClient.EnumerateBlobPathsUnderPrefix(...)
+```
+
+`lab8.md` §1 의 예시는 등록 성공(`ref = 'qwen3_8-27b-ko-lora:1'`)을 가정하고 있고,
+경고는 "등록은 증거가 아니다"뿐 — 등록 자체가 죽을 수 있다는 말은 없다. 원인 규명부터
+(`superpowers:systematic-debugging` — 고치기 전에 재현하고 근거부터).
+
+**실 Azure 조회로 확인한 원인**:
+```
+az storage account list -g rg-ffsft-e2erun \
+  --query "[].{name:name, allowSharedKeyAccess:allowSharedKeyAccess, publicNetworkAccess:publicNetworkAccess}"
+# -> ste2eruncvhaw5sbfy2lm, AllowSharedKeyAccess: False, PublicNetworkAccess: Disabled
+az policy assignment list --scope .../resourceGroups/rg-ffsft-e2erun ...
+# -> 빈 목록
+```
+RG 스코프 정책 목록이 비어 있다는 것 자체가 신호다 — §62 에서 이미 확인한 것과 같은
+메커니즘(관리 그룹 스코프 `modify` 정책, RG 스코프 감사엔 안 보임)이 **이번엔 다른,
+새로 프로비저닝한 워크스페이스**에서도 걸려 있다는 뜻.
+
+**이건 §63 의 마운트 크리덴셜 축과 다른 축이다.** `preflight.py::storage_blocker` /
+`key_auth_refused` 는 데이터스토어의 `credentialsType`(`identity` vs `AccountKey`)만
+본다 — `allowSharedKeyAccess=false` 라도 데이터스토어가 `identity` 모드면 문제없다
+(§63.5 의 결론 그대로). 그런데 Model Registry 서비스(`client.models.create_or_update`)는
+**완전히 다른 코드 경로**다: 레거시 `Microsoft.Azure.Storage` SDK 로 대상 blob 폴더를
+**서버사이드에서 계정 키로** 나열하고, 여기엔 `identity` 모드에 대응하는 것이 없다 —
+클라이언트가 크리덴셜을 바꿔줄 여지가 아예 없다. 그래서 `systemDatastoresAuthMode` 와
+무관하게 무조건 이 에러로 죽는다.
+
+이 축이 분리돼 있다는 것은 **§98 의 `verify_output_path.py`(job `ashy_rod_5bmkvgtpmw`)가
+이미 실측으로 증명**했다 — `identity` 모드 마운트는 이 워크스페이스에서 멀쩡히 된다.
+등록만 막혀 있다. `model_asset.py` 자체 docstring 의 "2026-08-24 에 `helpful_sand_971pqxtj0l`
+로 검증됨" 은 **다른(더 이전) 워크스페이스** 얘기였고, 그래서 `lab8.md` §1 의 성공
+예시와 이번 실패가 모순이 아니다 — 워크스페이스가 다르면 이 정책도 다르게 걸린다.
+
+**고침**: 배포 경로가 이미 같은 부류의 문제를 `--model-blob-uri` 로 우회한 전례를
+그대로 병합 잡에 옮겼다. `merge_job.py::MergeSpec.adapter_uri` 신규 필드 — 등록된
+`custom_model` 자산 대신 `uri_folder` 입력(잡의 자기 출력 경로, `model_asset.job_output_uri`)을
+그대로 `ro_mount` 한다. 레지스트리를 아예 안 거치므로 이 에러를 안 만난다. `submit()`
+은 `adapter`/`adapter_uri` 중 정확히 하나만 받고, `adapter_uri` 경로에서는
+`_check_adapter_matches`(레지스트리 조회)를 아예 건너뛴다. `scripts/submit_merge.py` 에
+`--adapter-uri` 플래그 추가, `--adapter` 를 선택 인자로 완화. 테스트 9개 추가
+(상호배타 거부 2개, `adapter_uri` 경로가 `models.get` 을 절대 안 부른다는 것을 호출
+시 `AssertionError` 를 내는 fake client 로 확인하는 테스트 포함) — 전체 스위트
+1243 passed / 2 skipped / 1 xfailed, `ruff check .` 클린.
+
+**실 잡으로 검증** — `--adapter-uri azureml://datastores/workspaceblobstore/paths/azureml/yellow_spinach_f4fshtzl3r/model_dir/`:
+```json
+{"name": "purple_room_j4504v814f", "status": "Starting", "compute": "gpu-a100-lp",
+ "sku": "Standard_NC24ads_A100_v4", "priority": "LowPriority",
+ "adapter": "azureml://datastores/workspaceblobstore/paths/azureml/yellow_spinach_f4fshtzl3r/model_dir/",
+ "base_model": "Qwen/Qwen3.8-27B"}
+```
+레지스트리 에러 없이 제출됨. 10분 뒤 `Completed` — `client.jobs.get(...).status` 로
+독립 재확인(모니터 채널과 SDK 채널 둘 다 `Completed`, 하나만 믿지 않음). MLflow 태그로
+실제 병합 결과 확인:
+
+| 지표 | 값 |
+|---|---|
+| `merge.merged_size_gb` | 53.79 (27B bf16 기대치 ~54GB 부합) |
+| `merge.wall_seconds` | 522.4 (≈8.7분) |
+| `merge.files` | 14 |
+| `merge.adapter_target_modules` | 12개 실제 LoRA 모듈(`q_proj`, `k_proj`, `v_proj`, `o_proj`, `gate_proj`, `up_proj`, `down_proj`, `in_proj_*` 등) — 빈 리스트가 아님, 델타가 실제로 적용됐다는 뜻 |
+| `merge.model_type` / `merge.architectures` | `qwen3_5_text` / `['Qwen3_5ForCausalLM']` |
+
+병합 출력: `model_asset.job_output_uri("purple_room_j4504v814f", "merged")` →
+`azureml://datastores/workspaceblobstore/paths/azureml/purple_room_j4504v814f/merged/`.
+
+`docs/labs/lab8.md` §1 에 이 실패 모드와 `--adapter-uri` 우회를 실측치와 함께 추가
+(경고 콜아웃, "등록은 증거가 아니다" 바로 다음).
+
+**닫힘**: Lab 8 §1(등록 시도, 실패, 원인 규명)·§2(병합, `adapter_uri` 우회로 완주)
+완료. §63 이 마운트 크리덴셜 축을, 이번 절이 모델 레지스트리 축을 각각 분리해서
+확인한 셈 — 같은 계정의 `allowSharedKeyAccess=false` 가 두 가지 완전히 다른 코드
+경로를 서로 다른 방식으로 막는다.
+
+**과금 중**: `ffsft-lab/blue` 계속 유지, $4.959/hr. 병합 잡(A100 LowPriority)은
+완료 후 자동 반납 — 추가 유휴 과금 없음.
+
+**다음**: Lab 8 §3(green 을 트래픽 0 으로 배포, `--model-blob-uri` 에 방금 만든
+`purple_room_j4504v814f/merged/` 경로 사용) → §4(게이트 2) → §5(트래픽 전환) →
+§6(비교 로드테스트) → §7(blue 삭제) → Lab 7(전체 teardown).
+
+## 101. Lab 8 §3-§7 — green 배포부터 blue 삭제까지 완주 (2026-08-29)
+
+§100 이후 나머지 절을 실 Azure 에 대해 순서대로 돌렸다. 워크스페이스는 §100 과 같은
+`rg-ffsft-e2erun`/`mlw-e2erun`, 엔드포인트 `ffsft-lab`.
+
+**§3 — green 을 트래픽 0 으로 배포**. `--model-blob-uri` 는 §100 병합 잡의 출력에서
+직접 만들었다:
+```
+https://ste2eruncvhaw5sbfy2lm.blob.core.windows.net/azureml-blobstore-9ed9daa3-c41b-4259-81b4-5ba7e189e883/azureml/purple_room_j4504v814f/merged/
+```
+이미지는 blue 와 글자 그대로 같은 `acre2eruncvhaw5sbfy2lm.azurecr.io/ffsft-serve:1`.
+엔드포인트 MSI 는 같은 워크스페이스 계정에 이미 `Storage Blob Data Reader` 를 갖고
+있어 — 문서 §3 경고 박스가 예상한 그대로 — 별도 롤 부여가 필요 없었다. 06:41:08 →
+06:56:57, **약 16분**으로 완주(문서의 실측 24분보다 빠름 — 변동 범위 안). 컨테이너
+로그: `serving env` 에 `MODEL_BLOB_URI`, `SERVED_MODEL_NAME=ffsft`,
+`MAX_MODEL_LEN=8192` 등 정상 반영. 배포 직후 트래픽 맵은 `{'blue': 100, 'green': 0}`
+— green 이 0% 로 끼워 들어갔을 뿐 blue 라우팅은 그대로.
+
+**§4 — 게이트 2**. `scripts/verify_deployment.sh ffsft-lab green blue` 를 배포 헤더로
+직접 호출. 두 배포 모두 통과 — 실제 콘텐츠 응답, `reasoning`/`content` 필드 분리
+정상, 트레이스 누출 없음, `finish_reason: stop`.
+
+**§5 — 트래픽 전환**. `ffsft deploy shift --endpoint ffsft-lab --to green`:
+```
+traffic before: {'blue': 100, 'green': 0}
+traffic after : {'green': 100, 'blue': 0}
+```
+문서 예시의 `before: {'blue': 0, 'green': 0}` 와 다르다 — 문서는 "둘 다 0%"인
+가상 예시이고, 이 실행은 **blue 가 실제로 100% 서빙 중이던 상태**에서 전환한
+것이라 `before` 가 다르다. 결과 형태(모든 트래픽이 green 으로)는 문서와 동일.
+
+**§6 — 로드테스트**. 전환 직후 엔드포인트 URL(이제 green 100%)로 5레벨 스윕:
+
+| conc | ok | fail | TTFT p50 | TTFT p95 | TPOT p50 | tok/s | req/s |
+|---|---|---|---|---|---|---|---|
+| 1 | 20 | 0 | 1.074 | 1.173 | 0.0363 | 22.4 | 0.17 |
+| 2 | 20 | 0 | 1.117 | 1.161 | 0.0362 | 44.8 | 0.35 |
+| 4 | 20 | 0 | 1.131 | 1.235 | 0.0370 | 87.5 | 0.68 |
+| 8 | 20 | 0 | 1.208 | 1.289 | 0.0383 | 142.1 | 1.11 |
+| 16 | 20 | 0 | 1.398 | 1.400 | 0.0407 | 206.4 | 1.61 |
+
+전 레벨 실패 0, p95 TTFT ≤ 2.0s SLO 안에 모두 들어옴(최대 동시성 16 에서도 1.400s).
+원자료: `/tmp/lab8-green-loadtest.json`. **이 세션에서 blue 를 상대로 한 쌍대(paired)
+비교 재측정은 하지 않았다** — 문서 자체가 §5(전환) 를 §6(로드테스트) 보다 먼저
+두고 있어 전환 시점에 이미 트래픽이 전부 green 으로 넘어간 뒤였고(`ffsft loadtest`
+는 배포 헤더를 받지 않아 트래픽 전환 후 개별 배포를 지목해 부하를 걸 수단이 없다),
+문서 §66.2 의 blue/green 비교표는 이 세션이 아니라 과거 별도 실측이다. 이 세션의
+독자적 결론은 "green 이 SLO 를 만족한다"이고 "blue 대비 몇 % 차이"가 아니다 —
+그 이상을 이 회차 숫자로 주장하지 않는다.
+
+**§7 — blue 삭제**. 삭제 전 SDK 로 독립 재확인: `traffic: {'green': 100, 'blue': 0}`,
+`green`/`blue` 둘 다 `provisioning_state: Succeeded`. dry-run → `--yes` 순서로 삭제:
+```
+will remove:
+  - online-deployment ffsft-lab/blue (endpoint ffsft-lab kept)
+stops $4.959/hr (~$3,620/month)
+removed:
+  - online-deployment ffsft-lab/blue (endpoint ffsft-lab kept)
+```
+삭제 뒤 SDK 로 다시 독립 확인: `client.online_deployments.list("ffsft-lab")` →
+`['green']` 하나뿐, `traffic: {'green': 100}`. `ffsft lifecycle status` 도
+`!!online-deployment` 줄이 하나(`ffsft-lab/green`)로 줄었고 `BILLING NOW: 1
+resource(s) $4.959/hr` — A100 2대 과금 구간이 끝났다.
+
+**닫힘**: Lab 8 전체(§1~§7) 완료. 어댑터 등록 실패(§100) → `adapter_uri` 우회로
+병합 완주(§100) → green 트래픽 0 배포 → 게이트 2 통과 → 트래픽 전환 → 로드테스트로
+SLO 확인 → blue 삭제까지 실 Azure 에 대해 전 구간 실측으로 통과했다.
+
+**과금 중**: `ffsft-lab/green` 만 유지, $4.959/hr. `mlw-e2erun` 워크스페이스·
+`acre2eruncvhaw5sbfy2lm` ACR·스토리지 등은 `lifecycle status` 스코프 밖 —
+여전히 별도로 돈다(문서가 반복 경고하는 지점, [Lab 7 §7](labs/lab7.md)).
+
+**다음**: Lab 7 — 전체 teardown. `ffsft lifecycle down --endpoint ffsft-lab --yes`
+로 엔드포인트째 내린 뒤 `ffsft infra down --prefix e2erun --yes` 로 그룹째 삭제,
+`BILLING NOW: nothing` 을 마지막으로 독립 확인.
+
+## 102. Lab 7 — 전체 teardown, 8개 Lab 실행 완주 (2026-08-29)
+
+§101 의 "다음" 을 그대로 실행했다. `rg-ffsft-e2erun`/`mlw-e2erun` 에 대해
+엔드포인트 삭제 → 리소스그룹 삭제까지 실 Azure 로 완주.
+
+**§2-§3 — 엔드포인트 삭제**. 삭제 전 `ffsft lifecycle status`:
+`ffsft-lab/green` 한 줄, `BILLING NOW: 1 resource(s) $4.959/hr`. dry-run 으로
+`will remove: online-endpoint ffsft-lab (with its deployments)` 확인 후
+`ffsft lifecycle down --endpoint ffsft-lab --yes` 실행 — 완료까지 약 53회
+폴링(수 분). 삭제 뒤 `ffsft lifecycle status` 는 `gpu-a100-lp` 컴퓨트 클러스터
+(min_instances=0, 유휴 무과금) 한 줄만 남고 `BILLING NOW: nothing. No
+always-on compute in this workspace.`
+
+CLI 출력 하나만 믿지 않고 SDK 로 별도 재확인:
+`client.online_endpoints.list()` → `[]` (엔드포인트 0개, `ffsft-lab` 자체가
+없다 — 배포만이 아니라 엔드포인트째 사라졌음을 별채널로 확인).
+
+**§4 — 리소스그룹 스코프 잔여물 스캔**. `az resource list -g
+rg-ffsft-e2erun`(전체) 로 orphan 디스크/공인 IP 를 찾았다. 결과 자체가
+비어 있는 것과 "조회가 실패해서 빈 것"을 구분하기 위해 `jq 'length'` 로
+반환 개수를 별도로 셌다 — `exit code: 0`, `count: 7`. 즉 "0건 조회됨"이지
+"조회 실패"가 아니다. 남은 7개 리소스는 전부 워크스페이스 부속 자원이었다:
+
+```
+Microsoft.ContainerRegistry/registries        acre2eruncvhaw5sbfy2lm
+Microsoft.EventGrid/systemTopics              ste2eruncvhaw5sbfy2lm-401f9ac1-...
+Microsoft.Insights/components                 appi-e2erun
+Microsoft.KeyVault/vaults                     kve2eruncvhaw5sbfy2lm
+Microsoft.MachineLearningServices/workspaces  mlw-e2erun
+Microsoft.OperationalInsights/workspaces      law-e2erun
+Microsoft.Storage/storageAccounts             ste2eruncvhaw5sbfy2lm
+```
+
+Microsoft.Compute/disks, Microsoft.Network/publicIPAddresses 타입은 0건 —
+좀비 디스크/IP 없음(§11 이 겪은 $41.66/월 누수 패턴 재발 없음).
+
+**§7 — 리소스그룹째 삭제**. 먼저 dry-run:
+
+```
+rg-ffsft-e2erun holds 7 resource(s), including 1 Key Vault(s).
+WOULD DELETE: acre2eruncvhaw5sbfy2lm [...], appi-e2erun [...],
+  kve2eruncvhaw5sbfy2lm [...], law-e2erun [...], mlw-e2erun [...],
+  ste2eruncvhaw5sbfy2lm [...], ste2eruncvhaw5sbfy2lm-401f9ac1-... [...]
+WOULD PURGE: Key Vault kve2eruncvhaw5sbfy2lm
+```
+
+§4 스캔의 7개와 정확히 일치. `ffsft infra down --prefix e2erun --yes` 실행:
+
+```
+rg-ffsft-e2erun is gone and no Key Vault name from it is still held.
+  deleted resource group rg-ffsft-e2erun and its 7 resource(s)
+  deleted Key Vault kve2eruncvhaw5sbfy2lm (purged)
+```
+
+exit code `0` — "삭제됐고 독립적으로 확인까지 됐다"는 세 값 중 가장 좋은 것
+(문서 §7 이 정의하는 `0`/`3`/`1` 3분류 중 `0`).
+
+**독자 재확인(CLI 자체 종료코드를 그대로 믿지 않고, 별도 채널 3회)**:
+
+```
+az group show -n rg-ffsft-e2erun          -> ResourceGroupNotFound (exit 3)
+az group list --query "[?name=='rg-ffsft-e2erun']"  -> []
+az keyvault list-deleted --query "[?name=='kve2eruncvhaw5sbfy2lm']"  -> []
+```
+
+세 번째가 특히 중요하다: Key Vault 는 그룹이 삭제돼도 90일간 소프트 삭제
+상태로 남아 다음 `infra up` 의 이름 재사용을 막는데(문서 §7), `list-deleted`
+에도 안 잡힌다는 것은 소프트 삭제 상태가 아니라 **퍼지(purge)까지 끝났다**는
+뜻 — `infra down` 이 그룹 삭제 전에 Key Vault 이름을 미리 읽어뒀다가 삭제
+후 퍼지하는 설계(문서 §7, `KEY VAULT 이름은 그룹 삭제 전에 미리 읽어야 한다`)가
+실제로 그 순서대로 작동했음을 확인한 것.
+
+**닫힘 — 8개 Lab 전체 완주**. Lab 0(환경 준비)부터 Lab 8(병합→배포→트래픽
+전환→blue 삭제)까지, 그리고 이번 Lab 7(엔드포인트 삭제→그룹째 삭제)까지
+실 Azure 구독에 대해 전 구간을 실측으로 통과했다. 최종 상태:
+`rg-ffsft-e2erun` 자체가 존재하지 않음 — ML 워크스페이스, ACR, 스토리지,
+Key Vault, Log Analytics, App Insights, EventGrid 시스템 토픽까지 전부
+삭제·퍼지 완료. **과금 중인 것 없음.** `~/.ffsft-env` 는 이제 존재하지 않는
+리소스를 가리키는 죽은 프로파일이므로, 다음 실행은 `ffsft infra up` 부터
+새로 시작해야 한다.
+

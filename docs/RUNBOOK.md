@@ -3,14 +3,40 @@
 이 문서는 **사람이 손으로 실행하는 순서**입니다. 모든 명령은 실제로 이 구독에서
 실행해 결과를 확인한 것만 적었습니다. 검증 근거는 `docs/JOURNAL.md`에 있습니다.
 
-## 0. 환경
+## 0. 환경 — 프로필은 하나입니다
+
+rg·워크스페이스·리전은 프로필 파일 **하나**에 들어 있습니다.
+[Lab 0 §4](labs/lab0.md) 의 `ffsft infra up` 이 만듭니다.
+
+```bash
+source ~/.ffsft-env
+# profile: ffsft  rg=…  ws=…  loc=…      <- 배너를 읽고 시작하세요
+az login                       # 또는 az login --use-device-code
+```
+
+**배너가 곧 이 셸이 어디를 조회할지입니다.** `ffsft lifecycle` 은 워크스페이스를 받는
+플래그가 없고 환경변수만 봅니다. 그래서 `BILLING NOW: nothing` 은
+"아무 데서도 안 돈다"가 아니라 "**이 워크스페이스에서는** 안 돈다"입니다.
+
+> **학습과 서빙이 갈리는 경우가 있습니다.** koreacentral 은 LowPriority A100 학습은
+> 되는데 관리형 엔드포인트가 안 뜹니다(§57.1). 워크샵은 그래서 **둘 다 파는 리전 하나**를
+> 고르게 합니다([Lab 0 §3](labs/lab0.md)). 그래도 갈라야 하면 프로필을 손으로 만들지
+> 말고 `ffsft infra up --prefix <다른 prefix> --write-env ~/.ffsft-env2` 로 **또 하나의
+> 그룹**을 만드세요 — 내릴 때 `infra down` 을 prefix 마다 한 번씩 돌리면 됩니다.
+> 이 문서에서 두 rg 를 같이 부르는 자리는 §3.3 하나뿐입니다.
+
+프로필 파일이 없으면(워크샵을 안 거쳤으면) 손으로 내보냅니다.
 
 ```bash
 export FFSFT_SUBSCRIPTION_ID=<your-subscription-id>   # az account show --query id -o tsv
-export FFSFT_RESOURCE_GROUP=rg-ffsft-kc
-export FFSFT_WORKSPACE=mlw-ffsft
-az login          # 또는 az login --use-device-code
+export FFSFT_RESOURCE_GROUP=<your-rg>
+export FFSFT_WORKSPACE=<your-workspace>
+export FFSFT_LOCATION=<your-region>
+```
 
+어느 쪽이든 테넌트는 고정하고 시작합니다.
+
+```bash
 # 계정이 여러 테넌트에 걸쳐 있으면 반드시 고정하세요
 az account set --subscription $FFSFT_SUBSCRIPTION_ID
 az account show --query "{id:id,tenant:tenantId}" -o tsv
@@ -33,17 +59,21 @@ az account show --query "{id:id,tenant:tenantId}" -o tsv
 0으로 축소되지 않습니다.
 
 ```bash
-uv run ffsft-lifecycle status
+source ~/.ffsft-env
+uv run ffsft lifecycle status
 ```
 
-`BILLING NOW: nothing` 이면 깨끗한 상태입니다.
+`BILLING NOW: nothing` 이면 GPU 는 안 도는 상태입니다 — **단, 이 워크스페이스에서만**
+그렇습니다. `status` 는 지금 셸에 실린 환경변수 하나만 봅니다. **그룹이 비었다는 뜻은
+아닙니다** — 스토리지·ACR·KeyVault 는 뒤에 남아서 과금됩니다. 그룹째 확인하고 없애는
+것은 §9 이고, 워크샵 쪽은 [Lab 7 §7](labs/lab7.md) 입니다.
 
 ---
 
 ## 2. 배포 가능한 패턴 확인
 
 ```bash
-uv run ffsft-deploy check
+uv run ffsft deploy check
 ```
 
 이 구독에서 나오는 실제 결과와 그 의미:
@@ -57,6 +87,8 @@ uv run ffsft-deploy check
 ---
 
 ## 3. 올리기 (up)
+
+**`source ~/.ffsft-env`** — 이 절의 명령은 전부 그 워크스페이스로 나갑니다.
 
 ### 3.1 SKU 고르기 — 쿼터 계산이 함정입니다
 
@@ -80,14 +112,14 @@ uv run ffsft-deploy check
 
 ```bash
 az quota show \
-  --scope "/subscriptions/$FFSFT_SUBSCRIPTION_ID/providers/Microsoft.Compute/locations/koreacentral" \
+  --scope "/subscriptions/$FFSFT_SUBSCRIPTION_ID/providers/Microsoft.Compute/locations/$FFSFT_LOCATION" \
   --resource-name standardNVADSA10v5Family --query "properties.limit.value" -o tsv
 ```
 
 ### 3.2 배포
 
 ```bash
-uv run ffsft-lifecycle up \
+uv run ffsft lifecycle up \
   --endpoint ffsft-a10 \
   --hf-model Qwen/Qwen3.5-0.8B \
   --sku Standard_NV12ads_A10_v5 \
@@ -115,21 +147,31 @@ az rest --method get --url \
 
 ### 3.3 AcrPull — 자동이지만 실패할 수 있습니다
 
-엔드포인트의 시스템 할당 ID는 커스텀 ACR(`acrffsftkc`)에 대한 pull 권한을
-**자동으로 받지 못합니다**. Azure는 워크스페이스 연결 ACR에만 자동 연결해주는데
-이 워크스페이스에는 연결 ACR이 없습니다.
+엔드포인트의 시스템 할당 ID는 커스텀 ACR에 대한 pull 권한을 **자동으로 받지 못합니다**.
+Azure는 워크스페이스 연결 ACR에만 자동 연결해주는데 이 워크스페이스에는 연결 ACR이 없습니다.
 
 코드가 `ensure_acr_pull`로 직접 부여하지만, 여러분의 계정에 RBAC 쓰기 권한이
 없으면 실패하고 실행할 명령을 출력합니다. 수동으로 하려면:
 
 ```bash
+source ~/.ffsft-env
+
 PID=$(az ml online-endpoint show -n ffsft-a10 \
-        -g $FFSFT_RESOURCE_GROUP -w $FFSFT_WORKSPACE \
+        -g "$FFSFT_RESOURCE_GROUP" -w "$FFSFT_WORKSPACE" \
         --query identity.principalId -o tsv)
-ACR=$(az acr show -n acrffsftkc -g $FFSFT_RESOURCE_GROUP --query id -o tsv)
+
+ACR=$(az acr show -n "$FFSFT_ACR" -g "$FFSFT_RESOURCE_GROUP" --query id -o tsv)
+
 az role assignment create --assignee-object-id "$PID" \
   --assignee-principal-type ServicePrincipal --role AcrPull --scope "$ACR"
 ```
+
+> ⚠️ **엔드포인트와 ACR 이 다른 그룹에 있으면 위 두 줄이 같은 `-g` 를 못 씁니다.**
+> 워크샵은 `infra up` 이 ACR 을 워크스페이스와 같은 그룹에 만들어서 이 문제를 없앴습니다
+> ([Lab 0 §4](labs/lab0.md)). 리전을 갈라 그룹을 둘 만든 예외 경로라면 rg 를 **두 변수로
+> 나눠** 쓰세요 — 하나로 재사용하면 한쪽이 빈 값이나 404 가 되고, 부여는 조용히 엉뚱한
+> 스코프로 나갑니다. 이 절에 오는 사람은 **권한 없이 나간 배포를 이미 하나 들고 있는**
+> 상태라, 그 실수의 값은 아래 "약 10분 뒤 죽는" 롤아웃 한 번을 **더** 태우는 것입니다.
 
 부여 후 **1~2분 전파를 기다린 뒤** 다시 배포하세요.
 
@@ -144,7 +186,7 @@ az role assignment create --assignee-object-id "$PID" \
 ## 4. 호출해보기
 
 ```bash
-uv run ffsft-lifecycle status          # scoring uri 와 키 확인
+uv run ffsft lifecycle status          # scoring uri 와 키 확인
 ```
 
 ```bash
@@ -159,7 +201,7 @@ curl -s -X POST "$SCORING_URI" \
 ## 5. 로드 테스트
 
 ```bash
-uv run ffsft-loadtest \
+uv run ffsft loadtest \
   --url "$SCORING_URI" --key "$KEY" --model ffsft \
   --concurrency 1,2,4,8 --requests 12 --max-tokens 64
 ```
@@ -173,15 +215,18 @@ TTFT를 잴 수 없습니다.
 
 ## 6. 반드시 내리기 (down)
 
+**`down` 도 `status` 와 같은 환경변수로 워크스페이스를 정합니다.** 지우기 전에
+`source ~/.ffsft-env` 로 배너를 확인하세요.
+
 ```bash
-uv run ffsft-lifecycle down --endpoint ffsft-a10 --yes
-uv run ffsft-lifecycle status          # BILLING NOW: nothing 확인
+uv run ffsft lifecycle down --endpoint ffsft-a10 --yes
+uv run ffsft lifecycle status          # BILLING NOW: nothing 확인
 ```
 
 전부 정리하려면:
 
 ```bash
-uv run ffsft-lifecycle down --all --yes
+uv run ffsft lifecycle down --all --yes
 ```
 
 > 온라인 엔드포인트를 켜둔 채 잊으면 A10 기준 하루 수만 원이 나갑니다.
@@ -213,6 +258,8 @@ az rest --method get --url \
 | 증상 | 원인 | 대응 |
 |---|---|---|
 | `Endpoint identity does not have pull permission` | 엔드포인트 ID에 AcrPull 없음 | §3.3 |
+| `az acr show` 가 ACR 을 못 찾음 (`ResourceNotFound`) | ACR 이 이 그룹에 없습니다 — 그룹을 갈라 만든 경우 | §3.3 — rg 를 두 변수로 나눠 부르세요 |
+| `status` 는 `BILLING NOW: nothing` 인데 청구서가 나옴 | `status` 는 워크스페이스만 봅니다. 스토리지·ACR·KeyVault 는 그룹에 남아 있습니다 | §9 — 그룹째 확인하고 없애세요 |
 | `not have enough quota... requested 72` | SKU 코어의 2배가 쿼터 초과 | §3.1에서 더 작은 SKU로 |
 | `NoMatchingArtifactsFoundFromJob` | 학습 산출물이 스토리지에 안 올라감 (§24) | `--hf-model` 경로 사용 |
 | 배포가 `Failed` 후 업데이트 거부 | Azure는 초기 프로비저닝 실패한 배포를 수정 못 함 | 코드가 자동 삭제 후 재생성. 수동이면 `az ml online-deployment delete` |
@@ -231,6 +278,11 @@ az rest --method get --url \
 ## 8. 학습 → 등록 → 서빙 (2026-08-24 실측)
 
 이 체인은 프로젝트 내내 막혀 있었습니다. 원인이 **세 개**였고 셋 다 풀려야 했습니다.
+
+> **`source ~/.ffsft-env` (배너 `profile: ffsft`).**
+> 아래 명령의 `$RG`/`$WS` 는 그 프로필의 `$FFSFT_RESOURCE_GROUP`/`$FFSFT_WORKSPACE` 이고,
+> `acrffsftkc` 는 저자들의 레지스트리 이름이라 여러분 것으로 바꿔야 합니다.
+> 실행한 그대로 남겨둔 기록입니다.
 
 ### 8.1 스토리지 — managed VNet 이 정답입니다
 
@@ -351,4 +403,41 @@ inputs={"adapter": Input(type=AssetTypes.CUSTOM_MODEL,
 ```python
 Input(path=f"azureml://datastores/workspaceartifactstore/paths/ExperimentRun/dcid.{run}/",
       mode=InputOutputModes.RO_MOUNT)
+```
+
+---
+
+## 9. 그룹째 내리기 — 워크샵을 닫는 한 줄
+
+§6 의 `lifecycle down` 은 **미터를 멈춥니다.** 워크스페이스·스토리지·ACR·KeyVault 는
+그대로 남고, `status` 는 그것들을 못 봅니다. §11 에서 그렇게 **$41.66/월** 이 샜습니다.
+
+리소스 그룹이 청구 경계이자 삭제 단위입니다. 워크샵이 그룹 하나만 쓰는 이유가 이것입니다
+([Lab 0 §4](labs/lab0.md)).
+
+```bash
+uv run ffsft infra down --prefix <본인>          # 먼저 계획만 (dry run)
+uv run ffsft infra down --prefix <본인> --yes    # 실제 삭제
+```
+
+`--yes` 없이 부르면 지울 목록만 찍고 아무것도 안 지웁니다.
+
+**그룹을 지우기 전에 그룹 안을 읽습니다.** KeyVault 는 삭제 후에도 소프트 삭제 상태로
+**90일** 남아서 같은 이름을 막고, 이름은 ARM `uniqueString` 에서 나와 로컬에서 재현할 수
+없습니다. 그래서 목록을 못 읽으면 purge 할 이름을 알 방법이 없습니다.
+
+| 종료 코드 | 뜻 | 대응 |
+|---|---|---|
+| `0` | 지웠고, prefix 아래 남은 것이 없음을 확인 | 끝 |
+| `1` | **목록을 못 읽었습니다** — 지워졌는지 아닌지 모름 | 권한·로그인부터. 다시 돌리세요 |
+| `3` | 읽었고, 남은 것이 있음 | 출력된 이름을 포털에서 확인 |
+
+**`1` 이 `3` 보다 무겁습니다.** 확인 못 한 삭제는 삭제가 아닙니다.
+
+손으로 하려면 같은 순서입니다 — 읽고, 지우고, purge:
+
+```bash
+az keyvault list -g "$FFSFT_RESOURCE_GROUP" --query "[].name" -o tsv   # 먼저 이름을 확보
+az group delete -n "$FFSFT_RESOURCE_GROUP" --yes
+az keyvault purge -n <위에서 읽은 이름>                                 # 90일을 안 기다리려면
 ```

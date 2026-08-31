@@ -193,7 +193,7 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   2. **읽어서 고쳐서 PUT 한다.** 새로 만들지 않는다
 - 대처: 손으로 ARM 을 치지 말고
   ```bash
-  uv run ffsft-deploy shift --endpoint <ep> --to <deployment>
+  uv run ffsft deploy shift --endpoint <ep> --to <deployment>
   ```
 - 근거: §65. 첫 버전은 PATCH 를 `-o none 2>/dev/null` 로 보내서
   **400 이 사라지고 no-op 이 정상처럼 보였다**
@@ -237,7 +237,7 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
 - 원인: 관리 ID 가 새로 발급된다. 필요한 역할이 **하나가 아니라 둘**이다
   - ACR `AcrPull` — 이미지를 못 받으면 배포가 죽는다
   - 스토리지 `Storage Blob Data Reader/Contributor` — 마운트가 죽는다
-- 대처: 재생성 후 두 역할을 **다시** 부여한다. `ffsft-deploy check --probe` 로 확인
+- 대처: 재생성 후 두 역할을 **다시** 부여한다. `ffsft deploy check --probe` 로 확인
 - 근거: §60
 
 ## <a id="18"></a>18. 실패한 배포도 과금된다
@@ -247,12 +247,33 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
 - **실패한 배포는 지워야 한다.** `Failed` 상태로 남아 있어도 노드는 잡혀 있다
 - 대처: 모든 Lab 끝에 정리 단계가 있다. 워크샵이 끝나면
   ```bash
-  uv run ffsft-lifecycle status          # 지금 뭐가 돈을 쓰고 있나
-  uv run ffsft-lifecycle down --all --yes
+  uv run ffsft lifecycle status          # 지금 뭐가 돈을 쓰고 있나
+  uv run ffsft lifecycle down --all --yes
   ```
 - 주의: `down` 은 고아 디스크·IP 를 **알려주기만 하고 지우지 않는다.**
   그건 사람이 결정할 일이다 — 위 $41.66 이 그 이유
 - 근거: §11, §13
+
+---
+
+## <a id="19"></a>19. `lifecycle down` 은 미터를 멈출 뿐 그룹을 비우지 않는다
+
+- `lifecycle status` 는 **워크스페이스 하나**만 본다. `BILLING NOW: nothing` 은
+  "이 워크스페이스에서 GPU 가 안 돈다"이지 **"그룹이 비었다"가 아니다**
+- 뒤에 남는 것: 워크스페이스·스토리지 계정·ACR·KeyVault·Log Analytics·고아 디스크·IP.
+  위 $41.66/월 이 정확히 그 목록에서 나왔다
+- 워크샵은 **참가자 한 명 = 리소스 그룹 하나**로 설계돼 있다. 그룹이 청구 경계이자
+  삭제 단위라서, 하나면 한 줄로 끝난다
+  ```bash
+  uv run ffsft infra down --prefix <본인>          # 먼저 계획만 (dry run)
+  uv run ffsft infra down --prefix <본인> --yes    # 실제 삭제
+  ```
+- **그룹을 지우기 전에 그룹 안을 읽는다.** KeyVault 는 삭제 후 소프트 삭제로 90일 남아
+  같은 이름을 막고, 그 이름은 ARM `uniqueString` 에서 나와 로컬 재현이 안 된다.
+  목록을 못 읽으면 purge 할 이름을 알 방법이 없다
+- 종료 코드 `1`(목록을 못 읽음)이 `3`(읽었고 남은 것이 있음)보다 **무겁다** —
+  확인 못 한 삭제는 삭제가 아니다
+- 근거: §83, [Lab 7 §7](labs/lab7.md), [RUNBOOK §9](RUNBOOK.md)
 
 ---
 
@@ -261,4 +282,4 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
 - 막히면 **코드보다 축을 의심한다** — 리전, 리전 내 restrictions, 계정 프로필 순으로
 - **"성공" 은 증거가 아니다** — 잡이 Completed 인 것, 자산이 등록된 것, 200 이 온 것 전부
 - **테스트가 녹색인데 실서버가 0** 이면 목과 클라이언트가 같은 가정을 공유했는지 본다
-- **올렸으면 내린다**
+- **올렸으면 내린다** — 그리고 *끄기*(`lifecycle down`)와 *없애기*(`infra down`)는 다른 단계다

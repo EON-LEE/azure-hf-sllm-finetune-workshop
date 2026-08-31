@@ -155,7 +155,7 @@ ffsft lifecycle up --endpoint ffsft-qwen \
     --sku Standard_NV18ads_A10_v5
 
 # 로드테스트
-ffsft-loadtest --base-url https://<endpoint>/v1 --api-key $KEY \
+ffsft loadtest --base-url https://<endpoint>/v1 --api-key $KEY \
     --model ffsft --concurrency 1,2,4,8,16
 
 # 내리기 (반드시)

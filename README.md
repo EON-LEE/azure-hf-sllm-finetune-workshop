@@ -31,6 +31,21 @@ TTFT/TPOT 를 재는 것까지 — 한 리포에서 끝까지 돕니다.
 
 ---
 
+## 워크샵 한 판은 명령 두 줄 사이에 있습니다
+
+```bash
+uv run ffsft infra up   --prefix <본인> --location <region>   # Lab 0 — 열기
+...
+uv run ffsft infra down --prefix <본인> --yes                 # Lab 7 — 닫기
+```
+
+**참가자 한 명 = 리소스 그룹 하나 = 리전 하나 = 셸 하나.** 이름은 prefix 하나만 정하면
+나머지(워크스페이스·스토리지·ACR·KeyVault)가 전부 거기서 나옵니다. Lab 이 그룹을 더
+만드는 일은 없습니다 — 그룹이 청구 경계이자 삭제 단위라서, 하나면 `infra down` 한 줄로
+워크샵이 통째로 사라집니다. 고객 구독에서 열고 닫는 것이 이 워크샵의 전제입니다.
+
+---
+
 ## 두 개의 트랙 — 하나만 골라도 됩니다
 
 ```
@@ -40,26 +55,41 @@ Lab 0  환경 준비 ───────────────────�
    │   Lab 1  데이터 준비 (Fabric)    │   Lab 4  vLLM 서빙 이미지 빌드
    │   Lab 2  QLoRA 학습 (A100)       │   Lab 5  관리형 엔드포인트 배포
    │   Lab 3  평가 (base vs tuned)    │   Lab 6  로드테스트 + 토큰 뷰어
-   │                                  │   Lab 7  내리기 (비용 누수 스캔)
+   │                                  │
    └───────────────┬──────────────────┘
-                   │
+                   │   A·B 를 둘 다 했으면 (풀사이클)
+                   ▼
               Lab 8  풀사이클 — 어댑터 병합 → blue/green → 트래픽 전환
+                   │
+                   │   Track B 만 했으면 Lab 6 에서 여기로 바로
+                   ▼
+              Lab 7  내리기 (비용 누수 스캔) — 어느 트랙이든 맨 마지막
 ```
+
+> ⚠️ **Lab 8 이 Lab 7 보다 먼저입니다 — 번호 순서가 아닙니다.**
+> Lab 8 은 Lab 5 가 띄운 `blue` 옆에 green 을 올려 트래픽을 넘기는 실습입니다.
+> Lab 7 로 먼저 내리면 그 `blue` 가 없어서 24분짜리 배포부터 다시 해야 하고,
+> $4.959/시 × 24분 ≈ **$2** 를 산출물 없이 다시 냅니다
+> ([lab7.md](docs/labs/lab7.md) 순서표, [lab8.md](docs/labs/lab8.md) 순서).
 
 **Track B 는 학습 없이 단독으로 됩니다.** Lab 5 에서 `--hf-model` 로 HF 허브 모델을
 바로 띄우면 GPU 학습 잡을 한 번도 안 돌리고 vLLM 배포·로드테스트를 끝까지 실습합니다.
 
 | 하고 싶은 것 | 읽을 Lab | 대략 소요 | GPU 필요 |
 |---|---|---|---|
-| 파인튜닝만 | 0 → 1 → 2 → 3 | 2~3시간 | 학습용 A100 |
-| vLLM 배포만 | 0 → 4 → 5 → 6 → 7 | 2시간 | 서빙용 A100 |
-| 풀사이클 | 0 → 1~3 → 4~7 → 8 | 하루 | 둘 다 |
+| 파인튜닝만 | 0 → 1 → 2 → 3 → **7** | 2~3시간 | 학습용 A100 |
+| vLLM 배포만 | 0 → 4 → 5 → 6 → **7** | 2시간 | 서빙용 A100 |
+| 풀사이클 | 0 → 1 → 2 → 3 → 4 → 5 → 6 → **8 → 7** | 하루 | 둘 다 |
 
 👉 **[`docs/labs/lab0.md`](docs/labs/lab0.md) 부터 시작하세요.**
 
 > ⚠️ **모든 Lab 은 정리 단계로 끝납니다.** 관리형 엔드포인트는 놀고 있어도 정가로
 > 과금됩니다 (NV36 기준 ~$103/일). Lab 을 중간에 그만두더라도
-> `uv run ffsft-lifecycle down --all --yes` 는 반드시 실행하세요.
+> `uv run ffsft lifecycle down --all --yes` 는 반드시 실행하세요.
+>
+> **그건 미터를 멈추는 것이지 그룹을 비우는 것이 아닙니다.** 워크스페이스·스토리지·
+> ACR·KeyVault 는 그대로 남습니다. 끝났으면 `uv run ffsft infra down --prefix <본인> --yes`
+> ([Lab 7 §7](docs/labs/lab7.md)).
 
 ---
 
@@ -70,7 +100,7 @@ GPU 도 Azure 구독도 없이 서빙 절반이 전부 돕니다.
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 uv sync --extra dev
-uv run pytest -q                      # 680 tests, ~8s, 네트워크·Azure 접근 없음
+uv run pytest                         # 1232 passed, 2 skipped, ~9s, 네트워크·Azure 접근 없음
 uv run ffsft models list --commercial-only
 uv run ffsft models show qwen3.8-27b
 ```
@@ -80,14 +110,14 @@ SSE 를 흘리고 사고 토큰을 `delta.reasoning` 에 싣습니다.
 
 ```bash
 uv run python scripts/mock_vllm_server.py &          # 127.0.0.1:8111
-uv run ffsft-loadtest --base-url http://127.0.0.1:8111/v1 --model ffsft
+uv run ffsft loadtest --base-url http://127.0.0.1:8111/v1 --model ffsft
 # -> TTFT / TPOT / p50-p95-p99 / knee point
 ```
 
 실제 가중치로 CPU 추론까지 보려면 (모델을 내려받습니다):
 
 ```bash
-uv run ffsft-serve-local --model Qwen/Qwen3.5-0.8B   # 작은 모델로 충분합니다
+uv run ffsft serve-local --model Qwen/Qwen3.5-0.8B   # 작은 모델로 충분합니다
 ```
 
 ---
@@ -97,7 +127,7 @@ uv run ffsft-serve-local --model Qwen/Qwen3.5-0.8B   # 작은 모델로 충분�
 ```bash
 uv run python scripts/verify_hf_ids.py               # configs/ 의 모든 hf_id 를 HF API 로
 uv run python scripts/probe_architecture.py qwen3.8-27b --check   # 선언 vs 실제 LoRA 타깃
-uv run ffsft-deploy check --probe                    # 실제 create 호출, min=0, 즉시 삭제
+uv run ffsft deploy check --probe                    # 실제 create 호출, min=0, 즉시 삭제
 ```
 
 셋 다 불일치면 non-zero 로 끝나므로 CI 게이트로 쓸 수 있습니다.
