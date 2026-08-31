@@ -46,7 +46,27 @@ from ..models import TuningMethod, get_model
 #: Built by `az acr build` from docker/Dockerfile.train. Bump the tag whenever the
 #: image is rebuilt -- the code lives inside it, so a code change is an image
 #: change, and reusing a tag would silently run the old training script.
-TRAIN_IMAGE = "acrffsftkc.azurecr.io/ffsft-train:12"
+#:
+#: Rebuilt into this workspace's own registry (rg-ffsft-e2erun) rather than the
+#: acrffsftkc.azurecr.io tag this constant pointed at before: that registry
+#: belongs to a different resource group (rg-ffsft-kc), and this run does not
+#: touch resource groups outside its own. :16 carried the free_hf_download_cache
+#: fix for the UserScriptFilledDisk root cause in JOURNAL §90, but only on the
+#: train side; :17 adds the same fix to eval/run.py's two model reloads
+#: (JOURNAL §92 -- eval hit the identical UserScriptFilledDisk after training
+#: completed, since it redownloads the same weights train.qlora had already
+#: evicted). :18 adds datasets.disable_caching() in data/korean.py::
+#: load_sft_dataset (JOURNAL §94 -- with no --max-samples, the real job loads
+#: every mix entry's full train split, and each load/map/filter/concatenate/
+#: shuffle stage wrote a fresh, never-freed on-disk Arrow cache generation;
+#: measured 12.8GB via a GPU-free az acr run diagnostic against :17).
+#: :19 replaces that with keep_in_memory=True on every stage instead (JOURNAL
+#: §95 -- :18's disable_caching() was measured to make no difference, since it
+#: only reroutes the same writes to a /tmp staging dir on the same filesystem;
+#: keep_in_memory=True skips writing an Arrow file at all, confirmed via the
+#: same diagnostic run against this exact image: zero /tmp/hf_datasets-*
+#: dirs, empty cache_files, identical 1,298,685-example count).
+TRAIN_IMAGE = "acre2eruncvhaw5sbfy2lm.azurecr.io/ffsft-train:19"
 
 ENVIRONMENT_NAME = "ffsft-train"
 
