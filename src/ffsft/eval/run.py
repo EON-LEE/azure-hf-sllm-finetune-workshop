@@ -28,6 +28,7 @@ import logging
 import os
 import time
 
+from .. import mlflow_report
 from .registry import BenchmarkSpec, get_benchmark_registry
 
 log = logging.getLogger("ffsft.eval")
@@ -404,23 +405,27 @@ def publish(report: dict) -> None:
     Same reason as the preflight report: this workspace's blob storage is
     network-isolated, so job outputs written to disk cannot be read back. The
     MLflow tracking service is a separate endpoint and is reachable.
+
+    Flattening and sending go through `mlflow_report.publish` rather than a
+    second copy of its per-value try/except: this function used to run the
+    whole delta loop and all three identity tags inside one shared `try`, so
+    the first delta to hit this tenant's blocked metric channel (see that
+    module's docstring) discarded every metric *and* every tag queued after
+    it -- `eval.model`/`eval.adapter`/`eval.benchmarks` included. Confirmed
+    live on smoke job `tidy_bee_b4q7j1479y`: `eval.kobest.base` registered
+    with `lastvalues` but zero `eval.*` tags landed anywhere.
     """
-    try:
-        import mlflow
-    except ImportError:
-        log.info("mlflow not installed; skipping publish")
-        return
-    try:
-        for row in report.get("comparison", []):
-            task = row["task"].replace("/", "_")
-            for field in ("base", "tuned", "delta"):
-                if isinstance(row.get(field), (int, float)):
-                    mlflow.log_metric(f"eval.{task}.{field}", float(row[field]))
-        mlflow.set_tag("eval.model", report.get("model", ""))
-        mlflow.set_tag("eval.adapter", str(report.get("adapter")))
-        mlflow.set_tag("eval.benchmarks", ",".join(report.get("benchmarks", [])))
-    except Exception as exc:  # noqa: BLE001 - reporting must never fail the job
-        log.warning("mlflow publish failed: %s", exc)
+    flat: dict = {
+        "eval.model": report.get("model", ""),
+        "eval.adapter": str(report.get("adapter")),
+        "eval.benchmarks": ",".join(report.get("benchmarks", [])),
+    }
+    for row in report.get("comparison", []):
+        task = row["task"].replace("/", "_")
+        for field in ("base", "tuned", "delta"):
+            if isinstance(row.get(field), (int, float)):
+                flat[f"eval.{task}.{field}"] = float(row[field])
+    mlflow_report.publish(flat)
 
 
 def main() -> int:

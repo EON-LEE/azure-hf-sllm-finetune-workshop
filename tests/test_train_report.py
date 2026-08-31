@@ -29,12 +29,12 @@ class _FakeMlflow:
         self._raise_on = raise_on
 
     def log_metric(self, key, value):
-        if self._raise_on == "metric":
+        if self._raise_on in ("metric", "all"):
             raise RuntimeError("tracking store unreachable")
         self.metrics[key] = value
 
     def set_tag(self, key, value):
-        if self._raise_on == "tag":
+        if self._raise_on in ("tag", "all"):
             raise RuntimeError("tracking store unreachable")
         self.tags[key] = value
 
@@ -97,14 +97,39 @@ def test_publish_sends_both_channels(fake_mlflow):
     assert fake_mlflow.tags == {"train.model": "qwen3.8-27b"}
 
 
-def test_publish_reports_failure_without_raising(monkeypatch):
+def test_publish_falls_back_to_a_tag_when_the_metric_channel_is_blocked(monkeypatch):
+    """One tenant policy blocks `log_metric`'s storage-authenticated value write
+    while leaving `set_tag` untouched (see module docstring). The number must
+    still land somewhere a human can read it.
+    """
+    fake = _FakeMlflow(raise_on="metric")
+    monkeypatch.setitem(sys.modules, "mlflow", fake)
+    assert publish({"train_loss": 1.5}) is True
+    assert fake.metrics == {}
+    assert fake.tags == {"train_loss": "1.5"}
+
+
+def test_publish_reports_failure_without_raising_when_nothing_gets_through(monkeypatch):
     """An unreachable tracking store must not fail a run that trained fine.
 
     The adapter is already on disk by the time we report; losing the numbers is
     bad, losing the run is worse.
     """
-    monkeypatch.setitem(sys.modules, "mlflow", _FakeMlflow(raise_on="metric"))
+    monkeypatch.setitem(sys.modules, "mlflow", _FakeMlflow(raise_on="all"))
     assert publish({"train_loss": 1.5}) is False
+
+
+def test_publish_one_bad_metric_does_not_take_the_rest_of_the_report_down(monkeypatch):
+    """The old `publish` ran every write inside one shared `try`, so the first
+    failing `log_metric` silently discarded every metric and tag queued after
+    it -- including `preflight.passed`, which is only ever set by a second
+    `publish` call gated on the first one's return value.
+    """
+    fake = _FakeMlflow(raise_on="metric")
+    monkeypatch.setitem(sys.modules, "mlflow", fake)
+    assert publish({"a": 1.0, "b": 2.0, "model": "qwen3.8-27b"}) is True
+    assert fake.metrics == {}
+    assert fake.tags == {"a": "1.0", "b": "2.0", "model": "qwen3.8-27b"}
 
 
 def test_publish_survives_mlflow_not_being_installed(monkeypatch):

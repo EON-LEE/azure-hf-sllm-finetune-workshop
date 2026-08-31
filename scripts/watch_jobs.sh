@@ -16,6 +16,16 @@
 # `lastvalues` returns `[null]` for a metric whose name is registered but whose
 # value has not landed yet. Calling .get() on that None is how an earlier
 # version of this went silent at exactly the moment metrics started arriving.
+#
+# `log_metric`'s value write authenticates to the workspace storage account,
+# and on a tenant that disables shared-key storage access it fails outright
+# ("Authentication to workspace storage account failed") while `set_tag`,
+# which never touches storage, keeps working -- see `ffsft/mlflow_report.py`.
+# `publish()` now retries a failed metric as a tag holding its stringified
+# value under the SAME name, so this script also reads tags via the MLflow
+# `runs/get` endpoint and prints any that are not the metric's own registered
+# name (already covered by `lastvalues`), catching the fallback wherever the
+# metric channel is the one that is blocked.
 . "$(dirname "$0")/_common.sh"
 
 [ "$#" -ge 1 ] || { echo "usage: watch_jobs.sh [LABEL:]<run-name> ..." >&2; exit 2; }
@@ -91,6 +101,35 @@ with open(seen_path, "a") as fh:
         fh.write(key + "\n")
 for _k, name, v in fresh:
     print(f"{tag}-METRIC [{el}min] {name} = {v}")
+' "$JSON" "$SEEN" "$TAG" "$EL"
+
+    curl -s --max-time 40 -H "Authorization: Bearer $TOK" \
+      "$API/mlflow/v1.0/$FFSFT_WS_URI/api/2.0/mlflow/runs/get?run_id=$RUN" -o "$JSON" 2>/dev/null
+    "$PY" -c '
+import json, sys
+path, seen_path, tag, el = sys.argv[1:5]
+try: d = json.load(open(path))
+except Exception: raise SystemExit
+try: seen = set(open(seen_path).read().split("\n"))
+except Exception: seen = set()
+tags = (d.get("run") or {}).get("data", {}).get("tags") or []
+fresh = []
+for t in tags:
+    name = t.get("key")
+    v = t.get("value")
+    # mlflow.* are the tracking service'"'"'s own bookkeeping tags, not report
+    # content -- skip them so this only surfaces what publish() sent.
+    if not name or name.startswith("mlflow."):
+        continue
+    key = f"{tag}|TAG|{name}={v}"
+    if key not in seen:
+        fresh.append((key, name, v))
+        seen.add(key)
+with open(seen_path, "a") as fh:
+    for key, _n, _v in fresh:
+        fh.write(key + "\n")
+for _k, name, v in fresh:
+    print(f"{tag}-TAG [{el}min] {name} = {v}")
 ' "$JSON" "$SEEN" "$TAG" "$EL"
 
     case "$ST" in Completed|Failed|Canceled) DONE=$((DONE+1));; esac

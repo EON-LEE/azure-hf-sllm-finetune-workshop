@@ -15,6 +15,22 @@ MLflow is the way out: Azure ML's tracking service takes metrics and tags over
 its own endpoint, authorised by an ordinary ARM token, with no blob access
 anywhere in the path. So anything a human needs to see goes through here.
 
+That is true for tags and false for metric *values* on at least one tenant.
+`log_metric` registers the metric's name, then writes the value through a path
+that authenticates to the workspace's storage account with a shared key; a
+policy that disables shared-key storage access (`allowSharedKeyAccess: false`,
+seen on this asset's own storage account -- see JOURNAL) makes that write fail
+with "Authentication to workspace storage account failed" every time, while
+`set_tag`, which never touches storage, keeps working. Confirmed by a throwaway
+diagnostic job that called both from the same run: `set_tag` landed, immediately
+followed by `log_metric` raising the exact `RestException` above. `publish` used
+to run every `log_metric`/`set_tag` call inside one shared `try`, so the first
+metric to hit this would silently discard every metric and tag queued after it
+-- including `preflight.passed`, which is only ever set from a *second* publish
+call gated on the first one's return value. Every metric is now logged and, on
+failure, re-sent as a tag holding its stringified value, so the number is still
+readable even when this tenant's policy blocks the metric channel outright.
+
 Reporting must never be what fails a run, so every failure in this module is
 swallowed and logged.
 
@@ -56,10 +72,15 @@ def split_metrics_and_tags(
 
 
 def publish(report: dict, prefix: str = "") -> bool:
-    """Send a report to MLflow. Returns whether it got there.
+    """Send a report to MLflow. Returns whether anything of it got there.
 
     Never raises. A run that trained correctly must not be marked failed because
-    its reporting channel was unavailable.
+    its reporting channel was unavailable. Each value is written independently
+    -- one metric failing storage auth (see module docstring) must not take
+    every other metric and tag in the same call down with it. A metric whose
+    `log_metric` write fails is retried as a tag holding its stringified value,
+    since tags use a path that keeps working on a tenant that blocks the
+    metric channel.
     """
     try:
         import mlflow
@@ -68,13 +89,38 @@ def publish(report: dict, prefix: str = "") -> bool:
         return False
 
     metrics, tags = split_metrics_and_tags(report, prefix)
-    try:
-        for name, value in metrics.items():
+    if not metrics and not tags:
+        return True
+
+    sent = 0
+    for name, value in metrics.items():
+        try:
             mlflow.log_metric(name, value)
-        for name, value in tags.items():
+            sent += 1
+            continue
+        except Exception as exc:  # noqa: BLE001 - reporting must never fail the run
+            log.warning(
+                "mlflow log_metric(%s) failed, falling back to tag: %s: %s",
+                name,
+                type(exc).__name__,
+                exc,
+            )
+        try:
+            mlflow.set_tag(name, str(value))
+            sent += 1
+        except Exception as exc:  # noqa: BLE001 - reporting must never fail the run
+            log.warning("mlflow set_tag(%s) fallback failed: %s: %s", name, type(exc).__name__, exc)
+
+    for name, value in tags.items():
+        try:
             mlflow.set_tag(name, value)
-    except Exception as exc:  # noqa: BLE001 - reporting must never fail the run
-        log.warning("mlflow publish failed: %s: %s", type(exc).__name__, exc)
+            sent += 1
+        except Exception as exc:  # noqa: BLE001 - reporting must never fail the run
+            log.warning("mlflow set_tag(%s) failed: %s: %s", name, type(exc).__name__, exc)
+
+    total = len(metrics) + len(tags)
+    if sent == 0:
+        log.warning("mlflow publish failed: 0/%d values sent", total)
         return False
-    log.info("published %d metrics and %d tags to MLflow", len(metrics), len(tags))
+    log.info("published %d/%d values to MLflow", sent, total)
     return True
