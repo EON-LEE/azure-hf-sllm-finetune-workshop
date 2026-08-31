@@ -123,6 +123,19 @@ def load_sft_dataset(
     """Load, normalise and render a Korean SFT mix into a `text` column."""
     from datasets import concatenate_datasets, load_dataset
 
+    # Without --max-samples, every mix entry loads its full "train" split (no
+    # slice), so each load/map/filter stage below would otherwise write a fresh
+    # on-disk Arrow cache generation, never freed (unlike the model weights
+    # cache, see hf_cache.free_hf_download_cache): ~13GB for ko_commercial_safe,
+    # measured against a disk already down to a ~6-7GB margin during eval's model
+    # reloads (JOURNAL §94). `datasets.disable_caching()` was tried first and
+    # measured to make no difference (§95): it only reroutes the same writes from
+    # HF_DATASETS_CACHE to a /tmp/hf_datasets-* staging dir, which sits on the
+    # same filesystem here, so it relocates the bytes rather than avoiding them.
+    # `keep_in_memory=True` on every stage below instead skips writing an Arrow
+    # file at all -- confirmed via the same GPU-free diagnostic to leave zero
+    # /tmp/hf_datasets-* directories and an empty `cache_files` on the final
+    # dataset, at the same 1,298,685-example count and comparable wall time.
     cfg = config or load_config()
     defaults = cfg.get("defaults", {})
     entries = resolve_mix(mix, allow_noncommercial=allow_noncommercial, config=cfg)
@@ -137,7 +150,7 @@ def load_sft_dataset(
         split = "train" if per_source is None else f"train[:{per_source * 4}]"
         log.info("loading %s (%s)", dataset_id, entry.get("license", "?"))
         try:
-            ds = load_dataset(dataset_id, split=split)
+            ds = load_dataset(dataset_id, split=split, keep_in_memory=True)
         except Exception as exc:  # noqa: BLE001
             log.warning("  skipped %s: %s: %s", dataset_id, type(exc).__name__, exc)
             continue
@@ -151,20 +164,25 @@ def load_sft_dataset(
             text = render(messages) if render else "\n".join(m["content"] for m in messages)
             return {"text": text}
 
-        ds = ds.map(_map, remove_columns=columns, desc=f"normalise {dataset_id}")
+        ds = ds.map(
+            _map, remove_columns=columns, desc=f"normalise {dataset_id}", keep_in_memory=True
+        )
         ds = ds.filter(
-            lambda r: r["text"] is not None and min_chars <= len(r["text"]) <= max_chars
+            lambda r: r["text"] is not None and min_chars <= len(r["text"]) <= max_chars,
+            keep_in_memory=True,
         )
         if per_source:
-            ds = ds.select(range(min(per_source, len(ds))))
+            ds = ds.select(range(min(per_source, len(ds))), keep_in_memory=True)
         log.info("  -> %d usable examples", len(ds))
         parts.append(ds)
 
     if not parts:
         raise RuntimeError(f"mix '{mix}' produced no usable examples")
 
+    # concatenate_datasets needs no keep_in_memory of its own: it inherits the
+    # in-memory state of its inputs, confirmed empirically (empty cache_files).
     merged = parts[0] if len(parts) == 1 else concatenate_datasets(parts)
-    merged = merged.shuffle(seed=defaults.get("seed", 42))
+    merged = merged.shuffle(seed=defaults.get("seed", 42), keep_in_memory=True)
     if max_samples:
-        merged = merged.select(range(min(max_samples, len(merged))))
+        merged = merged.select(range(min(max_samples, len(merged))), keep_in_memory=True)
     return merged
