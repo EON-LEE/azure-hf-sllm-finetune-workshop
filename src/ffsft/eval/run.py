@@ -29,6 +29,7 @@ import os
 import time
 
 from .. import mlflow_report
+from ..hf_cache import free_hf_download_cache
 from .registry import BenchmarkSpec, get_benchmark_registry
 
 log = logging.getLogger("ffsft.eval")
@@ -236,6 +237,13 @@ def run_harness(
         hf_id, adapter, load_in_4bit=load_in_4bit, dtype=dtype,
         trust_remote_code=trust_remote_code,
     )
+    # The weights are on the GPU now; the download that put them there is dead
+    # weight on disk for the rest of this run, same as in qlora.train (see
+    # ffsft.hf_cache). This runs twice per evaluate() call -- once for the base
+    # model, once for the tuned one -- so the second call re-downloads what the
+    # first just freed. That is the safe trade: freeing only after both calls
+    # would leave the crash this fixes (JOURNAL §92) still possible mid-second-load.
+    free_hf_download_cache(hf_id)
     lm = HFLM(
         pretrained=model,
         tokenizer=tokenizer,

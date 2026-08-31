@@ -316,6 +316,7 @@ def train(cfg: QLoRAConfig, allow_default_targets: bool = False) -> dict:
     from trl import SFTConfig, SFTTrainer
 
     from ffsft.data.korean import load_sft_dataset
+    from ffsft.hf_cache import free_hf_download_cache
     from ffsft.mlflow_report import publish
     from ffsft.models import get_model
 
@@ -326,6 +327,7 @@ def train(cfg: QLoRAConfig, allow_default_targets: bool = False) -> dict:
     started = time.time()
     model, tokenizer = load_model_and_tokenizer(spec, cfg)
     load_stats = report_memory("after load")
+    freed_cache_gb = free_hf_download_cache(spec.hf_id)
 
     model = prepare_model_for_kbit_training(
         model, use_gradient_checkpointing=cfg.gradient_checkpointing
@@ -372,6 +374,11 @@ def train(cfg: QLoRAConfig, allow_default_targets: bool = False) -> dict:
             "trainable_params_m": round(trainable / 1e6, 2),
             "trainable_pct": round(trainable / total * 100, 4),
             "vram_after_load_gb": round(load_stats.get("allocated_gb", 0.0), 2),
+            "hf_cache_freed_gb": (
+                round(freed_cache_gb, 2)
+                if isinstance(freed_cache_gb, float)
+                else freed_cache_gb
+            ),
         },
         prefix="setup.",
     )

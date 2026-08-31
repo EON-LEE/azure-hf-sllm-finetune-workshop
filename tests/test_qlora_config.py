@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import pytest
 
+from ffsft.hf_cache import free_hf_download_cache
 from ffsft.train.qlora import (
     QLoRAConfig,
     accepted_fields,
@@ -167,3 +168,77 @@ def test_trainer_kwargs_carry_the_pieces_the_trainer_needs():
     assert kwargs["args"] == "a"
     assert kwargs["train_dataset"] == "d"
     assert kwargs["peft_config"] == "p"
+
+
+class _FakeRevision:
+    def __init__(self, commit_hash, size_on_disk):
+        self.commit_hash = commit_hash
+        self.size_on_disk = size_on_disk
+
+
+class _FakeRepo:
+    def __init__(self, repo_id, revisions):
+        self.repo_id = repo_id
+        self.revisions = revisions
+
+
+class _FakeCacheInfo:
+    def __init__(self, repos):
+        self.repos = repos
+        self.deleted_revisions = None
+
+    def delete_revisions(self, *commit_hashes):
+        self.deleted_revisions = commit_hashes
+        strategy = type("Strategy", (), {"executed": False})()
+
+        def execute():
+            strategy.executed = True
+
+        strategy.execute = execute
+        return strategy
+
+
+def test_free_hf_download_cache_deletes_only_the_matching_repo(monkeypatch):
+    target = _FakeRevision("deadbeef", 65_000_000_000)
+    other = _FakeRevision("cafef00d", 3_000_000_000)
+    cache_info = _FakeCacheInfo(
+        [
+            _FakeRepo("Qwen/Qwen3.8-27B", [target]),
+            _FakeRepo("some-org/unrelated-model", [other]),
+        ]
+    )
+    monkeypatch.setattr(
+        "huggingface_hub.scan_cache_dir", lambda: cache_info
+    )
+
+    freed_gb = free_hf_download_cache("Qwen/Qwen3.8-27B")
+
+    assert freed_gb == pytest.approx(65.0)
+    assert cache_info.deleted_revisions == ("deadbeef",)
+
+
+def test_free_hf_download_cache_is_a_noop_when_the_repo_is_not_cached(monkeypatch):
+    cache_info = _FakeCacheInfo([_FakeRepo("some-org/unrelated-model", [])])
+    monkeypatch.setattr(
+        "huggingface_hub.scan_cache_dir", lambda: cache_info
+    )
+
+    freed_gb = free_hf_download_cache("Qwen/Qwen3.8-27B")
+
+    assert freed_gb == 0.0
+    assert cache_info.deleted_revisions is None
+
+
+def test_free_hf_download_cache_reports_scan_failure_distinctly_from_empty(monkeypatch):
+    def boom():
+        raise OSError("cache dir not readable")
+
+    monkeypatch.setattr("huggingface_hub.scan_cache_dir", boom)
+
+    result = free_hf_download_cache("Qwen/Qwen3.8-27B")
+
+    # Must not collapse to 0.0 -- that would be indistinguishable from a
+    # confirmed "nothing was cached", which is the exact anti-pattern
+    # test_no_except_handler_hands_a_caller_an_empty_value_it_never_read.py
+    # exists to catch.
+    assert result == "scan_failed"
