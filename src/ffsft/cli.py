@@ -38,6 +38,7 @@ from .models import Provider, TuningMethod, get_registry
 #: them* for sub-groups, putting `models` (Lab 0) below `loadtest` (Lab 6).
 #: A name missing from this list still lists, at the end.
 _COMMAND_ORDER = [
+    "infra",        # Lab 0  make the one resource group -- and Lab 7, remove it
     "models",       # Lab 0  what can be trained
     "serving",      # Lab 0  what can be served
     "bench",        # Lab 0  what can be measured
@@ -71,6 +72,11 @@ eval_app = typer.Typer(no_args_is_help=True, help="Inspect the Korean benchmark 
 app.add_typer(models_app, name="models")
 app.add_typer(serving_app, name="serving")
 app.add_typer(eval_app, name="bench")
+infra_app = typer.Typer(
+    no_args_is_help=True,
+    help="Create the one resource group for this workshop -- and delete it.",
+)
+app.add_typer(infra_app, name="infra")
 
 console = Console()
 
@@ -460,3 +466,87 @@ def serve_local_cmd(ctx: typer.Context) -> None:
 
 if __name__ == "__main__":
     app()
+
+
+@infra_app.command("up")
+def infra_up(
+    prefix: str = typer.Option(..., help="3-8 lowercase chars. Names every resource."),
+    location: str = typer.Option(..., help="ONE region for training and serving both."),
+    write_env: str = typer.Option("~/.ffsft-env", help="Where to write the exports."),
+    force: bool = typer.Option(False, help="Overwrite an existing env file."),
+) -> None:
+    """Create the one resource group this workshop lives in (Lab 0).
+
+    Deploys `infra/main.bicep` at subscription scope, then writes the env file
+    every later lab sources. One prefix, one group, one region -- so that Lab 7
+    can end with `ffsft infra down` and mean it.
+    """
+    import pathlib
+
+    from .infra import EXIT_ENV_CONFLICT, env_values, merge_env, provision, run_az
+
+    outcome = provision(prefix, location)
+    for line in outcome.lines:
+        console.print(line)
+    if outcome.exit_code:
+        raise typer.Exit(outcome.exit_code)
+
+    account = run_az(["az", "account", "show", "--query", "id", "-o", "tsv"])
+    subscription = account.stdout.strip() if account.ok else ""
+    if not subscription:
+        # The group exists; only the env file cannot be completed. Say which of
+        # the two happened rather than letting a missing id read as a failed
+        # deployment.
+        console.print(
+            "[yellow]the group was created but the subscription id could not be read, "
+            "so no env file was written. Set FFSFT_SUBSCRIPTION_ID by hand.[/yellow]"
+        )
+        raise typer.Exit(1)
+
+    target = pathlib.Path(write_env).expanduser()
+    existing = target.read_text() if target.exists() else ""
+    values = env_values(prefix, location, subscription, outcome.outputs)
+    text, replaced = merge_env(existing, values, prefix=prefix)
+
+    if replaced and not force:
+        # Lab 0 §2 writes PATH, AZURE_CONFIG_DIR and FFSFT_TENANT_ID into this
+        # same file. Merging keeps those; what needs saying out loud is that a
+        # value the participant may have set by hand is about to change, since
+        # every later lab reads this file and nothing downstream re-checks it.
+        console.print(
+            f"[yellow]{target} already points somewhere else: "
+            f"{', '.join(replaced)} would change.[/yellow]"
+        )
+        console.print("re-run with --force to repoint it, or paste these yourself:")
+        for key, value in values.items():
+            console.print(f"  export {key}={value}")
+        raise typer.Exit(EXIT_ENV_CONFLICT)
+
+    target.write_text(text)
+    console.print(f"wrote {target} ({len(values)} variable(s); other lines kept)")
+    console.print(f"\n[bold]source {target}[/bold] and every later lab is pointed here.")
+
+
+@infra_app.command("down")
+def infra_down(
+    prefix: str = typer.Option(..., help="The same prefix you passed to `infra up`."),
+    yes: bool = typer.Option(False, "--yes", help="Actually delete. Without it, dry run."),
+) -> None:
+    """Delete the whole resource group, then purge its Key Vaults (Lab 7).
+
+    This is the end-of-workshop teardown and it removes things that cannot be
+    recovered -- training data, adapters, merged weights. `ffsft lifecycle down`
+    is the mid-workshop one: it stops the meter and keeps the group.
+    """
+    from .infra import teardown
+
+    outcome = teardown(prefix, dry_run=not yes)
+    for line in outcome.lines:
+        console.print(line)
+    for item in outcome.deleted:
+        console.print(f"  [green]deleted[/green] {item}")
+    for item in outcome.leftover:
+        console.print(f"  [yellow]still there[/yellow] {item}")
+    for item in outcome.unread:
+        console.print(f"  [red]could not read[/red] {item}")
+    raise typer.Exit(outcome.exit_code)
