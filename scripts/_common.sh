@@ -13,11 +13,18 @@
 # (`AzureTarget.from_env`), so a shell script and `ffsft-deploy` never disagree
 # about which workspace they are pointed at:
 #
-#   FFSFT_SUBSCRIPTION_ID   required, no default
+#   FFSFT_SUBSCRIPTION_ID   required, no default (AZURE_SUBSCRIPTION_ID also read)
 #   FFSFT_RESOURCE_GROUP    default rg-ffsft-kc
 #   FFSFT_WORKSPACE         default mlw-ffsft
 #   FFSFT_LOCATION          default koreacentral
 #   FFSFT_ACCOUNT           optional; if set, `az account show` must match it
+#
+# "never disagree" is a claim about the RULE as much as the variable names, and
+# it is `_ffsft_env` below that keeps it. Blank and whitespace-only mean unset on
+# both sides. The defaults are written out twice -- once here, once in
+# `AzureTarget.from_env` -- because a shell preamble cannot import Python;
+# `tests/test_shell_and_python_resolve_the_same_target.py` measures the two
+# halves side by side so the copies cannot drift in silence.
 #
 # Put them in a file outside the repo and source it, so nothing account-specific
 # is ever a candidate for a commit:
@@ -26,10 +33,52 @@
 
 set -uo pipefail
 
-: "${FFSFT_SUBSCRIPTION_ID:?set FFSFT_SUBSCRIPTION_ID to the target subscription id}"
-FFSFT_RESOURCE_GROUP="${FFSFT_RESOURCE_GROUP:-rg-ffsft-kc}"
-FFSFT_WORKSPACE="${FFSFT_WORKSPACE:-mlw-ffsft}"
-FFSFT_LOCATION="${FFSFT_LOCATION:-koreacentral}"
+#: `_env_setting` from `src/ffsft/azure_ml.py`, in shell: print the first of
+#: NAME... that holds something other than whitespace, stripped, else DEFAULT.
+#:
+#: `${VAR:-default}` is not that rule. It fires on empty and NOT on "  ", so a
+#: variable holding a space took one branch here and the other one in Python:
+#:
+#:   FFSFT_RESOURCE_GROUP="  "   bash -> "  "   from_env() -> 'rg-ffsft-kc'
+#:
+#: Two halves of a single workshop step pointed at two different resource groups,
+#: which is precisely what the comment at the top of this file promises cannot
+#: happen. Stripping rather than testing for empty also repairs a pasted
+#: " rg-ffsft-kc", which Azure 404s on while echoing the name back looking right.
+_ffsft_env() {
+  local _default="$1"; shift
+  local _name _value
+  for _name in "$@"; do
+    _value="${!_name-}"
+    _value="${_value#"${_value%%[![:space:]]*}"}"
+    _value="${_value%"${_value##*[![:space:]]}"}"
+    if [ -n "$_value" ]; then
+      printf '%s' "$_value"
+      return 0
+    fi
+  done
+  printf '%s' "$_default"
+}
+
+FFSFT_SUBSCRIPTION_ID="$(_ffsft_env '' FFSFT_SUBSCRIPTION_ID AZURE_SUBSCRIPTION_ID)"
+if [ -z "$FFSFT_SUBSCRIPTION_ID" ]; then
+  # Was `${VAR:?...}`, which accepted "  " and handed a subscription of spaces to
+  # `az`, where it surfaces as a not-found on an id that prints as blank.
+  echo "set FFSFT_SUBSCRIPTION_ID (or AZURE_SUBSCRIPTION_ID) to the target subscription id" >&2
+  exit 1
+fi
+FFSFT_RESOURCE_GROUP="$(_ffsft_env rg-ffsft-kc FFSFT_RESOURCE_GROUP)"
+FFSFT_WORKSPACE="$(_ffsft_env mlw-ffsft FFSFT_WORKSPACE)"
+FFSFT_LOCATION="$(_ffsft_env koreacentral FFSFT_LOCATION)"
+# Exported, because the disagreement this file promises against is between these
+# scripts and the `ffsft-*` commands the labs run beside them. A profile sourced
+# without `set -a` leaves these as plain shell variables: `az` here would then use
+# the value resolved above while a child `ffsft-deploy` fell back to the
+# documented default. Exporting hands the child exactly what was resolved here.
+export FFSFT_SUBSCRIPTION_ID FFSFT_RESOURCE_GROUP FFSFT_WORKSPACE FFSFT_LOCATION
+# Shell-only, so parity does not reach it -- but the same accident does, and an
+# untrimmed "  " here fails every identity check against `expected '  '`.
+FFSFT_ACCOUNT="$(_ffsft_env '' FFSFT_ACCOUNT)"
 
 command -v az >/dev/null || { echo "az CLI not found on PATH" >&2; exit 1; }
 

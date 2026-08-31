@@ -148,6 +148,75 @@ def image_tag(image: str) -> str:
 
 
 
+def _env_setting(*names: str) -> str | None:
+    """The first of ``names`` holding something other than whitespace, else None.
+
+    Blank means UNSET here, which `os.environ.get(name, default)` does not do --
+    that default fires only on *absent*, so an exported-but-empty variable sails
+    straight through as ''.
+
+    lab0 §4 appends to `~/.ffsft-env` with an *unquoted* heredoc, so
+    `export FFSFT_RESOURCE_GROUP=$FFSFT_RESOURCE_GROUP` expands when the file is
+    written -- and the "없으면 만듭니다" branch never exports those two, so that
+    branch bakes `export FFSFT_RESOURCE_GROUP=` (empty) into the file. Every
+    later command in that shell then built a target with rg='' ws='', and
+    `ffsft-lifecycle status` queried a workspace named '', failed inside
+    `collect_inventory`, and printed `BILLING NOW: nothing` while an endpoint
+    billed $4.959/hr in the region nobody was looking at -- the exact
+    misreading lab7's opening warning exists to prevent, arriving through the
+    environment instead of through the wrong profile.
+
+    `export FFSFT_WORKSPACE=` is a shell accident, not a request to target a
+    workspace named ''. No Azure resource is named '', so there is no reading of
+    a blank value more useful than the documented default; the same rule already
+    governs `FFSFT_SERVE_IMAGE` in `endpoint.resolve_serve_image`.
+
+    Stripping rather than testing `== ""` catches the same accident with a space
+    in it, and a pasted ` rg-ffsft-kc` besides -- Azure 404s on that and prints
+    the name back looking correct.
+    """
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _explicit(overrides: dict) -> dict:
+    """The overrides a caller actually supplied, under the same blank-is-unset rule.
+
+    `dataclasses.replace(target, resource_group=args.resource_group)` is how the
+    submit scripts used to apply their flags, and it is a hole straight through
+    `_env_setting`: `replace` writes whatever it is handed. Two shapes reach it.
+    `--resource-group ""` is one, and `--resource-group "$RG"` with `RG` unset is
+    the one that actually happens, because the shell hands argparse an empty
+    string and argparse has no opinion about it. Either way the target that
+    passed every guard in `from_env` is reassembled with rg='' -- and a workspace
+    read at rg='' is the §11.4 failure the guard exists to stop, arriving through
+    a flag instead of through the environment.
+
+    A flag is a stronger statement than an environment variable, so a supplied
+    one wins; a blank one is not a statement at all, so it loses to the
+    environment and then to the documented default, exactly as a blank
+    FFSFT_RESOURCE_GROUP does. Non-strings (`max_nodes`) pass through untouched
+    -- 0 is a legitimate value there and must not be read as absent.
+    """
+    fields = {f.name for f in dataclasses.fields(AzureTarget)}
+    unknown = sorted(set(overrides) - fields)
+    if unknown:
+        raise TypeError(f"AzureTarget has no field(s) {unknown}")
+    clean = {}
+    for name, value in overrides.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
+        clean[name] = value
+    return clean
+
+
 @dataclasses.dataclass(frozen=True)
 class AzureTarget:
     subscription_id: str
@@ -169,32 +238,49 @@ class AzureTarget:
     tenant_id: str | None = None
 
     @classmethod
-    def from_env(cls) -> AzureTarget:
-        """Build a target from ``FFSFT_*`` environment variables.
+    def from_env(cls, **overrides) -> AzureTarget:
+        """Build a target from ``FFSFT_*`` environment variables, flags winning.
+
+        ``overrides`` are the values a CLI actually supplied, keyed by field
+        name; each goes through `_explicit`, so a flag left off (None) or handed
+        a blank by the shell falls back to the environment rather than
+        overwriting it with ''. Read that docstring before adding a caller.
 
         Only the subscription id has no sensible default, because it is the one
         value that is account-specific and must never be committed. Everything
         else defaults to the resources this asset provisions.
+
+        Every value goes through `_env_setting`, so blank is unset throughout --
+        read that docstring before removing it. The asymmetry below is the whole
+        point and is meant to be visible line by line: a missing subscription
+        raises, a missing tenant stays None because absent is legitimate, and
+        everything else falls back to the default CLAUDE.md "Azure environment"
+        documents. A default is only safe because it is stated -- `status`
+        prints the target it resolved, so a participant whose `~/.ffsft-env`
+        blanked `FFSFT_WORKSPACE` sees `mlw-ffsft` instead of their own name and
+        can tell that their profile, not the workspace, is what is empty.
         """
-        subscription = os.environ.get("FFSFT_SUBSCRIPTION_ID") or os.environ.get(
-            "AZURE_SUBSCRIPTION_ID"
+        given = _explicit(overrides)
+        subscription = given.pop("subscription_id", None) or _env_setting(
+            "FFSFT_SUBSCRIPTION_ID", "AZURE_SUBSCRIPTION_ID"
         )
         if not subscription:
             raise RuntimeError(
                 "set FFSFT_SUBSCRIPTION_ID (or AZURE_SUBSCRIPTION_ID) to the target "
                 "Azure subscription id"
             )
-        tenant = os.environ.get("FFSFT_TENANT_ID") or os.environ.get("AZURE_TENANT_ID")
-        return cls(
+        resolved = dict(
             subscription_id=subscription,
-            resource_group=os.environ.get("FFSFT_RESOURCE_GROUP", "rg-ffsft-kc"),
-            workspace_name=os.environ.get("FFSFT_WORKSPACE", "mlw-ffsft"),
-            location=os.environ.get("FFSFT_LOCATION", "koreacentral"),
-            compute_name=os.environ.get("FFSFT_COMPUTE", "gpu-a100-lp"),
-            compute_sku=os.environ.get("FFSFT_SKU", "Standard_NC24ads_A100_v4"),
-            vm_priority=os.environ.get("FFSFT_VM_PRIORITY", "LowPriority"),
-            tenant_id=(tenant or "").strip() or None,
+            resource_group=_env_setting("FFSFT_RESOURCE_GROUP") or "rg-ffsft-kc",
+            workspace_name=_env_setting("FFSFT_WORKSPACE") or "mlw-ffsft",
+            location=_env_setting("FFSFT_LOCATION") or "koreacentral",
+            compute_name=_env_setting("FFSFT_COMPUTE") or "gpu-a100-lp",
+            compute_sku=_env_setting("FFSFT_SKU") or "Standard_NC24ads_A100_v4",
+            vm_priority=_env_setting("FFSFT_VM_PRIORITY") or "LowPriority",
+            tenant_id=_env_setting("FFSFT_TENANT_ID", "AZURE_TENANT_ID"),
         )
+        resolved.update(given)
+        return cls(**resolved)
 
 
 def required_vram_gb(spec: ModelSpec, method: TuningMethod) -> int | None:
@@ -362,7 +448,90 @@ def ensure_workspace(target: AzureTarget) -> str:
     return client.workspaces.begin_create(ws).result().id
 
 
-def grant_compute_data_roles(target: AzureTarget, compute_name: str) -> None:
+#: A read that did not happen, as distinct from `None`, which here means "the
+#: workspace genuinely has no storage account attached". Both used to arrive at
+#: `compute_role_grants` as `None` and both dropped the STORAGE_WRITE scope, so
+#: the two runs were byte-identical apart from one WARNING line. Reproduced:
+#:     a storage account that could not be READ produced the same grants as a
+#:     workspace that HAS none: [('acrffsftkc', 'AcrPull')]
+UNREAD = object()
+
+
+@dataclasses.dataclass(frozen=True)
+class GrantsOutcome:
+    """What `grant_compute_data_roles` did, and what it never managed to read.
+
+    `unverified` is the could-not-look half and only that half. A workspace with
+    no storage account leaves it empty -- that is a measurement, and the repo's
+    invariant is about not dressing silence up as one, not about treating every
+    measurement as a finding.
+    """
+
+    granted: tuple[tuple[str, str], ...] = ()
+    unverified: tuple[str, ...] = ()
+
+
+class ComputeReadiness(str):
+    """The cluster name, plus whatever could not be verified about its grants.
+
+    A `str` subclass rather than a new type, because the return value of
+    `ensure_compute` IS the operator-facing report: its only non-test caller is
+    `scripts/provision_azure.py:121`, `print(f"  -> {ensure_compute(target)}")`.
+    A run whose identity read failed returned exactly what a fully successful
+    run returns -- measured, `'gpu-a100-lp'`, having attempted these grants:
+    `[]` -- so the operator read a green line over a cluster whose jobs will die
+    with `401 authentication required`.
+
+    On a fully verified run it compares equal to the bare cluster name, so every
+    existing `== target.compute_name` contract holds unchanged. `.name` is
+    always the identifier; the string is always the report.
+    """
+
+    name: str
+    unverified: tuple[str, ...]
+
+    def __new__(cls, name: str, unverified: tuple[str, ...] = ()) -> ComputeReadiness:
+        unverified = tuple(unverified)
+        text = name if not unverified else f"{name} -- GRANTS UNVERIFIED: {'; '.join(unverified)}"
+        obj = super().__new__(cls, text)
+        obj.name = name
+        obj.unverified = unverified
+        return obj
+
+
+def _has_managed_identity(existing) -> bool:
+    """True only when ARM described an identity that actually exists.
+
+    ARM spells "no managed identity" two ways and the SDK preserves the
+    difference. Measured against the installed SDK's own
+    `Compute._from_rest_object`, with `ManagedServiceIdentityType` declaring
+    `['None', 'SystemAssigned', 'UserAssigned', 'SystemAssigned,UserAssigned']`:
+
+        identity key OMITTED       -> entity.identity is None       -> absent
+        identity {"type": "None"}  -> IdentityConfiguration(type='none')
+
+    The second is an object, so the old guard `existing.identity is not None`
+    read it as an identity that is present and skipped the repair for one of the
+    two legal spellings of the same fact -- leaving the cluster in the state
+    that fails a job at start with "Identity of the specified managed compute is
+    not found" once the workspace storage disallows shared keys.
+    """
+    identity = getattr(existing, "identity", None)
+    if identity is None:
+        return False
+    # Present beats the type string, in that order and deliberately: this guard
+    # decides whether to PUT an identity ONTO an operator's cluster, so the
+    # expensive direction is the false negative. A principal id or a
+    # user-assigned entry is an identity that exists whatever `type` says.
+    if getattr(identity, "principal_id", None):
+        return True
+    if getattr(identity, "user_assigned_identities", None):
+        return True
+    kind = str(getattr(identity, "type", "") or "")
+    return kind.replace("_", "").replace(",", "").strip().lower() not in ("", "none")
+
+
+def grant_compute_data_roles(target: AzureTarget, compute_name: str) -> GrantsOutcome:
     """Give the cluster's identity the data-plane roles its jobs need.
 
     `ensure_compute` used to *document* these two grants in a comment and make
@@ -379,8 +548,12 @@ def grant_compute_data_roles(target: AzureTarget, compute_name: str) -> None:
     creation: `ensure_role` is a no-op when the role is already held, and that
     makes this repair a hand-made cluster too.
 
-    Never raises. A missing grant should stop a job with a clear message, but an
-    unreadable role assignment must not stop a cluster from existing.
+    Never raises -- a missing grant should stop a job with a clear message, but
+    an unreadable role assignment must not stop a cluster from existing. It
+    *reports* instead: the returned `GrantsOutcome.unverified` names every input
+    it could not read, and `ensure_compute` puts that in front of the operator.
+    Returning nothing was the bug: the caller could not tell a run that granted
+    both roles from one that read neither.
     """
     from .deploy.identity import compute_role_grants, ensure_role
     from .train.aml_job import TRAIN_IMAGE
@@ -394,56 +567,85 @@ def grant_compute_data_roles(target: AzureTarget, compute_name: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("could not read the identity of %s: %s", compute_name, exc)
-        return
+        # Not `GrantsOutcome()`: an empty grant list from here means "nothing
+        # needed granting", which is precisely the sentence this read failed to
+        # earn the right to say.
+        return GrantsOutcome(unverified=(f"could not read the identity of {compute_name}: {exc}",))
     if not principal:
         log.warning("%s has no managed identity; skipping role grants", compute_name)
-        return
+        return GrantsOutcome()
 
+    unverified: list[str] = []
     try:
         storage_id = getattr(client.workspaces.get(target.workspace_name), "storage_account", None)
     except Exception as exc:  # noqa: BLE001
         log.warning("could not read the workspace storage account: %s", exc)
-        storage_id = None
+        # UNREAD, not None. `compute_role_grants` drops an unresolved scope
+        # either way -- there is no scope to grant on -- but the caller now
+        # learns that the STORAGE_WRITE grant is unknown rather than absent.
+        storage_id = UNREAD
+        unverified.append(f"could not read the workspace storage account: {exc}")
 
     from .deploy.identity import acr_id_for_image
 
     acr_id = acr_id_for_image(TRAIN_IMAGE, target.subscription_id, target.resource_group)
 
-    for scope, role in compute_role_grants(storage_id=storage_id, acr_id=acr_id or None):
+    granted: list[tuple[str, str]] = []
+    resolved_storage = None if storage_id is UNREAD else storage_id
+    for scope, role in compute_role_grants(storage_id=resolved_storage, acr_id=acr_id or None):
         result = ensure_role(scope, principal, role)
         if result.granted:
+            granted.append((scope, role))
             log.info("granted %s to %s on %s", role, compute_name, scope.rsplit("/", 1)[-1])
         elif result.error:
+            unverified.append(f"could not grant {role}: {result.error}")
             log.warning(
                 "could not grant %s to %s automatically (%s).\nRun this yourself:\n%s",
                 role, compute_name, result.error, result.manual_fix,
             )
+    return GrantsOutcome(granted=tuple(granted), unverified=tuple(unverified))
 
 
-def ensure_compute(target: AzureTarget) -> str:
+def ensure_compute(target: AzureTarget) -> ComputeReadiness:
     """Create the GPU cluster if missing, scaled to zero when idle.
 
     Also grants the identity its data-plane roles -- see `grant_compute_data_roles`.
+
+    Returns a `ComputeReadiness`, which IS the cluster name (`str`, equal to
+    `target.compute_name` on a run that verified everything) and additionally
+    carries what it could not read. The only non-test caller prints it.
     """
     from azure.ai.ml.entities import AmlCompute, IdentityConfiguration
     from azure.core.exceptions import ResourceNotFoundError
 
     client = get_ml_client(target)
+    # Only the `get` is inside the try, and the reason is expensive. This used
+    # to wrap the repair PUT below as well, so a 404 from the *repair* was read
+    # as "the compute does not exist" and fell through to the create path --
+    # which PUTs a fresh AmlCompute, built from the environment defaults, over
+    # the same name. Reproduced with fakes at the SDK boundary
+    # (tests/test_a_failed_repair_is_not_read_as_a_missing_cluster.py):
+    #     PUT #1: Standard_NC96ads_A100_v4 max=8 Dedicated min=2  <- repair, 404s
+    #     PUT #2: Standard_NC24ads_A100_v4 max=1 LowPriority min=0 <- fresh
+    # and the cluster name was returned, so the caller was told it was fine.
+    # A failed repair is a failed repair; it is not evidence of absence.
     try:
         existing = client.compute.get(target.compute_name)
-        if existing.identity is not None:
-            grant_compute_data_roles(target, existing.name)
-            return existing.name
+    except ResourceNotFoundError:
+        existing = None
+
+    if existing is not None:
+        if _has_managed_identity(existing):
+            outcome = grant_compute_data_roles(target, existing.name)
+            return ComputeReadiness(existing.name, outcome.unverified)
         # A cluster created without an identity is not a cosmetic gap: jobs fail
         # at start with "Identity of the specified managed compute is not found"
         # as soon as the workspace storage disallows shared keys, because the node
         # then has no way to authenticate to the datastore. Repair it in place.
         existing.identity = IdentityConfiguration(type="system_assigned")
         repaired = client.compute.begin_create_or_update(existing).result().name
-        grant_compute_data_roles(target, repaired)
-        return repaired
-    except ResourceNotFoundError:
-        pass
+        outcome = grant_compute_data_roles(target, repaired)
+        return ComputeReadiness(repaired, outcome.unverified)
 
     cluster = AmlCompute(
         name=target.compute_name,
@@ -461,5 +663,5 @@ def ensure_compute(target: AzureTarget) -> str:
         identity=IdentityConfiguration(type="system_assigned"),
     )
     created = client.compute.begin_create_or_update(cluster).result().name
-    grant_compute_data_roles(target, created)
-    return created
+    outcome = grant_compute_data_roles(target, created)
+    return ComputeReadiness(created, outcome.unverified)
