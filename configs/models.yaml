@@ -218,7 +218,28 @@ models:
     recommended_sku: Standard_NC4as_T4_v3
     chat_template_kwargs:
       enable_thinking: false
-    notes: Default smoke-test model — exercises the full pipeline cheaply.
+    lora_target_modules:
+      # full_attention layers (6 of 24)
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      # linear_attention layers (18 of 24) — MISSED by PEFT's default targets
+      - in_proj_qkv
+      - in_proj_z
+      - in_proj_b
+      - in_proj_a
+      - out_proj
+      # MLP, present on all 24 layers
+      - gate_proj
+      - up_proj
+      - down_proj
+    notes: >-
+      Default smoke-test model — exercises the full pipeline cheaply. Same
+      hybrid-attention family as Qwen3.8-27B (see scripts/probe_architecture.py):
+      18 linear_attention + 6 full_attention layers. PEFT's conventional target
+      set covers only 24/187 Linear modules (13%); lora_target_modules above
+      covers 186/187 (99%). Do not rely on the default.
     source_url: https://huggingface.co/Qwen/Qwen3.5-0.8B
 
   # ==========================================================================
