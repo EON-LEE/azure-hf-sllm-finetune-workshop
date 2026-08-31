@@ -51,8 +51,24 @@ class MergeSpec:
     model_key: str = "qwen3.8-27b"
     #: A registered model asset, `name:version`. Not a raw path: the node cannot
     #: open a session against `workspaceblobstore` by URI alone, and an asset
-    #: input is what makes Azure ML mount it for us.
+    #: input is what makes Azure ML mount it for us. Mutually exclusive with
+    #: `adapter_uri` -- exactly one must be set.
     adapter: str = ""
+    #: Bypass for tenants where model-asset registration itself is refused.
+    #: `register_adapter` calls `client.models.create_or_update`, and Azure
+    #: ML's Model Registry service enumerates the folder server-side with the
+    #: legacy `Microsoft.Azure.Storage` SDK over an account key -- unlike a
+    #: datastore mount, this has no `identity`-mode equivalent, so it fails
+    #: with `KeyBasedAuthenticationNotPermitted` on any account with
+    #: `allowSharedKeyAccess=false`, independent of `systemDatastoresAuthMode`
+    #: (docs/JOURNAL.md S62, S100). A raw `uri_folder` input -- e.g. a job's
+    #: own output path from `model_asset.job_output_uri` -- uses the same
+    #: `ro_mount` machinery `read_storage_reachability` already measures as
+    #: working under `identity` mode, and never touches the registry at all.
+    #: `_check_adapter_matches`'s model_key safety check is skipped for this
+    #: path since there is no registered asset to read a tag off of --  the
+    #: caller is trusted to have passed the right adapter for `model_key`.
+    adapter_uri: str | None = None
     #: bf16, never 4-bit. The adapter was trained against an NF4 view of the base
     #: but the deltas are full precision, and merging them back into a quantised
     #: base bakes the quantisation error into the weights permanently.
@@ -153,13 +169,21 @@ def submit(target: AzureTarget, spec: MergeSpec, wait: bool = False) -> dict:
 
     The registry lookup is the cheapest of the checks and the most valuable: a
     typo'd model key would otherwise surface after node allocation and a 9 GB
-    image pull.
+    image pull. That lookup only runs for `spec.adapter` -- `spec.adapter_uri`
+    has no asset to look up, which is the entire reason it exists (see the
+    field's docstring).
     """
     from azure.ai.ml import Input, Output, command
     from azure.ai.ml.constants import AssetTypes
 
-    if not spec.adapter:
-        raise ValueError("MergeSpec.adapter is empty; there is nothing to merge")
+    if not spec.adapter and not spec.adapter_uri:
+        raise ValueError(
+            "MergeSpec needs either .adapter or .adapter_uri; there is nothing to merge"
+        )
+    if spec.adapter and spec.adapter_uri:
+        raise ValueError(
+            "MergeSpec.adapter and .adapter_uri are mutually exclusive -- pick one input path"
+        )
 
     base = get_model(spec.model_key)
     if not base.hf_id:
@@ -169,7 +193,19 @@ def submit(target: AzureTarget, spec: MergeSpec, wait: bool = False) -> dict:
         )
 
     client = get_ml_client(target)
-    _check_adapter_matches(client, spec)
+    if spec.adapter:
+        _check_adapter_matches(client, spec)
+        adapter_input = Input(
+            type=AssetTypes.CUSTOM_MODEL,
+            path=f"azureml:{spec.adapter}",
+            mode="ro_mount",
+        )
+    else:
+        adapter_input = Input(
+            type=AssetTypes.URI_FOLDER,
+            path=spec.adapter_uri,
+            mode="ro_mount",
+        )
 
     environment = ensure_environment(client)
 
@@ -180,16 +216,7 @@ def submit(target: AzureTarget, spec: MergeSpec, wait: bool = False) -> dict:
         compute=target.compute_name,
         experiment_name=spec.experiment_name,
         display_name=spec.display_name or f"merge-{spec.model_key}",
-        inputs={
-            "adapter": Input(
-                type=AssetTypes.CUSTOM_MODEL,
-                path=f"azureml:{spec.adapter}",
-                # Read-only: the merge reads the adapter and writes elsewhere, and
-                # a writable mount of a registered asset invites a job to mutate
-                # something another job already depends on.
-                mode="ro_mount",
-            )
-        },
+        inputs={"adapter": adapter_input},
         outputs={
             name: Output(type="uri_folder", mode="upload")
             for name in sorted(spec.declared_outputs())
@@ -213,7 +240,7 @@ def submit(target: AzureTarget, spec: MergeSpec, wait: bool = False) -> dict:
         "priority": target.vm_priority,
         "environment": environment,
         "image": TRAIN_IMAGE,
-        "adapter": spec.adapter,
+        "adapter": spec.adapter or spec.adapter_uri,
         "base_model": base.hf_id,
     }
     if wait:

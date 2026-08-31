@@ -131,3 +131,52 @@ def test_submit_accepts_an_untagged_adapter(target, monkeypatch):
     # `environments` collection the fake client deliberately does not have.
     with pytest.raises(AttributeError):
         merge_job.submit(target, MergeSpec(model_key="qwen3.8-27b", adapter="a:1"))
+
+
+# --------------------------------------------------------------------------
+# submit -- the adapter_uri bypass (docs/JOURNAL.md S62, S100)
+# --------------------------------------------------------------------------
+
+
+class _NoLookupModels:
+    def get(self, name, version=None):
+        raise AssertionError(
+            "adapter_uri has no registered asset -- the registry must not be queried"
+        )
+
+
+class _NoLookupClient:
+    def __init__(self):
+        self.models = _NoLookupModels()
+
+
+def test_submit_refuses_both_adapter_and_adapter_uri(target):
+    """Two input paths for one node input is ambiguous, not generous."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        merge_job.submit(
+            target,
+            MergeSpec(
+                model_key="qwen3.8-27b",
+                adapter="a:1",
+                adapter_uri="azureml://datastores/workspaceblobstore/paths/azureml/j/model_dir/",
+            ),
+        )
+
+
+def test_submit_with_adapter_uri_never_queries_the_model_registry(target, monkeypatch):
+    """The whole point of `adapter_uri` is to route around a registry that refuses.
+
+    A fake client whose `models.get` raises `AssertionError` if called proves
+    `_check_adapter_matches` is skipped for this path, not merely untriggered by
+    coincidence. Reaching the same `AttributeError` on `.environments` as the
+    registered-asset tests shows submit() got just as far, by the other route.
+    """
+    monkeypatch.setattr(merge_job, "get_ml_client", lambda _t: _NoLookupClient())
+    with pytest.raises(AttributeError):
+        merge_job.submit(
+            target,
+            MergeSpec(
+                model_key="qwen3.8-27b",
+                adapter_uri="azureml://datastores/workspaceblobstore/paths/azureml/j/model_dir/",
+            ),
+        )

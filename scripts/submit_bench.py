@@ -15,7 +15,6 @@ pinned the way every other entry point pins it; flags override.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -62,17 +61,18 @@ def main() -> int:
     ap.add_argument("--wait", action="store_true", help="stream logs until the job ends")
     args = ap.parse_args()
 
-    target = AzureTarget.from_env()
-    overrides = {
-        "subscription_id": args.subscription,
-        "resource_group": args.resource_group,
-        "workspace_name": args.workspace,
-        "compute_name": args.compute_name,
-        "compute_sku": args.sku,
-        "vm_priority": args.priority,
-    }
-    target = dataclasses.replace(
-        target, **{k: v for k, v in overrides.items() if v is not None}
+    # `from_env(**flags)`, not `replace(from_env(), **flags)`: `replace` writes
+    # whatever it is handed, so `--resource-group "$RG"` with `RG` unset -- the
+    # shell hands argparse an empty string -- reassembled a target with rg=''
+    # *after* `from_env`'s blank-is-unset guard had already passed, and then
+    # queried a workspace at rg=''. One rule, in one place, for both halves.
+    target = AzureTarget.from_env(
+        subscription_id=args.subscription,
+        resource_group=args.resource_group,
+        workspace_name=args.workspace,
+        compute_name=args.compute_name,
+        compute_sku=args.sku,
+        vm_priority=args.priority,
     )
 
     spec = BenchSpec(

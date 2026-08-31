@@ -3,6 +3,8 @@
     python scripts/submit_training.py --subscription <id> --preflight
     python scripts/submit_training.py --subscription <id> --model qwen3.8-27b \
         --mix ko_smoke --max-steps 20 --max-samples 200
+
+Reads the target from `FFSFT_*` (see `AzureTarget.from_env`); flags override.
 """
 
 from __future__ import annotations
@@ -20,13 +22,23 @@ from ffsft.train.aml_job import JobSpec, submit  # noqa: E402
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--subscription", required=True)
-    ap.add_argument("--resource-group", default="rg-ffsft-kc")
-    ap.add_argument("--workspace", default="mlw-ffsft")
-    ap.add_argument("--location", default="koreacentral")
-    ap.add_argument("--compute-name", default="gpu-a100-lp")
-    ap.add_argument("--sku", default="Standard_NC24ads_A100_v4")
-    ap.add_argument("--priority", default="LowPriority", choices=["LowPriority", "Dedicated"])
+    # None, not a literal default: an omitted flag means "use my environment".
+    # These used to be rg-ffsft-kc / mlw-ffsft / koreacentral written out here,
+    # which never consulted `FFSFT_*` -- so a participant with a correct profile
+    # who omitted one submitted into the AUTHORS' workspace. The defaults still
+    # exist; they live in `AzureTarget.from_env`, in one place.
+    ap.add_argument("--subscription", default=None, help="overrides FFSFT_SUBSCRIPTION_ID")
+    ap.add_argument("--resource-group", default=None, help="overrides FFSFT_RESOURCE_GROUP")
+    ap.add_argument("--workspace", default=None, help="overrides FFSFT_WORKSPACE")
+    ap.add_argument("--location", default=None, help="overrides FFSFT_LOCATION")
+    ap.add_argument("--compute-name", default=None, help="overrides FFSFT_COMPUTE")
+    ap.add_argument("--sku", default=None, help="overrides FFSFT_SKU")
+    ap.add_argument(
+        "--priority",
+        default=None,
+        choices=["LowPriority", "Dedicated"],
+        help="overrides FFSFT_VM_PRIORITY",
+    )
     ap.add_argument("--model", default="qwen3.8-27b")
     ap.add_argument("--mix", default="ko_smoke")
     ap.add_argument("--max-steps", type=int, default=-1)
@@ -60,7 +72,7 @@ def main() -> int:
     ap.add_argument("--wait", action="store_true", help="stream logs until the job ends")
     args = ap.parse_args()
 
-    target = AzureTarget(
+    target = AzureTarget.from_env(
         subscription_id=args.subscription,
         resource_group=args.resource_group,
         workspace_name=args.workspace,

@@ -2,6 +2,12 @@
 
     python scripts/submit_merge.py --model qwen3.8-27b --adapter qwen3_8-27b-ko-lora:1
 
+Or, when model-asset registration itself is refused (KeyBasedAuthenticationNotPermitted,
+docs/JOURNAL.md S62, S100), point straight at a training job's output instead:
+
+    python scripts/submit_merge.py --model qwen3.8-27b \
+        --adapter-uri azureml://datastores/workspaceblobstore/paths/azureml/<job>/model_dir/
+
 Reads the target from `FFSFT_*` (see `AzureTarget.from_env`) so the tenant is
 pinned the same way every other entry point pins it; flags override. That
 matters more here than it looks: a workstation signed in to two directories can
@@ -12,7 +18,6 @@ failure reads as a permissions problem rather than a wrong-directory one.
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
 import sys
 from pathlib import Path
@@ -34,8 +39,18 @@ def main() -> int:
     ap.add_argument("--model", default="qwen3.8-27b")
     ap.add_argument(
         "--adapter",
-        required=True,
-        help="registered adapter asset as 'name:version' -- a bare name is refused",
+        default=None,
+        help="registered adapter asset as 'name:version' -- a bare name is refused. "
+        "Mutually exclusive with --adapter-uri.",
+    )
+    ap.add_argument(
+        "--adapter-uri",
+        default=None,
+        help="raw uri_folder path to the adapter (e.g. a training job's own "
+        "model_dir output, from ffsft.deploy.model_asset.job_output_uri), "
+        "bypassing model-asset registration entirely. Use this when "
+        "register_adapter fails with KeyBasedAuthenticationNotPermitted -- see "
+        "docs/JOURNAL.md S62, S100. Mutually exclusive with --adapter.",
     )
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
     ap.add_argument(
@@ -53,22 +68,29 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    target = AzureTarget.from_env()
-    overrides = {
-        "subscription_id": args.subscription,
-        "resource_group": args.resource_group,
-        "workspace_name": args.workspace,
-        "compute_name": args.compute_name,
-        "compute_sku": args.sku,
-        "vm_priority": args.priority,
-    }
-    target = dataclasses.replace(
-        target, **{k: v for k, v in overrides.items() if v is not None}
+    if not args.adapter and not args.adapter_uri:
+        ap.error("one of --adapter or --adapter-uri is required")
+    if args.adapter and args.adapter_uri:
+        ap.error("--adapter and --adapter-uri are mutually exclusive -- pick one input path")
+
+    # `from_env(**flags)`, not `replace(from_env(), **flags)`: `replace` writes
+    # whatever it is handed, so `--resource-group "$RG"` with `RG` unset -- the
+    # shell hands argparse an empty string -- reassembled a target with rg=''
+    # *after* `from_env`'s blank-is-unset guard had already passed, and then
+    # queried a workspace at rg=''. One rule, in one place, for both halves.
+    target = AzureTarget.from_env(
+        subscription_id=args.subscription,
+        resource_group=args.resource_group,
+        workspace_name=args.workspace,
+        compute_name=args.compute_name,
+        compute_sku=args.sku,
+        vm_priority=args.priority,
     )
 
     spec = MergeSpec(
         model_key=args.model,
-        adapter=args.adapter,
+        adapter=args.adapter or "",
+        adapter_uri=args.adapter_uri,
         dtype=args.dtype,
         device_map=args.device_map,
         max_shard_size=args.max_shard_size,
