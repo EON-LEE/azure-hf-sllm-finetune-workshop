@@ -1,7 +1,7 @@
 # RUNBOOK — 직접 올리고 내리기
 
 이 문서는 **사람이 손으로 실행하는 순서**입니다. 모든 명령은 실제로 이 구독에서
-실행해 결과를 확인한 것만 적었습니다. 검증 근거는 `docs/JOURNAL.md`에 있습니다.
+실행해 결과를 확인한 것만 적었습니다.
 
 ## 0. 환경 — 프로필은 하나입니다
 
@@ -19,7 +19,7 @@ az login                       # 또는 az login --use-device-code
 "아무 데서도 안 돈다"가 아니라 "**이 워크스페이스에서는** 안 돈다"입니다.
 
 > **학습과 서빙이 갈리는 경우가 있습니다.** koreacentral 은 LowPriority A100 학습은
-> 되는데 관리형 엔드포인트가 안 뜹니다(§57.1). 워크샵은 그래서 **둘 다 파는 리전 하나**를
+> 되는데 관리형 엔드포인트가 안 뜹니다. 워크샵은 그래서 **둘 다 파는 리전 하나**를
 > 고르게 합니다([Lab 0 §3](labs/lab0.md)). 그래도 갈라야 하면 프로필을 손으로 만들지
 > 말고 `ffsft infra up --prefix <다른 prefix> --write-env ~/.ffsft-env2` 로 **또 하나의
 > 그룹**을 만드세요 — 내릴 때 `infra down` 을 prefix 마다 한 번씩 돌리면 됩니다.
@@ -80,7 +80,7 @@ uv run ffsft deploy check
 
 | 표시 | 뜻 |
 |---|---|
-| `datastore UNREACHABLE` | 워크스페이스 스토리지 계정이 공개 접근 차단 + 프라이빗 엔드포인트 0개. §24 참조. **모델 자산 등록이 불가능**합니다. |
+| `datastore UNREACHABLE` | 워크스페이스 스토리지 계정이 공개 접근 차단 + 프라이빗 엔드포인트 0개. **모델 자산 등록이 불가능**합니다. |
 | `aml_online_vllm  ok  via --hf-model` | vLLM이 Hugging Face Hub에서 직접 가중치를 받으므로 스토리지를 타지 않습니다. **이 경로만 열려 있습니다.** |
 | `aml_batch  BLOCKED` | 배치 배포는 모델 자산을 이름으로 지정해야 하므로 스토리지 벽에 막힙니다. |
 
@@ -104,8 +104,8 @@ uv run ffsft deploy check
 기본값은 `Standard_NV12ads_A10_v5` 이고 `tests/test_serving_registry.py` 가
 이 값을 실측 쿼터에 고정하므로, `--sku` 를 생략해도 쿼터 오류는 나지 않습니다.
 
-> ⚠️ **쿼터가 있어도 배포가 안 될 수 있습니다.** 2026-08-22 기준 koreacentral 은
-> NV12/NV6 둘 다 노드를 배정하지 못했습니다(§27.5). 쿼터는 *허가*이고 용량은
+> ⚠️ **쿼터가 있어도 배포가 안 될 수 있습니다.** koreacentral 은 실측 당시
+> NV12/NV6 둘 다 노드를 배정하지 못한 적이 있습니다. 쿼터는 *허가*이고 용량은
 > *사실*입니다. 증상과 대처는 아래 §7 표를 보세요.
 
 현재 쿼터 확인:
@@ -128,10 +128,10 @@ uv run ffsft lifecycle up \
 ```
 
 15~30분 걸립니다. `--hf-model` 대신 `--model-uri azureml:이름:버전` 을 쓰면
-등록된 모델을 마운트하지만, 위 §2 때문에 이 구독에서는 실패합니다.
+등록된 모델을 마운트하지만, 위 [§2](#2-배포-가능한-패턴-확인) 때문에 이 구독에서는 실패합니다.
 
 **진행 상황을 보는 법:** `percentComplete` 는 믿지 마세요 — 같은 상태에서
-`0.0` 이 나오기도 하고 `null` 이 나오기도 합니다(§27.3). `provisioningState`
+`0.0` 이 나오기도 하고 `null` 이 나오기도 합니다. `provisioningState`
 전이만 신뢰할 수 있습니다.
 
 ```bash
@@ -261,10 +261,10 @@ az rest --method get --url \
 | `az acr show` 가 ACR 을 못 찾음 (`ResourceNotFound`) | ACR 이 이 그룹에 없습니다 — 그룹을 갈라 만든 경우 | §3.3 — rg 를 두 변수로 나눠 부르세요 |
 | `status` 는 `BILLING NOW: nothing` 인데 청구서가 나옴 | `status` 는 워크스페이스만 봅니다. 스토리지·ACR·KeyVault 는 그룹에 남아 있습니다 | §9 — 그룹째 확인하고 없애세요 |
 | `not have enough quota... requested 72` | SKU 코어의 2배가 쿼터 초과 | §3.1에서 더 작은 SKU로 |
-| `NoMatchingArtifactsFoundFromJob` | 학습 산출물이 스토리지에 안 올라감 (§24) | `--hf-model` 경로 사용 |
+| `NoMatchingArtifactsFoundFromJob` | 학습 산출물이 스토리지에 안 올라감 | `--hf-model` 경로 사용 |
 | 배포가 `Failed` 후 업데이트 거부 | Azure는 초기 프로비저닝 실패한 배포를 수정 못 함 | 코드가 자동 삭제 후 재생성. 수동이면 `az ml online-deployment delete` |
 | 컨테이너 로그가 아예 없음 | 이미지 pull 자체가 거부됨 | §3.3 — 로그가 없는 것이 곧 단서입니다 |
-| **15분 넘게 `Creating`, 로그 없음, `Failed` 도 안 뜸** | **리전에 물리 GPU 용량이 없음.** 쿼터가 있어도 발생합니다 | 기다려도 안 됩니다. §6.1로 내리고 리전 또는 호스팅 표면을 바꾸세요 (JOURNAL §27.6) |
+| **15분 넘게 `Creating`, 로그 없음, `Failed` 도 안 뜸** | **리전에 물리 GPU 용량이 없음.** 쿼터가 있어도 발생합니다 | 기다려도 안 됩니다. §6.1로 내리고 리전 또는 호스팅 표면을 바꾸세요 |
 | `down` 이 배포를 못 지움 | `Creating` 중인 배포는 삭제 거부 | §6.1 — 엔드포인트를 통째로 ARM DELETE |
 | 코드를 고쳤는데 노드에서 **예전 에러가 그대로** 재현됨 | `TRAIN_IMAGE` 는 올렸는데 환경 버전이 그대로여서 옛 이미지가 실행됨 | §8.3 — 이제 버전은 태그에서 자동 파생됩니다 |
 | `Failed to pull ... 401 authentication required` | 클러스터를 재생성해서 시스템 ID가 바뀜 → AcrPull 소멸 | §8.2 |
@@ -275,14 +275,14 @@ az rest --method get --url \
 
 ---
 
-## 8. 학습 → 등록 → 서빙 (2026-08-24 실측)
+## 8. 학습 → 등록 → 서빙
 
-이 체인은 프로젝트 내내 막혀 있었습니다. 원인이 **세 개**였고 셋 다 풀려야 했습니다.
+학습 → 등록 → 서빙 전체 체인을 처음부터 끝까지 실행하는 절차입니다. 막히는 지점이
+크게 세 곳(스토리지 접근, 클러스터 RBAC, 이미지/환경 버전)이라 순서대로 짚습니다.
 
 > **`source ~/.ffsft-env` (배너 `profile: ffsft`).**
 > 아래 명령의 `$RG`/`$WS` 는 그 프로필의 `$FFSFT_RESOURCE_GROUP`/`$FFSFT_WORKSPACE` 이고,
-> `acrffsftkc` 는 저자들의 레지스트리 이름이라 여러분 것으로 바꿔야 합니다.
-> 실행한 그대로 남겨둔 기록입니다.
+> `$ACR` 은 여러분의 ACR 이름(`az acr list -g $RG --query "[].name" -o tsv`)으로 바꿔 씁니다.
 
 ### 8.1 스토리지 — managed VNet 이 정답입니다
 
@@ -334,8 +334,8 @@ Azure ML 환경은 **버전 단위로 불변**입니다. 이미 있는 버전에
 덮어쓰지 않고 **저장된 것을 그대로 돌려줍니다.**
 
 `TRAIN_IMAGE` 를 `:10` 으로 올리고 `ENVIRONMENT_VERSION` 을 `"9"` 로 두면,
-잡은 조용히 `ffsft-train:9` 로 실행됩니다. 실제로 그렇게 A100 을 할당받아 9GB 를 받고
-**이미 고친 에러로 다시 죽었습니다** (`plum_station_dxwtzlz94q`).
+잡은 조용히 `ffsft-train:9` 로 실행됩니다. 실제로 그렇게 A100 을 할당받고
+**이미 고친 에러로 다시 죽은 적이 있습니다.**
 
 지금은 `image_tag()` 가 태그에서 버전을 파생하고, `ensure_environment()` 가 기존 등록의
 이미지를 대조한 뒤에만 재사용합니다. 다르면 노드를 잡기 전에 거부합니다.
@@ -343,8 +343,8 @@ Azure ML 환경은 **버전 단위로 불변**입니다. 이미 있는 버전에
 **GPU 를 쓰기 전에 이미지 내용을 확인하는 법** — ACR 에서 몇 센트로 끝납니다:
 
 ```bash
-az acr run --registry acrffsftkc -g $RG --cmd \
-  "acrffsftkc.azurecr.io/ffsft-train:10 python -c 'import sys; sys.path.insert(0,\"/opt/ffsft/src\"); import ffsft.train.qlora as q; print(hasattr(q,\"base_load_kwargs\"))'" \
+az acr run --registry $ACR -g $RG --cmd \
+  "$ACR.azurecr.io/ffsft-train:10 python -c 'import sys; sys.path.insert(0,\"/opt/ffsft/src\"); import ffsft.train.qlora as q; print(hasattr(q,\"base_load_kwargs\"))'" \
   /dev/null
 ```
 
@@ -381,7 +381,7 @@ inputs={"adapter": Input(type=AssetTypes.CUSTOM_MODEL,
 # 잡 안에서 os.walk 로 세고 mlflow.set_tag 로 돌려받습니다
 ```
 
-실측(`hungry_apple_n455nrpngf`): 19개 파일 / 133,476,918 바이트,
+실측 예: 19개 파일 / 133,476,918 바이트,
 `adapter_model.safetensors` 37,415,384 바이트, `checkpoint-30/` 존재.
 
 ### 8.6 어댑터는 그대로는 서빙이 안 됩니다
@@ -410,7 +410,8 @@ Input(path=f"azureml://datastores/workspaceartifactstore/paths/ExperimentRun/dci
 ## 9. 그룹째 내리기 — 워크샵을 닫는 한 줄
 
 §6 의 `lifecycle down` 은 **미터를 멈춥니다.** 워크스페이스·스토리지·ACR·KeyVault 는
-그대로 남고, `status` 는 그것들을 못 봅니다. §11 에서 그렇게 **$41.66/월** 이 샜습니다.
+그대로 남고, `status` 는 그것들을 못 봅니다. 그렇게 삭제된 VM 이 남긴 디스크·IP 만으로
+**$41.66/월** 이 샌 적이 있습니다.
 
 리소스 그룹이 청구 경계이자 삭제 단위입니다. 워크샵이 그룹 하나만 쓰는 이유가 이것입니다
 ([Lab 0 §4](labs/lab0.md)).

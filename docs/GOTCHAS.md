@@ -1,8 +1,7 @@
 # GOTCHAS — 돈과 시간을 실제로 태운 함정들
 
 이 워크샵을 진행하면서 **실제로 밟은** 함정만 모았다. 전부 라이브 Azure 구독에서
-측정했고, 각 항목의 `§N` 은 `docs/JOURNAL.md` 의 해당 절을 가리킨다 —
-증상만으로는 판단이 안 될 때 그 절에 원본 출력이 있다.
+측정했다.
 
 읽는 순서는 실습 순서와 같다. 지금 막힌 곳부터 봐도 된다.
 
@@ -43,7 +42,7 @@
   export FFSFT_TENANT_ID=<your-tenant-id>
   az account set --subscription $FFSFT_SUBSCRIPTION_ID
   ```
-- 근거: §39 (한 세션에 두 번, 실행 도중에 드리프트)
+- 실측: 한 세션 안에서도, 실행 도중에 프로필이 드리프트한 적이 있다
 
 ## <a id="2"></a>2. 쿼터 승인 ≠ 용량 확보
 
@@ -67,7 +66,6 @@ $FFSFT_SUBSCRIPTION_ID/providers/Microsoft.MachineLearningServices/\
 locations/<region>/vmSizes?api-version=2024-04-01" \
      --query "value[?name=='Standard_NV36ads_A10_v5'].supportedComputeTypes"
   ```
-- 근거: §28 → §30 정정 → §52 → §54 → §56 (원인 진단을 네 번 갈아엎었다), §48
 
 ## <a id="3"></a>3. 리전이 진짜 축이다
 
@@ -81,7 +79,7 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
 
 - 대처: 막히면 코드를 고치기 전에 **다른 리전에서 같은 질문**을 한다.
   `FFSFT_LOCATION` 하나만 바꾸면 된다
-- 근거: §57 — 이 리포의 살아 있는 엔드포인트는 polandcentral 에 있다
+- 실측: 이 리포의 살아 있는 엔드포인트는 polandcentral 에 있다
 
 ## <a id="4"></a>4. 온라인 엔드포인트는 코어를 2배로 먹는다
 
@@ -91,7 +89,7 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
 - 면제: **A100 / H100 / ND 계열은 예비분이 없다** (문서의 "Skip 20% Reservation").
   A100 24코어는 24코어면 된다
 - 대처: `configs/serving.yaml` 의 `default_sku` 를 확인한다. 기본값이 가장 큰 SKU 다
-- 근거: §26.3, 코드는 `ONLINE_ENDPOINT_UPGRADE_RESERVATION`
+- 코드는 `ONLINE_ENDPOINT_UPGRADE_RESERVATION`
 
 ## <a id="5"></a>5. 27B 는 A10 24GB 에 안 들어간다
 
@@ -105,7 +103,6 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
 
 - 함정: **적재는 된다.** 24GB 카드에서 모델이 올라가고 첫 스텝에서 OOM 난다
 - 대처: 40GB 이상 (A100) 을 쓴다. 24GB 로 실습하려면 더 작은 모델을 고른다
-- 근거: §20, §35
 
 ## <a id="6"></a>6. LoRA 타깃을 안 정하면 조용히 헛학습한다
 
@@ -123,15 +120,14 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
 - 원인: `JobSpec.declared_outputs()` 가 돌려주는 `{model_dir, report}` 만 살아남는다.
   스크립트가 그 밖에 쓴 것은 노드가 사라질 때 같이 사라진다
 - 대가: **27B 완주 2회분의 어댑터를 이렇게 잃었다**
-- 관련: `mount_outputs=True` 는 이 워크스페이스에서 항상 실패한다 (§17)
-- 대처: 저장 경로는 반드시 선언된 출력 아래. 끝나고 §10 으로 확인
+- 관련: `mount_outputs=True` 는 이 워크스페이스에서 항상 실패한다
+- 대처: 저장 경로는 반드시 선언된 출력 아래. 끝나고 [10](#10) 으로 확인
 
 ## <a id="8"></a>8. 잡 노드 디스크는 SKU 스펙이 아니라 64 GB 다
 
 - 실측: `AZ_BATCH_NODE_ROOT_DIR` 총량 **64197 MB (≈64 GB)** — SKU 문서의 임시 디스크 값과 무관
 - 증상: 27B 가중치 + HF 캐시 + 병합 산출물을 한 노드에서 다루면 중간에 `No space left`
 - 대처: HF 캐시를 배치 루트 **밖으로** 뺀다 (`HF_HOME`). 병합 잡은 특히
-- 근거: §50
 
 ## <a id="9"></a>9. 잡 안에서는 MLflow 말고 아무것도 못 내보낸다
 
@@ -143,7 +139,6 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   3. 상태 추적은 `scripts/watch_jobs.sh` (ARM status + MLflow `lastvalues`)
 - 곁가지: `lastvalues` 는 메트릭 이름만 등록되고 값이 아직이면 `[null]` 을 돌려준다.
   여기서 죽는 파서를 만들면 **메트릭이 도착하기 시작하는 바로 그 순간 조용해진다**
-- 근거: §42, §32, §58.7
 
 ## <a id="10"></a>10. 등록은 증거가 아니다
 
@@ -155,7 +150,6 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   # Completed = 파일과 바이트와 어댑터 가중치가 있었다
   # Failed    = 없었다. 학습이 쓸 만한 걸 안 남겼다
   ```
-- 근거: §34, §36
 
 ## <a id="11"></a>11. 모델 자산 이름에 점을 못 쓴다
 
@@ -173,7 +167,6 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   ```
   `job.outputs[name].path` 는 업로드가 분명히 성공한 뒤에도 `null` 을 돌려준다.
   **실패의 증거로 읽으면 안 된다**
-- 근거: §34
 
 ## <a id="12"></a>12. 코드는 이미지에 구워져 있다
 
@@ -195,7 +188,7 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   ```bash
   uv run ffsft deploy shift --endpoint <ep> --to <deployment>
   ```
-- 근거: §65. 첫 버전은 PATCH 를 `-o none 2>/dev/null` 로 보내서
+- 실측: 첫 버전은 PATCH 를 `-o none 2>/dev/null` 로 보내서
   **400 이 사라지고 no-op 이 정상처럼 보였다**
 
 ## <a id="14"></a>14. scoringUri 는 한 모양이 아니다
@@ -218,7 +211,6 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   `reasoning` 을 먼저 보고 `reasoning_content` 는 구버전 서버용 폴백
 - 곁가지: 파서가 없으면(`REASONING_PARSER` 미설정) 사고 흔적이 **`content` 안으로 샌다.**
   200 이고 응답도 긴데 내용이 영어 혼잣말이다
-- 근거: §67 → §68
 
 ## <a id="16"></a>16. thinking 을 켜면 토큰 예산이 사라진다
 
@@ -229,7 +221,6 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   `budget used 108/400 (27%)` 처럼 소진율을 찍는다
 - 벤치 주의: thinking ON/OFF 는 **다른 눈금자**다. 이 리포의 189 tok/s 는 OFF 측정치
   ([PERFORMANCE §2](PERFORMANCE.md) 가 전체 표, §8 이 ON 실측)
-- 근거: §67, §55
 
 ## <a id="17"></a>17. 클러스터를 다시 만들면 권한이 둘 다 날아간다
 
@@ -238,7 +229,6 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   - ACR `AcrPull` — 이미지를 못 받으면 배포가 죽는다
   - 스토리지 `Storage Blob Data Reader/Contributor` — 마운트가 죽는다
 - 대처: 재생성 후 두 역할을 **다시** 부여한다. `ffsft deploy check --probe` 로 확인
-- 근거: §60
 
 ## <a id="18"></a>18. 실패한 배포도 과금된다
 
@@ -252,7 +242,6 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   ```
 - 주의: `down` 은 고아 디스크·IP 를 **알려주기만 하고 지우지 않는다.**
   그건 사람이 결정할 일이다 — 위 $41.66 이 그 이유
-- 근거: §11, §13
 
 ---
 
@@ -273,7 +262,7 @@ locations/<region>/vmSizes?api-version=2024-04-01" \
   목록을 못 읽으면 purge 할 이름을 알 방법이 없다
 - 종료 코드 `1`(목록을 못 읽음)이 `3`(읽었고 남은 것이 있음)보다 **무겁다** —
   확인 못 한 삭제는 삭제가 아니다
-- 근거: §83, [Lab 7 §7](labs/lab7.md), [RUNBOOK §9](RUNBOOK.md)
+- 참고: [Lab 7 §7](labs/lab7.md), [RUNBOOK §9](RUNBOOK.md)
 
 ---
 

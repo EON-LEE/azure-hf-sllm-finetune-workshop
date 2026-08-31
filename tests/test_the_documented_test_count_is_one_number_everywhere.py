@@ -30,7 +30,7 @@ _KOREAN = re.compile(r"테스트 (\d+)개가 통과한다")
 
 
 def _documents() -> list[pathlib.Path]:
-    paths = [_ROOT / "CLAUDE.md", _ROOT / "README.md"]
+    paths = [_ROOT / "README.md"]
     paths += sorted((_ROOT / "docs").rglob("*.md"))
     return [p for p in paths if p.name != "JOURNAL.md"]
 
@@ -63,13 +63,13 @@ def test_every_document_that_states_a_skip_count_states_the_same_one():
     assert len(set(skipped.values())) == 1, skipped
 
 
-def test_the_four_known_sites_are_all_still_found_by_the_patterns():
+def test_the_three_known_sites_are_all_still_found_by_the_patterns():
     """The guard above passes trivially if the regexes stop matching anything.
 
-    These four are the sites round 5 and round 6 had to update by hand; if a
+    These three are the sites round 5 and round 6 had to update by hand; if a
     rewording drops one out of the scan, the drift becomes invisible again.
     """
     sites = set(_stated_counts())
-    for expected in ("CLAUDE.md", "README.md", "lab0.md"):
+    for expected in ("README.md", "lab0.md"):
         assert any(site.startswith(expected) for site in sites), (expected, sites)
     assert sum(1 for site in sites if site.startswith("lab0.md")) == 2, sites
